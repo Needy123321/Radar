@@ -18,8 +18,11 @@ COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 # Създаваме работната директория
 WORKDIR /var/www/html
 
-# ТУК БЕШЕ ПРОБЛЕМЪТ: Копираме всички файлове от GitHub вътре в сървъра!
+# Копираме всички файлове от GitHub вътре в сървъра
 COPY . /var/www/html
+
+# ЗАДЪЛЖИТЕЛНО: Казваме на Symfony, че сме в production още по време на билда!
+ENV APP_ENV=prod
 
 # Инсталираме пакетите на Symfony
 RUN composer install --no-dev --optimize-autoloader
