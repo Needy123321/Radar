@@ -1,0 +1,464 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}Тактически Радар{% endblock %}
+
+{% block stylesheets %}
+    <style>
+        body { background: #000; color: #0f0; font-family: monospace; margin: 0; overflow: hidden; touch-action: none; user-select: none; }
+        canvas { display: block; background: #020802; }
+        #infoPanel {
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+            background: rgba(0,30,0,0.95); border: 2px solid #0f0; padding: 12px;
+            border-radius: 5px; display: none; width: 92%; max-width: 450px; font-size: 13px;
+            z-index: 20;
+        }
+        #status {
+            position: absolute;
+            top: 70px; /* Смъкнато още надолу, за да подмине камерата */
+            left: 15px;
+            font-size: 11px;
+            text-shadow: 0 0 5px #0f0;
+            z-index: 10;
+        }
+        .scale-controls {
+            position: absolute;
+            top: 65px; /* Смъкнато надолу, подравнено с текста */
+            right: 15px;
+            display: flex;
+            flex-direction: row;
+            gap: 4px;
+            z-index: 10;
+        }
+        .scale-controls button {
+            background: #002200; border: 1px solid #0f0; color: #0f0;
+            padding: 6px 9px; cursor: pointer; font-family: monospace; font-size: 11px; font-weight: bold;
+            border-radius: 4px;
+        }
+        .scale-controls button.active { background: #0f0; color: #000; }
+        .info-table td { padding: 2px 4px; }
+        .info-table td:first-child { color: #0f0; opacity: 0.8; }
+    </style>
+{% endblock %}
+
+{% block body %}
+    <div id="status">GPS: Плевен</div>
+    <div class="scale-controls">
+        <button onclick="setScale(30)" id="btn-30">30кm</button>
+        <button onclick="setScale(50)" id="btn-50">50кm</button>
+        <button onclick="setScale(100)" id="btn-100">100кm</button>
+        <button onclick="setScale(250)" id="btn-250" class="active">250кm</button>
+    </div>
+
+    <canvas id="radarCanvas"></canvas>
+    <div id="infoPanel"></div>
+
+    <script>
+        const canvas = document.getElementById('radarCanvas');
+        const ctx = canvas.getContext('2d');
+        const statusDiv = document.getElementById('status');
+
+        let planes = [];
+        let sweepAngle = 0;
+        let maxRangeKm = 300;
+
+        // Координати за Плевен
+        let myLat = 43.4170;
+        let myLon = 24.6067;
+        let gpsStatusText = "GPS: Търсене на сигнал...";
+
+        // ... (остави останалия си код за функциите calculateDistance, draw, pointerdown и т.н.) ...
+
+        // Първоначално пускане с дефолтните координати, за да не седи черен екран
+        fetchPlanes();
+        const fetchInterval = setInterval(fetchPlanes, 10000);
+        requestAnimationFrame(draw);
+
+        // Взимане на реалния GPS от устройството (телефон/лаптоп)
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    const newLat = position.coords.latitude;
+                    const newLon = position.coords.longitude;
+
+                    // Изчисляваме колко далеч е реалната ти локация от дефолтната (Плевен)
+                    const distFromDefault = calculateDistance(myLat, myLon, newLat, newLon);
+
+                    // Обновяваме координатите към твоите реални
+                    myLat = newLat;
+                    myLon = newLon;
+                    gpsStatusText = `GPS: Локализиран`;
+
+                    // Ако си на повече от 10 км от Плевен, изчистваме кешираните самолети,
+                    // за да не останат стари "призрачни" самолети на радара
+                    if (distFromDefault > 10) {
+                        planes = [];
+                    }
+
+                    // Веднага изтегляме данните за новия център
+                    fetchPlanes();
+                },
+                (error) => {
+                    console.warn("GPS грешка:", error.message);
+                    gpsStatusText = "GPS: Отказан/Няма сигнал (Плевен)";
+                },
+                {
+                    enableHighAccuracy: true,
+                    timeout: 10000,
+                    maximumAge: 0
+                }
+            );
+        } else {
+            gpsStatusText = "GPS: Не се поддържа от браузъра";
+        }
+        const PLANE_KEEP_TIME = 10 * 60 * 1000;
+
+        let scale = 1.0;
+        let panX = 0;
+        let panY = 0;
+        let isDragging = false;
+        let startX, startY;
+        let initialDist = null;
+
+        function setScale(km) {
+            maxRangeKm = km;
+            document.querySelectorAll('.scale-controls button').forEach(b => b.classList.remove('active'));
+            document.getElementById(`btn-${km}`).classList.add('active');
+        }
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        canvas.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 1) {
+                isDragging = true;
+                startX = e.touches[0].clientX - panX;
+                startY = e.touches[0].clientY - panY;
+            } else if (e.touches.length === 2) {
+                isDragging = false;
+                initialDist = Math.hypot(
+                    e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY
+                );
+            }
+        });
+
+        canvas.addEventListener('touchmove', (e) => {
+            if (isDragging && e.touches.length === 1) {
+                panX = e.touches[0].clientX - startX;
+                panY = e.touches[0].clientY - startY;
+            } else if (e.touches.length === 2 && initialDist !== null) {
+                const currentDist = Math.hypot(
+                    e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY
+                );
+                const zoomFactor = currentDist / initialDist;
+                scale = Math.max(1.0, Math.min(scale * zoomFactor, 4.0));
+                initialDist = currentDist;
+            }
+        });
+
+        canvas.addEventListener('touchend', (e) => {
+            if (e.touches.length < 2) initialDist = null;
+            if (e.touches.length === 0) isDragging = false;
+        });
+
+        canvas.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            startX = e.clientX - panX;
+            startY = e.clientY - panY;
+        });
+        window.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            panX = e.clientX - startX;
+            panY = e.clientY - startY;
+        });
+        window.addEventListener('mouseup', () => { isDragging = false; });
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const zoomIntensity = 0.1;
+            if (e.deltaY < 0) scale *= (1 + zoomIntensity);
+            else scale /= (1 + zoomIntensity);
+            scale = Math.max(1.0, Math.min(scale, 4.0));
+        }, { passive: false });
+
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            lat1 = parseFloat(lat1); lon1 = parseFloat(lon1);
+            lat2 = parseFloat(lat2); lon2 = parseFloat(lon2);
+            const R = 6371;
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon/2) * Math.sin(dLon/2);
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        }
+
+        function calculateAzimuth(lat1, lon1, lat2, lon2) {
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const y = Math.sin(dLon) * Math.cos(lat2 * Math.PI / 180);
+            const x = Math.cos(lat1 * Math.PI / 180) * Math.sin(lat2 * Math.PI / 180) - Math.sin(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.cos(dLon);
+            return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+        }
+
+        async function fetchPlanes() {
+            try {
+                const response = await fetch(`/api/planes?lat=${myLat}&lon=${myLon}`);
+                const data = await response.json();
+                const now = Date.now();
+
+                const planeMap = new Map();
+                planes.forEach(p => planeMap.set(p.id, p));
+
+                data.forEach(p => {
+                    planeMap.set(p.id, {
+                        ...planeMap.get(p.id),
+                        ...p,
+                        lastSeen: now,
+                        lastUpdate: now // Добавяме това, за да знаем откога да екстраполираме
+                    });
+                });
+
+                planes = Array.from(planeMap.values()).filter(p => {
+                    if (!p.lastSeen) p.lastSeen = now;
+                    return (now - p.lastSeen) < PLANE_KEEP_TIME;
+                });
+            } catch (e) {
+                console.error("Грешка при API заявка", e);
+            }
+        }
+
+        function drawRadarGrid(cx, cy, radius) {
+            let ringStep = 50;
+            if (maxRangeKm <= 30) ringStep = 6;
+            else if (maxRangeKm <= 50) ringStep = 10;
+            else if (maxRangeKm <= 100) ringStep = 20;
+
+            const ringsCount = Math.floor(maxRangeKm / ringStep);
+
+            ctx.strokeStyle = 'rgba(0, 255, 0, 0.2)';
+            ctx.fillStyle = 'rgba(0, 255, 0, 0.4)';
+            ctx.font = '9px monospace';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            for(let i = 1; i <= ringsCount; i++) {
+                const r = (ringStep * i / maxRangeKm) * radius;
+                ctx.beginPath();
+                ctx.arc(cx, cy, r, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.fillText(`${i * ringStep}km`, cx + r, cy - 7);
+            }
+
+            for(let i = 0; i < 360; i += 10) {
+                const angleRad = (i - 90) * Math.PI / 180;
+                const isMajor = (i % 30 === 0);
+                const startR = radius - (isMajor ? 6 : 3);
+                const endR = radius + (isMajor ? 6 : 3);
+
+                ctx.beginPath();
+                ctx.moveTo(cx + Math.cos(angleRad) * startR, cy + Math.sin(angleRad) * startR);
+                ctx.lineTo(cx + Math.cos(angleRad) * endR, cy + Math.sin(angleRad) * endR);
+                ctx.strokeStyle = isMajor ? 'rgba(0, 255, 0, 0.6)' : 'rgba(0, 255, 0, 0.3)';
+                ctx.stroke();
+
+                if (isMajor) {
+                    const textR = radius + 14;
+                    ctx.fillStyle = '#0f0';
+                    ctx.font = '9px monospace';
+                    ctx.fillText(`${i}°`, cx + Math.cos(angleRad) * textR, cy + Math.sin(angleRad) * textR);
+                }
+            }
+        }
+
+        function draw() {
+            // 1. Изчистване на платното
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#020802';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            const cx = canvas.width / 2;
+            const cy = canvas.height * 0.46;
+            const radius = Math.min(canvas.width * 0.47, canvas.height * 0.34);
+
+            const now = Date.now();
+
+            // 2. Прилагане на зуум и местене (Pan & Zoom)
+            ctx.save();
+            ctx.translate(cx + panX, cy + panY);
+            ctx.scale(scale, scale);
+            ctx.translate(-cx, -cy);
+
+            // Чертаем мрежата
+            drawRadarGrid(cx, cy, radius);
+
+            // Център (твоята локация)
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+            ctx.fill();
+
+            let visibleCount = 0;
+
+            // 3. Чертаене на самолетите с ПЛАВНО ДВИЖЕНИЕ
+            planes.forEach(plane => {
+                let currentLat = plane.lat;
+                let currentLon = plane.lon;
+
+                // Екстраполация: местим самолета плавно между 10-секундните заявки
+                if (plane.lastUpdate && plane.speed > 0) {
+                    const deltaSec = (now - plane.lastUpdate) / 1000;
+                    // Движим го плавно само ако са минали по-малко от 30 секунди от последната получена позиция
+                    if (deltaSec > 0 && deltaSec < 30) {
+                        const newPos = extrapolatePosition(plane.lat, plane.lon, plane.speed, plane.track || 0, deltaSec);
+                        currentLat = newPos.lat;
+                        currentLon = newPos.lon;
+                    }
+                }
+
+                // Преизчисляваме дистанцията и азимута за новата плавна позиция
+                plane.dist = calculateDistance(myLat, myLon, currentLat, currentLon);
+                plane.azi = calculateAzimuth(myLat, myLon, currentLat, currentLon);
+
+                // Ако излезе от обхвата на зуума, не го чертаем
+                if (plane.dist > maxRangeKm) return;
+                visibleCount++;
+
+                const angleRad = (plane.azi - 90) * Math.PI / 180;
+                const distPx = (plane.dist / maxRangeKm) * radius;
+                const px = cx + Math.cos(angleRad) * distPx;
+                const py = cy + Math.sin(angleRad) * distPx;
+
+                // Запазваме координатите за кликане
+                plane.renderX = px;
+                plane.renderY = py;
+
+                ctx.save();
+                ctx.translate(px, py);
+                ctx.rotate((plane.track || 0) * Math.PI / 180);
+
+                // Цвят: Червен за военни, Жълт за цивилни
+                ctx.fillStyle = plane.callsign.includes('[ВОЕНЕН]') ? '#ff3333' : '#ffcc00';
+
+                // Чертаем иконата на самолета
+                ctx.beginPath();
+                ctx.moveTo(0, -8);
+                ctx.lineTo(2, -2);
+                ctx.lineTo(8, 1);
+                ctx.lineTo(2, 3);
+                ctx.lineTo(1, 6);
+                ctx.lineTo(4, 8);
+                ctx.lineTo(-4, 8);
+                ctx.lineTo(-1, 6);
+                ctx.lineTo(-2, 3);
+                ctx.lineTo(-8, 1);
+                ctx.lineTo(-2, -2);
+                ctx.closePath();
+                ctx.fill();
+
+                // Връщаме ротацията на текста, за да стои хоризонтално, и го изписваме
+                ctx.rotate(-(plane.track || 0) * Math.PI / 180);
+                ctx.fillStyle = plane.callsign.includes('[ВОЕНЕН]') ? 'rgba(255, 51, 51, 0.9)' : 'rgba(255, 204, 0, 0.8)';
+                ctx.font = '9px monospace';
+                ctx.fillText(plane.callsign, 10, -4);
+
+                ctx.restore();
+            });
+
+            // 4. Въртящият се лъч на радара
+            sweepAngle = (sweepAngle + 0.4) % 360;
+            const sweepRad = (sweepAngle - 90) * Math.PI / 180;
+
+            const gradient = ctx.createLinearGradient(cx, cy, cx + Math.cos(sweepRad) * radius, cy + Math.sin(sweepRad) * radius);
+            gradient.addColorStop(0, "rgba(0, 255, 0, 0.8)");
+            gradient.addColorStop(1, "rgba(0, 255, 0, 0.05)");
+
+            ctx.beginPath();
+            ctx.moveTo(cx, cy);
+            ctx.lineTo(cx + Math.cos(sweepRad) * radius, cy + Math.sin(sweepRad) * radius);
+            ctx.strokeStyle = gradient;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            ctx.lineWidth = 1;
+
+            ctx.restore();
+
+            // Обновяване на текста горе вляво
+            statusDiv.innerText = `${gpsStatusText} | Общо: ${planes.length} | Видими (${maxRangeKm}км): ${visibleCount}`;
+
+            requestAnimationFrame(draw);
+        }
+        canvas.addEventListener('pointerdown', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const cx = canvas.width / 2;
+            const cy = canvas.height * 0.46;
+
+            const clickX = (e.clientX - rect.left - cx - panX) / scale + cx;
+            const clickY = (e.clientY - rect.top - cy - panY) / scale + cy;
+            let found = false;
+
+            for(let p of planes) {
+                if (p.dist > maxRangeKm) continue;
+                if (p.renderX && p.renderY) {
+                    if(Math.hypot(p.renderX - clickX, p.renderY - clickY) < 25 / scale) {
+                        const panel = document.getElementById('infoPanel');
+                        panel.style.display = 'block';
+                        const color = p.callsign.includes('[ВОЕНЕН]') ? '#ff3333' : '#ffcc00';
+                        panel.innerHTML = `
+                            <div style="font-weight:bold; font-size:14px; margin-bottom:6px; color:${color};">✈ ${p.callsign}</div>
+                            <table class="info-table" style="width:100%; text-align:left; color:#fff;">
+                                <tr><td style="width:35%;">Оператор:</td><td style="color:#fff;">${p.operator || 'N/A'}</td></tr>
+                                <tr><td>Тип:</td><td style="color:#fff;">${p.type || 'N/A'}</td></tr>
+                                <tr><td>Азимут / Разст.:</td><td style="color:#fff;">${Math.round(p.azi)}° / ${p.dist.toFixed(1)} км</td></tr>
+                                <tr><td>Курс / Височина:</td><td style="color:#fff;">${Math.round(p.track || 0)}° / ${p.altitude || 0} м</td></tr>
+                                <tr><td>Скорост:</td><td style="color:#fff;">${p.speed || 0} км/ч</td></tr>
+                            </table>`;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if(!found) document.getElementById('infoPanel').style.display = 'none';
+        });
+
+        fetchPlanes();
+        setInterval(fetchPlanes, 10000);
+
+        requestAnimationFrame(draw);
+        // Глобална функция, която Android WebView ще извиква
+        window.updateLocationFromApp = function(lat, lon) {
+            const newLat = parseFloat(lat);
+            const newLon = parseFloat(lon);
+
+            // Ако локацията се е променила с повече от 10км, чистим екрана от стари следи
+            if (calculateDistance(myLat, myLon, newLat, newLon) > 10) {
+                planes = [];
+            }
+
+            myLat = newLat;
+            myLon = newLon;
+            gpsStatusText = `GPS: Устройство`;
+
+            // Веднага опресняваме радара спрямо новия център!
+            fetchPlanes();
+        };
+        // Функция за плавно изместване спрямо курс и скорост
+        function extrapolatePosition(lat, lon, speedKmH, trackDeg, timeDeltaSeconds) {
+            if (!speedKmH || speedKmH <= 0) return { lat, lon };
+            const distanceKm = (speedKmH * timeDeltaSeconds) / 3600;
+            const R = 6371;
+            const brng = trackDeg * Math.PI / 180;
+            const lat1 = lat * Math.PI / 180;
+            const lon1 = lon * Math.PI / 180;
+
+            const lat2 = Math.asin(Math.sin(lat1) * Math.cos(distanceKm / R) + Math.cos(lat1) * Math.sin(distanceKm / R) * Math.cos(brng));
+            const lon2 = lon1 + Math.atan2(Math.sin(brng) * Math.sin(distanceKm / R) * Math.cos(lat1), Math.cos(distanceKm / R) - Math.sin(lat1) * Math.sin(lat2));
+
+            return {
+                lat: lat2 * 180 / Math.PI,
+                lon: lon2 * 180 / Math.PI
+            };
+        }
+    </script>
+{% endblock %}
