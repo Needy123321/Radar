@@ -4,11 +4,14 @@
 
 {% block stylesheets %}
     <style>
-        body {
+        html, body {
             background: #000;
             color: #0f0;
             font-family: 'Courier New', monospace;
             margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100dvh;
             overflow: hidden;
             touch-action: none;
             user-select: none;
@@ -20,7 +23,7 @@
 
         /* Горен тактически панел - 2 реда */
         .top-hud {
-            position: absolute;
+            position: fixed;
             top: 48px;
             left: 12px;
             right: 12px;
@@ -89,22 +92,22 @@
             box-shadow: 0 0 12px #ff3333;
         }
 
-        /* Долен информационен панел при клик върху самолет */
+        /* Долен информационен панел - вдигнат високо над долните бутони на телефона! */
         #infoPanel {
-            position: absolute;
-            bottom: 18px;
+            position: fixed;
+            bottom: calc(68px + env(safe-area-inset-bottom, 0px));
             left: 50%;
             transform: translateX(-50%);
             background: rgba(0, 18, 5, 0.96);
             border: 2px solid #00ff44;
-            box-shadow: 0 0 25px rgba(0, 255, 68, 0.4);
-            padding: 14px;
+            box-shadow: 0 0 25px rgba(0, 255, 68, 0.45);
+            padding: 12px 14px;
             border-radius: 8px;
             display: none;
             width: 94%;
             max-width: 460px;
             font-size: 13px;
-            z-index: 20;
+            z-index: 999;
             box-sizing: border-box;
         }
 
@@ -112,16 +115,17 @@
             display: flex;
             align-items: center;
             border-bottom: 1px solid rgba(0, 255, 0, 0.3);
-            padding-bottom: 10px;
-            margin-bottom: 10px;
+            padding-bottom: 8px;
+            margin-bottom: 8px;
             gap: 12px;
+            padding-right: 95px; /* Пази място за бутоните СЛЕДВАЩ и X горе вдясно, за да не закриват позивната! */
         }
 
         /* CSS Кутия за реалната снимка от нета */
         .plane-photo-box {
-            width: 96px;
-            height: 64px;
-            min-width: 96px;
+            width: 92px;
+            height: 60px;
+            min-width: 92px;
             background: radial-gradient(circle, rgba(0,60,0,0.6) 0%, rgba(0,15,0,0.95) 100%);
             border: 1px solid #0f0;
             border-radius: 6px;
@@ -156,7 +160,7 @@
         }
         .info-item {
             background: rgba(0, 255, 0, 0.06);
-            padding: 6px 8px;
+            padding: 5px 8px;
             border-radius: 4px;
             border-left: 2px solid rgba(0, 255, 0, 0.5);
         }
@@ -168,7 +172,7 @@
             margin-bottom: 2px;
         }
         .info-val {
-            font-size: 13px;
+            font-size: 12.5px;
             color: #ffffff;
             font-weight: bold;
         }
@@ -187,7 +191,7 @@
             font-size: 11px;
             font-family: monospace;
             font-weight: bold;
-            padding: 3px 7px;
+            padding: 4px 8px;
             border-radius: 4px;
             cursor: pointer;
         }
@@ -227,7 +231,7 @@
 
         let planes = [];
         let selectedPlaneId = null;
-        let overlappingCluster = []; // Пази списък със струпаните самолети на мястото на клика
+        let overlappingCluster = [];
         let clusterIndex = 0;
         let highlightMilitaryOnly = false;
 
@@ -561,8 +565,8 @@
             ctx.fillRect(0, 0, screenWidth, screenHeight);
 
             const cx = screenWidth / 2;
-            const cy = screenHeight * 0.50;
-            const radius = Math.min(screenWidth * 0.45, screenHeight * 0.35);
+            const cy = screenHeight * 0.46; // Качено леко нагоре, за да има място за панела долу!
+            const radius = Math.min(screenWidth * 0.44, screenHeight * 0.33);
 
             const now = Date.now();
 
@@ -598,8 +602,6 @@
 
             let visibleCount = 0;
 
-            // СОРТИРАНЕ ПО ВАЖНОСТ: Гражданските се чертаят първи (отдолу),
-            // ВОЕННИТЕ и ИЗБРАНИЯТ самолет се чертаят ПОСЛЕДНИ (винаги най-отгоре!)
             const sortedPlanes = [...planes].sort((a, b) => {
                 const aSel = (a.id === selectedPlaneId) ? 2 : 0;
                 const bSel = (b.id === selectedPlaneId) ? 2 : 0;
@@ -610,7 +612,6 @@
                 return aMil - bMil;
             });
 
-            // Адаптивен размер на иконките при зуум, за да се разделят, когато приближиш!
             const iconScale = 1 / Math.pow(scale, 0.65);
 
             sortedPlanes.forEach(plane => {
@@ -644,7 +645,6 @@
                 plane.renderX = px;
                 plane.renderY = py;
 
-                // Ако е пуснат филтърът "★ ВОЕННИ", гражданските стават почти невидими точки без текст
                 const isDimmed = highlightMilitaryOnly && !isMilitary && !isSelected;
 
                 ctx.save();
@@ -763,7 +763,6 @@
             }
         }
 
-        // Превключва към следващия самолет от купчината при натискане на бутона "СЛЕДВАЩ"
         window.cycleNextTarget = function() {
             if (overlappingCluster.length <= 1) return;
             clusterIndex = (clusterIndex + 1) % overlappingCluster.length;
@@ -790,7 +789,6 @@
                 </svg>
             `;
 
-            // Ако на мястото на клика има няколко самолета един върху друг, показваме бутон за превключване!
             const cycleButtonHtml = overlappingCluster.length > 1
                 ? `<button class="action-btn cycle-btn" onclick="cycleNextTarget()">СЛЕДВАЩ (${clusterIndex + 1}/${overlappingCluster.length}) ➔</button>`
                 : '';
@@ -807,7 +805,7 @@
                     </div>
                     <div>
                         <div style="font-size: 10px; color: ${color}; letter-spacing: 1px; font-weight: bold;">● ${badgeText}</div>
-                        <div style="font-weight: bold; font-size: 17px; color: #fff; margin: 2px 0;">✈ ${p.callsign}</div>
+                        <div style="font-weight: bold; font-size: 16px; color: #fff; margin: 2px 0;">✈ ${p.callsign}</div>
                         <div style="font-size: 11px; color: #88ff88;">${p.operator || 'Неизвестен оператор'}</div>
                     </div>
                 </div>
@@ -842,13 +840,12 @@
             document.getElementById('infoPanel').style.display = 'none';
         };
 
-        // ИНТЕЛИГЕНТЕН ИЗБОР НА ЦЕЛ (приоритизира военните и позволява циклично превключване)
         canvas.addEventListener('pointerup', (e) => {
-            if (dragMoved) return; // Ако сме влачили картата с пръст, не го броим за клик
+            if (dragMoved) return;
 
             const rect = canvas.getBoundingClientRect();
             const cx = screenWidth / 2;
-            const cy = screenHeight * 0.50;
+            const cy = screenHeight * 0.46;
 
             const clickX = (e.clientX - rect.left - cx - panX) / scale + cx;
             const clickY = (e.clientY - rect.top - cy - panY) / scale + cy;
@@ -868,9 +865,6 @@
             }
 
             if (candidates.length > 0) {
-                // Сортираме кандидатите под пръста ти:
-                // 1. ВОЕННИТЕ са винаги на първо място!
-                // 2. След това по най-близък център до клика
                 candidates.sort((a, b) => {
                     if (b.isMil !== a.isMil) return b.isMil - a.isMil;
                     return a.clickDist - b.clickDist;
@@ -878,7 +872,6 @@
 
                 const newCluster = candidates.map(c => c.plane);
 
-                // Ако цъкаш повторно върху същата купчина самолети -> превключва на следващия!
                 const currentInClusterIdx = newCluster.findIndex(p => p.id === selectedPlaneId);
                 if (currentInClusterIdx !== -1 && newCluster.length > 1) {
                     clusterIndex = (currentInClusterIdx + 1) % newCluster.length;
