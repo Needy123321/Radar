@@ -22,8 +22,9 @@ class RadarController extends AbstractController
     public function getPlanes(Request $request, HttpClientInterface $httpClient): JsonResponse
     {
         // Дефолтни координати: с. Радишево
-        $lat = (float) $request->query->get('lat', 43.3556);
-        $lon = (float) $request->query->get('lon', 24.6653);
+        // Точни координати на базата в с. Радишево
+        $lat = (float) $request->query->get('lat', 43.367507766880706);
+        $lon = (float) $request->query->get('lon', 24.665883987338496);
 
         // Числови граници за региона (~400-450 км около теб - Балканите и Черно море)
         $minLat = $lat - 3.8;
