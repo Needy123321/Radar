@@ -23,9 +23,9 @@ class RadarController extends AbstractController
     {
         // Дефолтни координати: с. Радишево
         // Точни координати на базата в с. Радишево
-        $lat = (float) $request->query->get('lat', 43.367507766880706);
-        $lon = (float) $request->query->get('lon', 24.665883987338496);
-
+// Точни координати на базата в с. Радишево
+        $lat = (float) $request->query->get('lat', 43.36763806288808);
+        $lon = (float) $request->query->get('lon', 24.66672222828328);
         // Числови граници за региона (~400-450 км около теб - Балканите и Черно море)
         $minLat = $lat - 3.8;
         $maxLat = $lat + 3.8;
