@@ -28,103 +28,42 @@ class RadarController extends AbstractController
         $lat = (float) $request->query->get('lat', 43.36763806288808);
         $lon = (float) $request->query->get('lon', 24.66672222828328);
 
-        // Числови граници за региона (~420 км около теб - Балканите и Черно море)
-        $minLat = $lat + (-3.8);
-        $maxLat = $lat + 3.8;
-        $minLon = $lon + (-4.8);
-        $maxLon = $lon + 4.8;
-
-        $lamin = number_format($minLat, 4, '.', '');
-        $lamax = number_format($maxLat, 4, '.', '');
-        $lomin = number_format($minLon, 4, '.', '');
-        $lomax = number_format($maxLon, 4, '.', '');
+        $minLat = $lat + (-4.5);
+        $maxLat = $lat + 4.5;
+        $minLon = $lon + (-5.5);
+        $maxLon = $lon + 5.5;
 
         $latStr = number_format($lat, 4, '.', '');
         $lonStr = number_format($lon, 4, '.', '');
 
         $allPlanes = [];
 
-        // 8 потока: Всички цивилни + Всички съществуващи военни агрегатори
-        $urls = [
-            'OpenSky'           => "https://opensky-network.org/api/states/all?lamin={$lamin}&lomin={$lomin}&lamax={$lamax}&lomax={$lomax}",
-            'ADSB.lol'          => "https://api.adsb.lol/v2/lat/{$latStr}/lon/{$lonStr}/dist/250",
-            'Airplanes-Local'   => "https://api.airplanes.live/v2/point/{$latStr}/{$lonStr}/250",
-            'ADSB.lol-MIL'      => 'https://api.adsb.lol/v2/mil',
-            'Airplanes-MIL'     => 'https://api.airplanes.live/v2/mil',
-            'ADSB.fi-MIL'       => 'https://opendata.adsb.fi/api/v2/mil',
-            'TheAirTraffic-MIL' => 'https://api.theairtraffic.com/v2/mil',
-            'IntelSky'          => 'https://intelsky.org/api/',
+        // Бързите и надеждни ADS-B агрегатори (отговарят за ~0.3 - 0.5 сек без лимити!)
+        // Радиус 250 морски мили (~460 км) покрива цяла България, Румъния, Сърбия, Гърция и Черно море
+        $adsbUrls = [
+            'ADSB.lol'       => "https://api.adsb.lol/v2/lat/{$latStr}/lon/{$lonStr}/dist/250",
+            'Airplanes.live' => "https://api.airplanes.live/v2/point/{$latStr}/{$lonStr}/250",
+            'ADSB.fi'        => "https://opendata.adsb.fi/api/v2/lat/{$latStr}/lon/{$lonStr}/dist/250",
+            'ADSB.lol-MIL'   => 'https://api.adsb.lol/v2/mil',
+            'Airplanes-MIL'  => 'https://api.airplanes.live/v2/mil',
+            'ADSB.fi-MIL'    => 'https://opendata.adsb.fi/api/v2/mil',
         ];
 
         $responses = [];
-        foreach ($urls as $sourceName => $url) {
+        foreach ($adsbUrls as $sourceName => $url) {
             try {
                 $responses[$sourceName] = $httpClient->request('GET', $url, [
-                    'timeout' => 4,
-                    'headers' => [
-                        'User-Agent' => 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126.0.0.0 Mobile Safari/537.36',
+                    'timeout'      => 3.5,
+                    'max_duration' => 3.5,
+                    'headers'      => [
+                        'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0.0.0 Safari/537.36',
                         'Accept'     => 'application/json',
                     ],
                 ]);
             } catch (Throwable $e) {}
         }
 
-        // 1. OpenSky (Граждански + Военни в региона)
-        try {
-            if (isset($responses['OpenSky']) && $responses['OpenSky']->getStatusCode() === 200) {
-                $dataOS = $responses['OpenSky']->toArray(false);
-                $osTime = (int) ($dataOS['time'] ?? time());
-
-                if (isset($dataOS['states']) && is_array($dataOS['states'])) {
-                    foreach ($dataOS['states'] as $state) {
-                        $icao = trim(strtolower($state[0] ?? ''));
-                        if ($icao && isset($state[6]) && isset($state[5])) {
-                            $rawCallsign = trim($state[1] ?? '');
-                            $squawk = trim((string)($state[14] ?? ''));
-                            $isMil = $this->isKnownMilitary($icao, $rawCallsign, '', '', $squawk);
-                            $callsign = ($rawCallsign ?: strtoupper($icao)) . ($isMil ? ' [ВОЕНЕН]' : '');
-
-                            $speedMs = (float) ($state[9] ?? 0);
-                            $speedKmh = round($speedMs / 0.277778);
-
-                            $timePosition = (int) ($state[3] ?? $osTime);
-                            $posAge = max(0.0, (float) ($osTime + (-$timePosition)));
-                            if ($posAge > 60) {
-                                $posAge = 2.0;
-                            }
-
-                            $allPlanes[$icao] = [
-                                'id'       => $icao,
-                                'squawk'   => $squawk ?: '----',
-                                'callsign' => $callsign,
-                                'lat'      => (float) $state[6],
-                                'lon'      => (float) $state[5],
-                                'altitude' => round((float) ($state[7] ?? 0)),
-                                'speed'    => $speedKmh,
-                                'track'    => (float) ($state[10] ?? 0),
-                                'age'      => $posAge,
-                                'source'   => 'OpenSky',
-                                'type'     => $isMil ? 'Военен обект' : 'Неизвестен',
-                                'operator' => $isMil ? 'Военновъздушни сили' : 'Неизвестен'
-                            ];
-                        }
-                    }
-                }
-            }
-        } catch (Throwable $e) {}
-
-        // 2. Всички ADSB потоци (Локални цивилни + Глобални военни)
-        $adsbSources = [
-            'ADSB.lol',
-            'Airplanes-Local',
-            'ADSB.lol-MIL',
-            'Airplanes-MIL',
-            'ADSB.fi-MIL',
-            'TheAirTraffic-MIL',
-            'IntelSky'
-        ];
-
-        foreach ($adsbSources as $src) {
+        foreach ($adsbUrls as $src => $url) {
             try {
                 if (!isset($responses[$src]) || $responses[$src]->getStatusCode() !== 200) {
                     continue;
@@ -146,6 +85,7 @@ class RadarController extends AbstractController
                         continue;
                     }
 
+                    // За глобалните военни списъци филтрираме само Балканите и Черно море
                     if ($acLat < $minLat || $acLat > $maxLat || $acLon < $minLon || $acLon > $maxLon) {
                         continue;
                     }
@@ -158,7 +98,7 @@ class RadarController extends AbstractController
                     $squawk = trim((string)($ac['squawk'] ?? ''));
                     $dbFlags = (int) ($ac['dbFlags'] ?? 0);
 
-                    $isMilEndpoint = str_contains($src, 'MIL') || $src === 'IntelSky';
+                    $isMilEndpoint = str_contains($src, 'MIL');
                     $isFlaggedMil = ($dbFlags & 1) === 1;
                     $isHeuristicMil = $this->isKnownMilitary($icao, $rawCallsign, $operator, $typeCode, $squawk);
 
@@ -176,34 +116,23 @@ class RadarController extends AbstractController
                     $speedKmh = round($gsKnots / 0.539957);
                     $trackDeg = (float) ($ac['track'] ?? $ac['true_heading'] ?? $ac['mag_heading'] ?? 0);
 
-                    $posAge = isset($ac['seen_pos']) ? (float) $ac['seen_pos'] : (isset($ac['seen']) ? (float) $ac['seen'] : 1.0);
+                    $posAge = isset($ac['seen_pos']) ? (float) $ac['seen_pos'] : (isset($ac['seen']) ? (float) $ac['seen'] : 0.8);
                     if ($posAge < 0 || $posAge > 60) {
-                        $posAge = 1.0;
+                        $posAge = 0.8;
                     }
 
                     if (isset($allPlanes[$icao])) {
                         $existingAge = (float) ($allPlanes[$icao]['age'] ?? 99.0);
-
-                        if ($posAge <= $existingAge + 1.5) {
+                        if ($posAge <= $existingAge + 1.0) {
                             $allPlanes[$icao]['lat'] = $acLat;
                             $allPlanes[$icao]['lon'] = $acLon;
                             $allPlanes[$icao]['age'] = $posAge;
-                            if ($speedKmh > 0) {
-                                $allPlanes[$icao]['speed'] = $speedKmh;
-                            }
-                            if ($trackDeg > 0) {
-                                $allPlanes[$icao]['track'] = $trackDeg;
-                            }
-                            if ($altitude > 0) {
-                                $allPlanes[$icao]['altitude'] = $altitude;
-                            }
+                            if ($speedKmh > 0) $allPlanes[$icao]['speed'] = $speedKmh;
+                            if ($trackDeg > 0) $allPlanes[$icao]['track'] = $trackDeg;
+                            if ($altitude > 0) $allPlanes[$icao]['altitude'] = $altitude;
                         }
-
                         if (($allPlanes[$icao]['squawk'] ?? '----') === '----' && $squawk !== '') {
                             $allPlanes[$icao]['squawk'] = $squawk;
-                        }
-                        if (!str_contains($allPlanes[$icao]['source'], $src)) {
-                            $allPlanes[$icao]['source'] .= ', ' . $src;
                         }
                         if ($isMilitary && !str_contains($allPlanes[$icao]['callsign'], '[ВОЕНЕН]')) {
                             $allPlanes[$icao]['callsign'] = $cleanCallsign;
@@ -236,7 +165,7 @@ class RadarController extends AbstractController
 
         $fetchDuration = max(0.0, microtime(true) + (-$requestStartTime));
         foreach ($allPlanes as &$p) {
-            $p['age'] = round(($p['age'] ?? 1.0) + $fetchDuration, 2);
+            $p['age'] = round(($p['age'] ?? 0.8) + $fetchDuration, 2);
         }
         unset($p);
 
@@ -250,13 +179,9 @@ class RadarController extends AbstractController
         $op  = strtoupper(trim($operator));
         $tp  = strtoupper(trim($typeCode));
 
-        $milHexPrefixes = [
-            '45f4', 'adf', 'ae', 'af', '43c', '3b', '3f', '4d03', '4781', '480', '33f', '4b82',
-        ];
+        $milHexPrefixes = ['45f4', 'adf', 'ae', 'af', '43c', '3b', '3f', '4d03', '4781', '480', '33f', '4b82'];
         foreach ($milHexPrefixes as $hPrefix) {
-            if (str_starts_with($hex, $hPrefix)) {
-                return true;
-            }
+            if (str_starts_with($hex, $hPrefix)) return true;
         }
 
         $milPrefixes = [
@@ -269,9 +194,7 @@ class RadarController extends AbstractController
             'CEF', 'SUI', 'MMF', 'CNV', 'VV', 'PAT', 'ARMY', 'EVAC', 'MEDEVAC', 'RESCUE', 'SAR'
         ];
         foreach ($milPrefixes as $prefix) {
-            if ($cs !== '' && str_starts_with($cs, $prefix)) {
-                return true;
-            }
+            if ($cs !== '' && str_starts_with($cs, $prefix)) return true;
         }
 
         $milKeywords = [
@@ -280,9 +203,7 @@ class RadarController extends AbstractController
             'FORTELE AERIENE', 'GOVERNMENT', 'STATE', 'POLICE', 'BORDER'
         ];
         foreach ($milKeywords as $kw) {
-            if ($op !== '' && str_contains($op, $kw)) {
-                return true;
-            }
+            if ($op !== '' && str_contains($op, $kw)) return true;
         }
 
         $milTypes = [
@@ -295,14 +216,10 @@ class RadarController extends AbstractController
             'AS32', 'AS52', 'EC25', 'H215', 'UH60', 'S70', 'AH64', 'CH47', 'H47',
             'MI8', 'MI17', 'MI24', 'MI35', 'BELL', 'B206', 'NH90', 'AW139', 'AW149', 'KA27', 'KA52', 'V22'
         ];
-        if ($tp !== '' && in_array($tp, $milTypes, true)) {
-            return true;
-        }
+        if ($tp !== '' && in_array($tp, $milTypes, true)) return true;
 
-        if ($squawk !== '') {
-            if (str_starts_with($squawk, '44') || str_starts_with($squawk, '74') || $squawk === '7777') {
-                return true;
-            }
+        if ($squawk !== '' && (str_starts_with($squawk, '44') || str_starts_with($squawk, '74') || $squawk === '7777')) {
+            return true;
         }
 
         return false;

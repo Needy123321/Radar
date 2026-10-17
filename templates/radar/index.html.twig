@@ -91,7 +91,6 @@
             box-shadow: 0 0 12px #ff3333;
         }
 
-        /* Бутон за Жироскоп / Компас Осеверяване */
         #btn-gyro {
             border-color: #00ffff;
             color: #00ffff;
@@ -313,10 +312,7 @@
         </div>
         <div class="scale-controls">
             <button onclick="toggleMilitaryOnly()" id="btn-mil">★ ВОЕННИ</button>
-
-            <!-- Бутон за автоматично осеверяване през Жироскопа / Магнитометъра на телефона -->
             <button onclick="toggleGyroCompass()" id="btn-gyro">🧭 ЖИРО СЕВЕР</button>
-
             <div class="scale-group">
                 <button onclick="setScale(50)" id="btn-50">50</button>
                 <button onclick="setScale(100)" id="btn-100">100</button>
@@ -324,7 +320,6 @@
                 <button onclick="setScale(350)" id="btn-350" class="active">350km</button>
             </div>
         </div>
-        <!-- 6 бързи слота за маркирани цели -->
         <div class="pinned-bar">
             <button class="pin-slot" id="pin-slot-1" onclick="selectPinnedTarget(1)">🎯 1: -</button>
             <button class="pin-slot" id="pin-slot-2" onclick="selectPinnedTarget(2)">🎯 2: -</button>
@@ -360,65 +355,65 @@
         let sweepAngle = 0;
         let maxRangeKm = 350;
 
-        // Осеверяване през Жироскоп / Компас на телефона
+        // Осеверяване чрез Жироскоп: когато го натиснеш, приема текущата ти посока за Север (0°)!
         let gyroEnabled = false;
-        let deviceHeadingDeg = 0.0; // Накъде сочи горната част на телефона (0° = Север)
+        let rawSensorHeading = 0.0;
+        let gyroNorthReference = null; // Запазва посоката, в която си гледал при натискане на бутона
         let smoothedHeadingDeg = 0.0;
 
         window.toggleGyroCompass = function() {
             gyroEnabled = !gyroEnabled;
             const btn = document.getElementById('btn-gyro');
-            if (btn) {
-                btn.classList.toggle('active', gyroEnabled);
-                if (!gyroEnabled) {
-                    btn.innerText = '🧭 ЖИРО СЕВЕР';
-                    deviceHeadingDeg = 0.0;
-                    smoothedHeadingDeg = 0.0;
-                } else {
-                    btn.innerText = `🧭 ${Math.round(smoothedHeadingDeg)}° С`;
+            if (gyroEnabled) {
+                // Заключваме текущата посока на телефона като 0° Север!
+                gyroNorthReference = rawSensorHeading;
+                smoothedHeadingDeg = 0.0;
+                if (btn) {
+                    btn.classList.add('active');
+                    btn.innerText = '🧭 СЕВЕР: 0°';
                 }
-            }
-
-            if (gyroEnabled && typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-                DeviceOrientationEvent.requestPermission().catch(() => {});
+            } else {
+                gyroNorthReference = null;
+                smoothedHeadingDeg = 0.0;
+                if (btn) {
+                    btn.classList.remove('active');
+                    btn.innerText = '🧭 ЖИРО СЕВЕР';
+                }
             }
         };
 
         function handleOrientation(e) {
-            if (!gyroEnabled) return;
-
             let heading = null;
             if (typeof e.webkitCompassHeading === 'number') {
                 heading = e.webkitCompassHeading;
             } else if (e.alpha !== null) {
-                // В Android alpha=0 е Север, върти се обратно на часовника, затова 360 - alpha
                 heading = (360 + (-e.alpha)) % 360;
             }
 
             if (heading !== null && !isNaN(heading)) {
-                deviceHeadingDeg = heading;
-                // Плавно филтриране на трептенето на жироскопа
-                let diff = sub(deviceHeadingDeg, smoothedHeadingDeg);
+                rawSensorHeading = heading;
+                if (!gyroEnabled) return;
+
+                if (gyroNorthReference === null) {
+                    gyroNorthReference = rawSensorHeading;
+                }
+
+                const relativeHeading = (sub(rawSensorHeading, gyroNorthReference) + 360) % 360;
+
+                let diff = sub(relativeHeading, smoothedHeadingDeg);
                 if (diff > 180) diff = sub(diff, 360);
                 if (diff < -180) diff = diff + 360;
-                smoothedHeadingDeg = (smoothedHeadingDeg + mul(diff, 0.2) + 360) % 360;
+                smoothedHeadingDeg = (smoothedHeadingDeg + mul(diff, 0.22) + 360) % 360;
 
                 const btn = document.getElementById('btn-gyro');
                 if (btn && gyroEnabled) {
-                    btn.innerText = `🧭 ${Math.round(smoothedHeadingDeg)}° С`;
+                    btn.innerText = `🧭 СЕВЕР: ${Math.round(smoothedHeadingDeg)}°`;
                 }
             }
         }
 
         window.addEventListener('deviceorientationabsolute', handleOrientation, true);
         window.addEventListener('deviceorientation', handleOrientation, true);
-
-        // Позволява и на Android Native кода да подава компас директно при нужда
-        window.updateCompassFromApp = function(headingDeg) {
-            if (!gyroEnabled) return;
-            deviceHeadingDeg = parseFloat(headingDeg) || 0;
-            smoothedHeadingDeg = deviceHeadingDeg;
-        };
 
         const planePhotoCache = {};
         const planeRouteCache = {};
@@ -440,7 +435,7 @@
         let isRealGps = false;
         let gpsStatusText = "📍 БАЗА: с. Радишево";
 
-        const PLANE_KEEP_TIME = 240000;
+        const PLANE_KEEP_TIME = 180000;
 
         const bgBorderCoords = [
             [44.21, 22.67], [44.04, 22.94], [43.82, 23.25], [43.78, 23.82], [43.69, 24.47],
@@ -712,17 +707,29 @@
             if (isFetchingPlanes) return;
             isFetchingPlanes = true;
 
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 6000);
+
             try {
-                const response = await fetch(`/api/planes?lat=${myLat}&lon=${myLon}`);
+                const response = await fetch(`/api/planes?lat=${myLat}&lon=${myLon}`, {
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+
+                if (!response.ok) {
+                    isFetchingPlanes = false;
+                    return;
+                }
+
                 const data = await response.json();
                 const now = Date.now();
 
-                if (Array.isArray(data)) {
+                if (Array.isArray(data) && data.length > 0) {
                     const planeMap = new Map();
                     planes.forEach(p => planeMap.set(p.id, p));
 
                     data.forEach(p => {
-                        const ageMs = mul(parseFloat(p.age || 1.0), 1000);
+                        const ageMs = mul(parseFloat(p.age || 0.8), 1000);
                         const realFixTimestamp = sub(now, ageMs);
 
                         if (!planeTrails[p.id]) {
@@ -756,8 +763,9 @@
                     }
                 }
             } catch (e) {
-                console.error("Грешка при API заявка", e);
+                console.warn("Пропусната заявка, запазваме текущите цели на екрана.");
             } finally {
+                clearTimeout(timeoutId);
                 isFetchingPlanes = false;
             }
         }
@@ -1423,8 +1431,7 @@
 
         updatePinnedBarUI();
         fetchPlanes();
-        // Сигурен интервал от 8 секунди, за да не ни режат безплатните API-та
-        setInterval(fetchPlanes, 8000);
+        setInterval(fetchPlanes, 5000);
         requestAnimationFrame(draw);
     </script>
 {% endblock %}
