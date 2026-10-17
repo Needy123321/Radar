@@ -22,6 +22,8 @@ class RadarController extends AbstractController
     #[Route('/api/planes', name: 'api_planes')]
     public function getPlanes(Request $request, HttpClientInterface $httpClient): JsonResponse
     {
+        $requestStartTime = microtime(true);
+
         // Точни координати на базата в с. Радишево
         $lat = (float) $request->query->get('lat', 43.36763806288808);
         $lon = (float) $request->query->get('lon', 24.66672222828328);
@@ -45,8 +47,8 @@ class RadarController extends AbstractController
         // 8 потока: Всички цивилни + Всички съществуващи военни агрегатори
         $urls = [
             'OpenSky'           => "https://opensky-network.org/api/states/all?lamin={$lamin}&lomin={$lomin}&lamax={$lamax}&lomax={$lomax}",
-            'ADSB.lol'          => "https://api.adsb.lol/v2/lat/{$latStr}/lon/{$lonStr}/dist/350",
-            'Airplanes-Local'   => "https://api.airplanes.live/v2/point/{$latStr}/{$lonStr}/350",
+            'ADSB.lol'          => "https://api.adsb.lol/v2/lat/{$latStr}/lon/{$lonStr}/dist/250",
+            'Airplanes-Local'   => "https://api.airplanes.live/v2/point/{$latStr}/{$lonStr}/250",
             'ADSB.lol-MIL'      => 'https://api.adsb.lol/v2/mil',
             'Airplanes-MIL'     => 'https://api.airplanes.live/v2/mil',
             'ADSB.fi-MIL'       => 'https://opendata.adsb.fi/api/v2/mil',
@@ -60,7 +62,7 @@ class RadarController extends AbstractController
                 $responses[$sourceName] = $httpClient->request('GET', $url, [
                     'timeout' => 4,
                     'headers' => [
-                        'User-Agent' => 'MilitaryRadar-Radishevo/2.0',
+                        'User-Agent' => 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126.0.0.0 Mobile Safari/537.36',
                         'Accept'     => 'application/json',
                     ],
                 ]);
@@ -71,6 +73,8 @@ class RadarController extends AbstractController
         try {
             if (isset($responses['OpenSky']) && $responses['OpenSky']->getStatusCode() === 200) {
                 $dataOS = $responses['OpenSky']->toArray(false);
+                $osTime = (int) ($dataOS['time'] ?? time());
+
                 if (isset($dataOS['states']) && is_array($dataOS['states'])) {
                     foreach ($dataOS['states'] as $state) {
                         $icao = trim(strtolower($state[0] ?? ''));
@@ -83,6 +87,12 @@ class RadarController extends AbstractController
                             $speedMs = (float) ($state[9] ?? 0);
                             $speedKmh = round($speedMs / 0.277778);
 
+                            $timePosition = (int) ($state[3] ?? $osTime);
+                            $posAge = max(0.0, (float) ($osTime + (-$timePosition)));
+                            if ($posAge > 60) {
+                                $posAge = 2.0;
+                            }
+
                             $allPlanes[$icao] = [
                                 'id'       => $icao,
                                 'squawk'   => $squawk ?: '----',
@@ -92,6 +102,7 @@ class RadarController extends AbstractController
                                 'altitude' => round((float) ($state[7] ?? 0)),
                                 'speed'    => $speedKmh,
                                 'track'    => (float) ($state[10] ?? 0),
+                                'age'      => $posAge,
                                 'source'   => 'OpenSky',
                                 'type'     => $isMil ? 'Военен обект' : 'Неизвестен',
                                 'operator' => $isMil ? 'Военновъздушни сили' : 'Неизвестен'
@@ -135,7 +146,6 @@ class RadarController extends AbstractController
                         continue;
                     }
 
-                    // Режем самолетите извън Балканите и Черно море
                     if ($acLat < $minLat || $acLat > $maxLat || $acLon < $minLon || $acLon > $maxLon) {
                         continue;
                     }
@@ -164,13 +174,31 @@ class RadarController extends AbstractController
 
                     $gsKnots = (float) ($ac['gs'] ?? 0);
                     $speedKmh = round($gsKnots / 0.539957);
+                    $trackDeg = (float) ($ac['track'] ?? $ac['true_heading'] ?? $ac['mag_heading'] ?? 0);
+
+                    $posAge = isset($ac['seen_pos']) ? (float) $ac['seen_pos'] : (isset($ac['seen']) ? (float) $ac['seen'] : 1.0);
+                    if ($posAge < 0 || $posAge > 60) {
+                        $posAge = 1.0;
+                    }
 
                     if (isset($allPlanes[$icao])) {
-                        $allPlanes[$icao]['lat'] = $acLat;
-                        $allPlanes[$icao]['lon'] = $acLon;
-                        if ($altitude > 0) {
-                            $allPlanes[$icao]['altitude'] = $altitude;
+                        $existingAge = (float) ($allPlanes[$icao]['age'] ?? 99.0);
+
+                        if ($posAge <= $existingAge + 1.5) {
+                            $allPlanes[$icao]['lat'] = $acLat;
+                            $allPlanes[$icao]['lon'] = $acLon;
+                            $allPlanes[$icao]['age'] = $posAge;
+                            if ($speedKmh > 0) {
+                                $allPlanes[$icao]['speed'] = $speedKmh;
+                            }
+                            if ($trackDeg > 0) {
+                                $allPlanes[$icao]['track'] = $trackDeg;
+                            }
+                            if ($altitude > 0) {
+                                $allPlanes[$icao]['altitude'] = $altitude;
+                            }
                         }
+
                         if (($allPlanes[$icao]['squawk'] ?? '----') === '----' && $squawk !== '') {
                             $allPlanes[$icao]['squawk'] = $squawk;
                         }
@@ -195,7 +223,8 @@ class RadarController extends AbstractController
                             'lon'      => $acLon,
                             'altitude' => $altitude,
                             'speed'    => $speedKmh,
-                            'track'    => (float) ($ac['track'] ?? 0),
+                            'track'    => $trackDeg,
+                            'age'      => $posAge,
                             'source'   => $src,
                             'type'     => $typeDesc ?: ($isMilitary ? 'Военен обект' : 'Неизвестен'),
                             'operator' => ($operator !== 'Неизвестен') ? $operator : ($isMilitary ? 'Военновъздушни сили' : 'Неизвестен')
@@ -204,6 +233,12 @@ class RadarController extends AbstractController
                 }
             } catch (Throwable $e) {}
         }
+
+        $fetchDuration = max(0.0, microtime(true) + (-$requestStartTime));
+        foreach ($allPlanes as &$p) {
+            $p['age'] = round(($p['age'] ?? 1.0) + $fetchDuration, 2);
+        }
+        unset($p);
 
         return new JsonResponse(array_values($allPlanes));
     }
@@ -215,18 +250,8 @@ class RadarController extends AbstractController
         $op  = strtoupper(trim($operator));
         $tp  = strtoupper(trim($typeCode));
 
-        // 1. Военни ICAO Hex блокове
         $milHexPrefixes = [
-            '45f4', // България ВВС
-            'adf', 'ae', 'af', // САЩ ВВС / ВМС / Армия
-            '43c',  // Великобритания RAF
-            '3b',   // Франция ВВС
-            '3f',   // Германия Luftwaffe
-            '4d03', // НАТО AWACS
-            '4781', // Норвегия ВВС
-            '480',  // Нидерландия ВВС
-            '33f',  // Италия ВВС
-            '4b82', // Турция ВВС
+            '45f4', 'adf', 'ae', 'af', '43c', '3b', '3f', '4d03', '4781', '480', '33f', '4b82',
         ];
         foreach ($milHexPrefixes as $hPrefix) {
             if (str_starts_with($hex, $hPrefix)) {
@@ -234,7 +259,6 @@ class RadarController extends AbstractController
             }
         }
 
-        // 2. Военни позивни (Callsigns)
         $milPrefixes = [
             'BAF', 'BULAF', 'ROF', 'RCH', 'REACH', 'NATO', 'MAGIC', 'FORTE',
             'LAGR', 'NCHO', 'QUID', 'PACK', 'GOLD', 'CLEAN', 'HOMER', 'JAKE',
@@ -250,7 +274,6 @@ class RadarController extends AbstractController
             }
         }
 
-        // 3. Ключови думи в оператора
         $milKeywords = [
             'AIR FORCE', 'MILITARY', 'NAVY', 'ARMY', 'NATO', 'DEFENCE', 'DEFENSE',
             'ВВС', 'MARINE', 'GUARD', 'SQUADRON', 'LUFTWAFFE', 'ARMÉE', 'AERONAUTICA',
@@ -262,7 +285,6 @@ class RadarController extends AbstractController
             }
         }
 
-        // 4. Военни модели самолети, хеликоптери и дронове
         $milTypes = [
             'C27J', 'C130', 'C30J', 'C17', 'C5M', 'A400', 'AN12', 'AN26', 'AN32', 'IL76',
             'K35R', 'K35E', 'KC46', 'A332', 'CN35', 'C295', 'L410', 'C12', 'BE20', 'P180',
@@ -277,7 +299,6 @@ class RadarController extends AbstractController
             return true;
         }
 
-        // 5. Военни Squawk кодове
         if ($squawk !== '') {
             if (str_starts_with($squawk, '44') || str_starts_with($squawk, '74') || $squawk === '7777') {
                 return true;

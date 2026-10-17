@@ -55,21 +55,21 @@
             flex-direction: row;
             justify-content: space-between;
             align-items: center;
-            gap: 5px;
+            gap: 4px;
             pointer-events: auto;
         }
         .scale-group {
             display: flex;
-            gap: 4px;
+            gap: 3px;
         }
         .scale-controls button {
             background: rgba(0, 30, 0, 0.9);
             border: 1px solid #0f0;
             color: #0f0;
-            padding: 5px 7px;
+            padding: 5px 6px;
             cursor: pointer;
             font-family: monospace;
-            font-size: 10.5px;
+            font-size: 10px;
             font-weight: bold;
             border-radius: 4px;
             transition: all 0.15s;
@@ -89,6 +89,18 @@
             background: #ff3333;
             color: #fff;
             box-shadow: 0 0 12px #ff3333;
+        }
+
+        /* Бутон за Жироскоп / Компас Осеверяване */
+        #btn-gyro {
+            border-color: #00ffff;
+            color: #00ffff;
+            background: rgba(0, 35, 45, 0.9);
+        }
+        #btn-gyro.active {
+            background: #00ffff;
+            color: #000;
+            box-shadow: 0 0 12px #00ffff;
         }
 
         /* 6 бързи бутона за маркираните цели (2 реда по 3) */
@@ -301,21 +313,25 @@
         </div>
         <div class="scale-controls">
             <button onclick="toggleMilitaryOnly()" id="btn-mil">★ ВОЕННИ</button>
+
+            <!-- Бутон за автоматично осеверяване през Жироскопа / Магнитометъра на телефона -->
+            <button onclick="toggleGyroCompass()" id="btn-gyro">🧭 ЖИРО СЕВЕР</button>
+
             <div class="scale-group">
-                <button onclick="setScale(50)" id="btn-50">50km</button>
-                <button onclick="setScale(100)" id="btn-100">100km</button>
-                <button onclick="setScale(200)" id="btn-200">200km</button>
+                <button onclick="setScale(50)" id="btn-50">50</button>
+                <button onclick="setScale(100)" id="btn-100">100</button>
+                <button onclick="setScale(200)" id="btn-200">200</button>
                 <button onclick="setScale(350)" id="btn-350" class="active">350km</button>
             </div>
         </div>
         <!-- 6 бързи слота за маркирани цели -->
         <div class="pinned-bar">
-            <button class="pin-slot" id="pin-slot-1" onclick="selectPinnedTarget(1)">🎯 1: ПРАЗНО</button>
-            <button class="pin-slot" id="pin-slot-2" onclick="selectPinnedTarget(2)">🎯 2: ПРАЗНО</button>
-            <button class="pin-slot" id="pin-slot-3" onclick="selectPinnedTarget(3)">🎯 3: ПРАЗНО</button>
-            <button class="pin-slot" id="pin-slot-4" onclick="selectPinnedTarget(4)">🎯 4: ПРАЗНО</button>
-            <button class="pin-slot" id="pin-slot-5" onclick="selectPinnedTarget(5)">🎯 5: ПРАЗНО</button>
-            <button class="pin-slot" id="pin-slot-6" onclick="selectPinnedTarget(6)">🎯 6: ПРАЗНО</button>
+            <button class="pin-slot" id="pin-slot-1" onclick="selectPinnedTarget(1)">🎯 1: -</button>
+            <button class="pin-slot" id="pin-slot-2" onclick="selectPinnedTarget(2)">🎯 2: -</button>
+            <button class="pin-slot" id="pin-slot-3" onclick="selectPinnedTarget(3)">🎯 3: -</button>
+            <button class="pin-slot" id="pin-slot-4" onclick="selectPinnedTarget(4)">🎯 4: -</button>
+            <button class="pin-slot" id="pin-slot-5" onclick="selectPinnedTarget(5)">🎯 5: -</button>
+            <button class="pin-slot" id="pin-slot-6" onclick="selectPinnedTarget(6)">🎯 6: -</button>
         </div>
     </div>
 
@@ -339,15 +355,75 @@
         let overlappingCluster = [];
         let clusterIndex = 0;
         let highlightMilitaryOnly = false;
+        let isFetchingPlanes = false;
 
         let sweepAngle = 0;
         let maxRangeKm = 350;
+
+        // Осеверяване през Жироскоп / Компас на телефона
+        let gyroEnabled = false;
+        let deviceHeadingDeg = 0.0; // Накъде сочи горната част на телефона (0° = Север)
+        let smoothedHeadingDeg = 0.0;
+
+        window.toggleGyroCompass = function() {
+            gyroEnabled = !gyroEnabled;
+            const btn = document.getElementById('btn-gyro');
+            if (btn) {
+                btn.classList.toggle('active', gyroEnabled);
+                if (!gyroEnabled) {
+                    btn.innerText = '🧭 ЖИРО СЕВЕР';
+                    deviceHeadingDeg = 0.0;
+                    smoothedHeadingDeg = 0.0;
+                } else {
+                    btn.innerText = `🧭 ${Math.round(smoothedHeadingDeg)}° С`;
+                }
+            }
+
+            if (gyroEnabled && typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                DeviceOrientationEvent.requestPermission().catch(() => {});
+            }
+        };
+
+        function handleOrientation(e) {
+            if (!gyroEnabled) return;
+
+            let heading = null;
+            if (typeof e.webkitCompassHeading === 'number') {
+                heading = e.webkitCompassHeading;
+            } else if (e.alpha !== null) {
+                // В Android alpha=0 е Север, върти се обратно на часовника, затова 360 - alpha
+                heading = (360 + (-e.alpha)) % 360;
+            }
+
+            if (heading !== null && !isNaN(heading)) {
+                deviceHeadingDeg = heading;
+                // Плавно филтриране на трептенето на жироскопа
+                let diff = sub(deviceHeadingDeg, smoothedHeadingDeg);
+                if (diff > 180) diff = sub(diff, 360);
+                if (diff < -180) diff = diff + 360;
+                smoothedHeadingDeg = (smoothedHeadingDeg + mul(diff, 0.2) + 360) % 360;
+
+                const btn = document.getElementById('btn-gyro');
+                if (btn && gyroEnabled) {
+                    btn.innerText = `🧭 ${Math.round(smoothedHeadingDeg)}° С`;
+                }
+            }
+        }
+
+        window.addEventListener('deviceorientationabsolute', handleOrientation, true);
+        window.addEventListener('deviceorientation', handleOrientation, true);
+
+        // Позволява и на Android Native кода да подава компас директно при нужда
+        window.updateCompassFromApp = function(headingDeg) {
+            if (!gyroEnabled) return;
+            deviceHeadingDeg = parseFloat(headingDeg) || 0;
+            smoothedHeadingDeg = deviceHeadingDeg;
+        };
 
         const planePhotoCache = {};
         const planeRouteCache = {};
         const planeTrails = {};
 
-        // Памет за 6-те маркирани цели в телефона
         let pinnedTargets = { 1: null, 2: null, 3: null, 4: null, 5: null, 6: null };
         try {
             const savedPins = localStorage.getItem('radar_pinned_targets');
@@ -364,7 +440,7 @@
         let isRealGps = false;
         let gpsStatusText = "📍 БАЗА: с. Радишево";
 
-        const PLANE_KEEP_TIME = 600000;
+        const PLANE_KEEP_TIME = 240000;
 
         const bgBorderCoords = [
             [44.21, 22.67], [44.04, 22.94], [43.82, 23.25], [43.78, 23.82], [43.69, 24.47],
@@ -604,6 +680,8 @@
         }
 
         function calculateAzimuth(lat1, lon1, lat2, lon2) {
+            lat1 = parseFloat(lat1); lon1 = parseFloat(lon1);
+            lat2 = parseFloat(lat2); lon2 = parseFloat(lon2);
             const dLon = mul(sub(lon2, lon1), DEG_TO_RAD);
             const lat1Rad = mul(lat1, DEG_TO_RAD);
             const lat2Rad = mul(lat2, DEG_TO_RAD);
@@ -613,10 +691,15 @@
             return (mul(Math.atan2(y, x), RAD_TO_DEG) + 360) % 360;
         }
 
+        function getActiveRotationDeg() {
+            return gyroEnabled ? -smoothedHeadingDeg : 0.0;
+        }
+
         function latLonToRadarXY(lat, lon, cx, cy, radius) {
             const dist = calculateDistance(myLat, myLon, lat, lon);
             const azi = calculateAzimuth(myLat, myLon, lat, lon);
-            const angleRad = mul(sub(azi, 90), DEG_TO_RAD);
+            const effectiveAzi = (azi + getActiveRotationDeg() + 360) % 360;
+            const angleRad = mul(sub(effectiveAzi, 90), DEG_TO_RAD);
             const distPx = mul((dist / maxRangeKm), radius);
             return {
                 x: cx + mul(Math.cos(angleRad), distPx),
@@ -626,46 +709,56 @@
         }
 
         async function fetchPlanes() {
+            if (isFetchingPlanes) return;
+            isFetchingPlanes = true;
+
             try {
                 const response = await fetch(`/api/planes?lat=${myLat}&lon=${myLon}`);
                 const data = await response.json();
                 const now = Date.now();
 
-                const planeMap = new Map();
-                planes.forEach(p => planeMap.set(p.id, p));
+                if (Array.isArray(data)) {
+                    const planeMap = new Map();
+                    planes.forEach(p => planeMap.set(p.id, p));
 
-                data.forEach(p => {
-                    if (!planeTrails[p.id]) {
-                        planeTrails[p.id] = [];
-                    }
-                    const trail = planeTrails[p.id];
-                    const lastPt = trail.length > 0 ? trail[sub(trail.length, 1)] : null;
-                    if (!lastPt || calculateDistance(lastPt.lat, lastPt.lon, p.lat, p.lon) > 0.4) {
-                        trail.push({ lat: p.lat, lon: p.lon });
-                        if (trail.length > 15) trail.shift();
-                    }
+                    data.forEach(p => {
+                        const ageMs = mul(parseFloat(p.age || 1.0), 1000);
+                        const realFixTimestamp = sub(now, ageMs);
 
-                    planeMap.set(p.id, {
-                        ...planeMap.get(p.id),
-                        ...p,
-                        lastSeen: now,
-                        lastUpdate: now
+                        if (!planeTrails[p.id]) {
+                            planeTrails[p.id] = [];
+                        }
+                        const trail = planeTrails[p.id];
+                        const lastPt = trail.length > 0 ? trail[sub(trail.length, 1)] : null;
+                        if (!lastPt || calculateDistance(lastPt.lat, lastPt.lon, p.lat, p.lon) > 0.35) {
+                            trail.push({ lat: p.lat, lon: p.lon });
+                            if (trail.length > 18) trail.shift();
+                        }
+
+                        planeMap.set(p.id, {
+                            ...planeMap.get(p.id),
+                            ...p,
+                            lastSeen: now,
+                            lastUpdate: realFixTimestamp
+                        });
                     });
-                });
 
-                planes = Array.from(planeMap.values()).filter(p => {
-                    if (!p.lastSeen) p.lastSeen = now;
-                    return sub(now, p.lastSeen) < PLANE_KEEP_TIME;
-                });
+                    planes = Array.from(planeMap.values()).filter(p => {
+                        if (!p.lastSeen) p.lastSeen = now;
+                        return sub(now, p.lastSeen) < PLANE_KEEP_TIME;
+                    });
 
-                updatePinnedBarUI();
+                    updatePinnedBarUI();
 
-                if (selectedPlaneId) {
-                    const sel = planes.find(p => p.id === selectedPlaneId);
-                    if (sel) updateInfoPanelHTML(sel);
+                    if (selectedPlaneId) {
+                        const sel = planes.find(p => p.id === selectedPlaneId);
+                        if (sel) updateInfoPanelHTML(sel);
+                    }
                 }
             } catch (e) {
                 console.error("Грешка при API заявка", e);
+            } finally {
+                isFetchingPlanes = false;
             }
         }
 
@@ -817,8 +910,11 @@
             ctx.moveTo(cx, sub(cy, radius)); ctx.lineTo(cx, cy + radius);
             ctx.stroke();
 
+            const rotDeg = getActiveRotationDeg();
+
             for (let i = 0; i < 360; i += 10) {
-                const angleRad = mul(sub(i, 90), DEG_TO_RAD);
+                const effectiveDeg = (i + rotDeg + 360) % 360;
+                const angleRad = mul(sub(effectiveDeg, 90), DEG_TO_RAD);
                 const isMajor = (i % 30 === 0);
                 const startR = sub(radius, (isMajor ? 6 : 3));
                 const endR = radius + (isMajor ? 6 : 3);
@@ -826,14 +922,15 @@
                 ctx.beginPath();
                 ctx.moveTo(cx + mul(Math.cos(angleRad), startR), cy + mul(Math.sin(angleRad), startR));
                 ctx.lineTo(cx + mul(Math.cos(angleRad), endR), cy + mul(Math.sin(angleRad), endR));
-                ctx.strokeStyle = isMajor ? 'rgba(0, 255, 0, 0.65)' : 'rgba(0, 255, 0, 0.3)';
+                ctx.strokeStyle = (i === 0) ? '#00ffff' : (isMajor ? 'rgba(0, 255, 0, 0.65)' : 'rgba(0, 255, 0, 0.3)');
                 ctx.stroke();
 
                 if (isMajor) {
                     const textR = radius + 15;
-                    ctx.fillStyle = '#0f0';
+                    ctx.fillStyle = (i === 0) ? '#00ffff' : '#0f0';
                     ctx.font = `bold ${Math.max(6, 9 / Math.sqrt(scale))}px monospace`;
-                    ctx.fillText(`${i}°`, cx + mul(Math.cos(angleRad), textR), cy + mul(Math.sin(angleRad), textR));
+                    const label = (i === 0) ? '0°С' : `${i}°`;
+                    ctx.fillText(label, cx + mul(Math.cos(angleRad), textR), cy + mul(Math.sin(angleRad), textR));
                 }
             }
         }
@@ -844,10 +941,11 @@
             ctx.fillRect(0, 0, screenWidth, screenHeight);
 
             const cx = screenWidth / 2;
-            const cy = mul(screenHeight, 0.48);
-            const radius = Math.min(mul(screenWidth, 0.44), mul(screenHeight, 0.32));
+            const cy = mul(screenHeight, 0.50);
+            const radius = Math.min(mul(screenWidth, 0.43), mul(screenHeight, 0.31));
 
             const now = Date.now();
+            const rotDeg = getActiveRotationDeg();
 
             ctx.save();
             ctx.translate(cx + panX, cy + panY);
@@ -903,7 +1001,7 @@
 
                 if (plane.lastUpdate && plane.speed > 0) {
                     const deltaSec = sub(now, plane.lastUpdate) / 1000;
-                    if (deltaSec > 0 && deltaSec < 30) {
+                    if (deltaSec > 0 && deltaSec < 25) {
                         const newPos = extrapolatePosition(plane.lat, plane.lon, plane.speed, plane.track || 0, deltaSec);
                         currentLat = newPos.lat;
                         currentLon = newPos.lon;
@@ -922,7 +1020,8 @@
 
                 visibleCount++;
 
-                const angleRad = mul(sub(plane.azi, 90), DEG_TO_RAD);
+                const effectiveAzi = (plane.azi + rotDeg + 360) % 360;
+                const angleRad = mul(sub(effectiveAzi, 90), DEG_TO_RAD);
                 const distPx = mul((plane.dist / maxRangeKm), radius);
                 const px = cx + mul(Math.cos(angleRad), distPx);
                 const py = cy + mul(Math.sin(angleRad), distPx);
@@ -994,8 +1093,9 @@
                     ctx.translate(px, py);
                 }
 
+                const effectiveTrack = ((plane.track || 0) + rotDeg + 360) % 360;
                 ctx.scale(iconScale, iconScale);
-                ctx.rotate(mul((plane.track || 0), DEG_TO_RAD));
+                ctx.rotate(mul(effectiveTrack, DEG_TO_RAD));
 
                 if (isDimmed) {
                     ctx.fillStyle = 'rgba(255, 204, 0, 0.18)';
@@ -1020,7 +1120,7 @@
                 ctx.closePath();
                 ctx.fill();
 
-                ctx.rotate(mul(-(plane.track || 0), DEG_TO_RAD));
+                ctx.rotate(mul(-effectiveTrack, DEG_TO_RAD));
 
                 if (!isDimmed) {
                     ctx.fillStyle = pinSlot ? '#ff77ff' : (isMilitary ? '#ff4444' : 'rgba(255, 215, 0, 0.9)');
@@ -1111,7 +1211,7 @@
             const color = isMilitary ? '#ff3333' : '#ffcc00';
             const badgeText = isMilitary ? 'ВОЕНЕН ОБЕКТ' : 'ГРАЖДАНСКИ ПОЛЕТ';
             const trackDeg = Math.round(p.track || 0);
-            const azimuthDeg = Math.round(p.azi || 0);
+            const azimuthDeg = (p.azi || 0).toFixed(1);
 
             const cachedPhoto = planePhotoCache[p.id];
             const showImg = cachedPhoto ? 'display:block;' : 'display:none;';
@@ -1213,7 +1313,7 @@
 
             const rect = canvas.getBoundingClientRect();
             const cx = screenWidth / 2;
-            const cy = mul(screenHeight, 0.48);
+            const cy = mul(screenHeight, 0.50);
 
             const clickX = sub(sub(sub(e.clientX, rect.left), cx), panX) / scale + cx;
             const clickY = sub(sub(sub(e.clientY, rect.top), cy), panY) / scale + cy;
@@ -1323,7 +1423,8 @@
 
         updatePinnedBarUI();
         fetchPlanes();
-        setInterval(fetchPlanes, 10000);
+        // Сигурен интервал от 8 секунди, за да не ни режат безплатните API-та
+        setInterval(fetchPlanes, 8000);
         requestAnimationFrame(draw);
     </script>
 {% endblock %}
