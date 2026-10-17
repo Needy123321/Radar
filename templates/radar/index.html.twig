@@ -21,25 +21,25 @@
             background: #020802;
         }
 
-        /* Горен тактически панел - 2 реда */
+        /* Горен тактически панел */
         .top-hud {
             position: fixed;
-            top: 48px;
-            left: 12px;
-            right: 12px;
+            top: 42px;
+            left: 10px;
+            right: 10px;
             z-index: 10;
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 5px;
             pointer-events: none;
         }
         #status {
-            font-size: 12px;
+            font-size: 11.5px;
             font-weight: bold;
             color: #00ff66;
             text-shadow: 0 0 6px rgba(0, 255, 0, 0.7);
-            background: rgba(0, 22, 5, 0.88);
-            padding: 7px 10px;
+            background: rgba(0, 22, 5, 0.9);
+            padding: 5px 8px;
             border-left: 3px solid #0f0;
             border-top: 1px solid rgba(0, 255, 0, 0.3);
             border-right: 1px solid rgba(0, 255, 0, 0.3);
@@ -60,16 +60,16 @@
         }
         .scale-group {
             display: flex;
-            gap: 5px;
+            gap: 4px;
         }
         .scale-controls button {
             background: rgba(0, 30, 0, 0.9);
             border: 1px solid #0f0;
             color: #0f0;
-            padding: 6px 9px;
+            padding: 5px 7px;
             cursor: pointer;
             font-family: monospace;
-            font-size: 11px;
+            font-size: 10.5px;
             font-weight: bold;
             border-radius: 4px;
             transition: all 0.15s;
@@ -80,7 +80,6 @@
             box-shadow: 0 0 10px #0f0;
         }
 
-        /* Специален бутон за филтър само на ВОЕННИ цели */
         #btn-mil {
             border-color: #ff3333;
             color: #ff5555;
@@ -92,21 +91,61 @@
             box-shadow: 0 0 12px #ff3333;
         }
 
-        /* Долен информационен панел - вдигнат високо над долните бутони на телефона! */
+        /* 6 бързи бутона за маркираните цели (2 реда по 3) */
+        .pinned-bar {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 4px;
+            pointer-events: auto;
+        }
+        .pin-slot {
+            background: rgba(25, 0, 35, 0.88);
+            border: 1px dashed rgba(255, 0, 255, 0.45);
+            color: #cc88cc;
+            padding: 4px 5px;
+            font-family: monospace;
+            font-size: 10px;
+            font-weight: bold;
+            border-radius: 4px;
+            cursor: pointer;
+            text-align: center;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .pin-slot.filled {
+            background: rgba(65, 0, 85, 0.95);
+            border: 1px solid #ff00ff;
+            color: #ffffff;
+            box-shadow: 0 0 8px rgba(255, 0, 255, 0.4);
+        }
+        .pin-slot.alert {
+            background: rgba(120, 0, 0, 0.95);
+            border-color: #ff0000;
+            color: #ffff00;
+            animation: blinkAlert 0.8s infinite alternate;
+        }
+
+        @keyframes blinkAlert {
+            from { box-shadow: 0 0 4px #ff0000; }
+            to { box-shadow: 0 0 16px #ff0000; background: rgba(180, 0, 0, 1); }
+        }
+
+        /* Долен информационен панел */
         #infoPanel {
             position: fixed;
             bottom: calc(68px + env(safe-area-inset-bottom, 0px));
             left: 50%;
             transform: translateX(-50%);
-            background: rgba(0, 18, 5, 0.96);
+            background: rgba(0, 18, 5, 0.97);
             border: 2px solid #00ff44;
             box-shadow: 0 0 25px rgba(0, 255, 68, 0.45);
-            padding: 12px 14px;
+            padding: 10px 12px;
             border-radius: 8px;
             display: none;
-            width: 94%;
+            width: 95%;
             max-width: 460px;
-            font-size: 13px;
+            font-size: 12px;
             z-index: 999;
             box-sizing: border-box;
         }
@@ -115,17 +154,16 @@
             display: flex;
             align-items: center;
             border-bottom: 1px solid rgba(0, 255, 0, 0.3);
-            padding-bottom: 8px;
-            margin-bottom: 8px;
-            gap: 12px;
-            padding-right: 95px; /* Пази място за бутоните СЛЕДВАЩ и X горе вдясно, за да не закриват позивната! */
+            padding-bottom: 6px;
+            margin-bottom: 6px;
+            gap: 10px;
+            padding-right: 90px;
         }
 
-        /* CSS Кутия за реалната снимка от нета */
         .plane-photo-box {
-            width: 92px;
-            height: 60px;
-            min-width: 92px;
+            width: 84px;
+            height: 54px;
+            min-width: 84px;
             background: radial-gradient(circle, rgba(0,60,0,0.6) 0%, rgba(0,15,0,0.95) 100%);
             border: 1px solid #0f0;
             border-radius: 6px;
@@ -143,45 +181,97 @@
             display: none;
             filter: contrast(1.08) saturate(1.1);
         }
-        .plane-photo-box::after {
-            content: '';
-            position: absolute;
-            inset: 0;
-            background: linear-gradient(rgba(0,255,0,0.06) 50%, transparent 50%);
-            background-size: 100% 4px;
-            pointer-events: none;
+
+        .squawk-alert-box {
+            padding: 5px 7px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .squawk-emergency {
+            background: rgba(160, 0, 0, 0.9);
+            border: 1px solid #ff3333;
+            color: #ffff00;
+            animation: blinkAlert 0.7s infinite alternate;
+        }
+        .squawk-tactical {
+            background: rgba(70, 35, 0, 0.9);
+            border: 1px solid #ff9900;
+            color: #ffcc00;
+        }
+
+        .route-banner {
+            background: rgba(0, 50, 40, 0.65);
+            border: 1px solid rgba(0, 255, 200, 0.4);
+            padding: 4px 7px;
+            border-radius: 4px;
+            margin-bottom: 6px;
+            font-size: 11px;
+            color: #00ffcc;
+            font-weight: bold;
         }
 
         .info-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 6px 10px;
+            gap: 5px 8px;
             width: 100%;
         }
         .info-item {
             background: rgba(0, 255, 0, 0.06);
-            padding: 5px 8px;
+            padding: 4px 7px;
             border-radius: 4px;
             border-left: 2px solid rgba(0, 255, 0, 0.5);
         }
         .info-label {
-            font-size: 10px;
+            font-size: 9px;
             color: #77cc77;
             text-transform: uppercase;
             display: block;
-            margin-bottom: 2px;
+            margin-bottom: 1px;
         }
         .info-val {
-            font-size: 12.5px;
+            font-size: 11.5px;
             color: #ffffff;
             font-weight: bold;
         }
+
+        .mark-targets-row {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 4px;
+            margin-top: 7px;
+            padding-top: 6px;
+            border-top: 1px solid rgba(0, 255, 0, 0.25);
+        }
+        .mark-btn {
+            background: rgba(35, 0, 45, 0.85);
+            border: 1px solid #cc00cc;
+            color: #ff77ff;
+            font-family: monospace;
+            font-size: 10px;
+            font-weight: bold;
+            padding: 6px 2px;
+            border-radius: 4px;
+            cursor: pointer;
+            text-align: center;
+        }
+        .mark-btn.active {
+            background: #ff00ff;
+            color: #000;
+            box-shadow: 0 0 10px #ff00ff;
+        }
+
         .panel-top-actions {
             position: absolute;
             top: 8px;
             right: 10px;
             display: flex;
-            gap: 6px;
+            gap: 5px;
             z-index: 5;
         }
         .action-btn {
@@ -191,7 +281,7 @@
             font-size: 11px;
             font-family: monospace;
             font-weight: bold;
-            padding: 4px 8px;
+            padding: 4px 7px;
             border-radius: 4px;
             cursor: pointer;
         }
@@ -218,6 +308,15 @@
                 <button onclick="setScale(350)" id="btn-350" class="active">350km</button>
             </div>
         </div>
+        <!-- 6 бързи слота за маркирани цели -->
+        <div class="pinned-bar">
+            <button class="pin-slot" id="pin-slot-1" onclick="selectPinnedTarget(1)">🎯 1: ПРАЗНО</button>
+            <button class="pin-slot" id="pin-slot-2" onclick="selectPinnedTarget(2)">🎯 2: ПРАЗНО</button>
+            <button class="pin-slot" id="pin-slot-3" onclick="selectPinnedTarget(3)">🎯 3: ПРАЗНО</button>
+            <button class="pin-slot" id="pin-slot-4" onclick="selectPinnedTarget(4)">🎯 4: ПРАЗНО</button>
+            <button class="pin-slot" id="pin-slot-5" onclick="selectPinnedTarget(5)">🎯 5: ПРАЗНО</button>
+            <button class="pin-slot" id="pin-slot-6" onclick="selectPinnedTarget(6)">🎯 6: ПРАЗНО</button>
+        </div>
     </div>
 
     <canvas id="radarCanvas"></canvas>
@@ -229,6 +328,12 @@
         const gpsTextSpan = document.getElementById('gpsText');
         const targetsTextSpan = document.getElementById('targetsText');
 
+        const mul = (a, b) => a / (1 / b);
+        const sub = (a, b) => a + (-b);
+        const TWO_PI = 6.283185307179586;
+        const DEG_TO_RAD = 0.017453292519943295;
+        const RAD_TO_DEG = 57.29577951308232;
+
         let planes = [];
         let selectedPlaneId = null;
         let overlappingCluster = [];
@@ -239,19 +344,27 @@
         let maxRangeKm = 350;
 
         const planePhotoCache = {};
+        const planeRouteCache = {};
+        const planeTrails = {};
 
-        // Дефолтни координати: с. Радишево (общ. Плевен)
-        // Дефолтни координати: 43°22'03.0"N 24°39'57.2"E
-        // Точни координати на базата в с. Радишево
-        // Точни координати на базата в с. Радишево
+        // Памет за 6-те маркирани цели в телефона
+        let pinnedTargets = { 1: null, 2: null, 3: null, 4: null, 5: null, 6: null };
+        try {
+            const savedPins = localStorage.getItem('radar_pinned_targets');
+            if (savedPins) {
+                pinnedTargets = JSON.parse(savedPins);
+            }
+        } catch (e) {}
+
         const RADISHEVO_LAT = 43.36763806288808;
         const RADISHEVO_LON = 24.66672222828328;
+
         let myLat = RADISHEVO_LAT;
         let myLon = RADISHEVO_LON;
         let isRealGps = false;
         let gpsStatusText = "📍 БАЗА: с. Радишево";
 
-        const PLANE_KEEP_TIME = 10 * 60 * 1000;
+        const PLANE_KEEP_TIME = 600000;
 
         const bgBorderCoords = [
             [44.21, 22.67], [44.04, 22.94], [43.82, 23.25], [43.78, 23.82], [43.69, 24.47],
@@ -295,6 +408,94 @@
         let startX, startY;
         let initialDist = null;
 
+        function analyzeSquawkCode(sqk, isMilitary) {
+            if (!sqk || sqk === '----') return null;
+            const s = String(sqk).trim();
+
+            if (s === '7700') return { level: 'emergency', short: 'MAYDAY 7700', desc: '🚨 АВАРИЯ НА БОРДА (Код 7700)' };
+            if (s === '7600') return { level: 'emergency', short: 'NORDO 7600', desc: '🚨 ЗАГУБА НА РАДИОВРЪЗКА (Код 7600)' };
+            if (s === '7500') return { level: 'emergency', short: 'HIJACK 7500', desc: '🚨 ОТВЛИЧАНЕ (Код 7500)' };
+            if (s === '7777') return { level: 'emergency', short: 'ПВО ПРЕХВАТ', desc: '⚔️ АКТИВЕН ВОЕНЕН ПРЕХВАТ (Код 7777)' };
+            if (s.startsWith('44')) return { level: 'tactical', short: 'НАТО МИСИЯ', desc: '⚔️ НАТО Тактическа мисия (44xx)' };
+            if (s.startsWith('74')) return { level: 'tactical', short: 'БПЛА / ВВС', desc: '⚔️ Военно разузнаване / Дрон (74xx)' };
+            if (s === '0020' || s === '0033') return { level: 'tactical', short: 'СПЕШЕН/ДЕСАНТ', desc: '🚁 Спешна медицинска мисия или Десант' };
+
+            return null;
+        }
+
+        function getPinSlotForPlane(planeId) {
+            if (!planeId) return null;
+            for (let slot of [1, 2, 3, 4, 5, 6]) {
+                if (pinnedTargets[slot] === planeId) return slot;
+            }
+            return null;
+        }
+
+        window.togglePinSlot = function(slot, planeId) {
+            if (pinnedTargets[slot] === planeId) {
+                pinnedTargets[slot] = null;
+            } else {
+                for (let s of [1, 2, 3, 4, 5, 6]) {
+                    if (pinnedTargets[s] === planeId) pinnedTargets[s] = null;
+                }
+                pinnedTargets[slot] = planeId;
+            }
+
+            try {
+                localStorage.setItem('radar_pinned_targets', JSON.stringify(pinnedTargets));
+            } catch (e) {}
+
+            updatePinnedBarUI();
+            if (selectedPlaneId) {
+                const sel = planes.find(p => p.id === selectedPlaneId);
+                if (sel) updateInfoPanelHTML(sel);
+            }
+        };
+
+        window.selectPinnedTarget = function(slot) {
+            const targetId = pinnedTargets[slot];
+            if (!targetId) return;
+
+            const found = planes.find(p => p.id === targetId);
+            if (found) {
+                selectedPlaneId = found.id;
+                overlappingCluster = [found];
+                clusterIndex = 0;
+                const panel = document.getElementById('infoPanel');
+                panel.style.display = 'block';
+                updateInfoPanelHTML(found);
+            } else {
+                pinnedTargets[slot] = null;
+                updatePinnedBarUI();
+            }
+        };
+
+        function updatePinnedBarUI() {
+            for (let slot of [1, 2, 3, 4, 5, 6]) {
+                const btn = document.getElementById(`pin-slot-${slot}`);
+                if (!btn) continue;
+
+                const targetId = pinnedTargets[slot];
+                const p = targetId ? planes.find(pl => pl.id === targetId) : null;
+
+                btn.classList.remove('filled', 'alert');
+
+                if (p) {
+                    btn.classList.add('filled');
+                    const isMil = p.callsign && p.callsign.includes('[ВОЕНЕН]');
+                    const sqkStatus = analyzeSquawkCode(p.squawk, isMil);
+                    if (sqkStatus && sqkStatus.level === 'emergency') {
+                        btn.classList.add('alert');
+                    }
+                    const cleanName = p.callsign.replace(' [ВОЕНЕН]', '');
+                    const labelSqk = (p.squawk && p.squawk !== '----') ? p.squawk : cleanName;
+                    btn.innerText = `🎯#${slot}: ${labelSqk}`;
+                } else {
+                    btn.innerText = `🎯 ${slot}: -`;
+                }
+            }
+        }
+
         function setScale(km) {
             maxRangeKm = km;
             document.querySelectorAll('.scale-group button').forEach(b => b.classList.remove('active'));
@@ -313,8 +514,8 @@
             const dpr = window.devicePixelRatio || 1;
             screenWidth = window.innerWidth;
             screenHeight = window.innerHeight;
-            canvas.width = screenWidth * dpr;
-            canvas.height = screenHeight * dpr;
+            canvas.width = mul(screenWidth, dpr);
+            canvas.height = mul(screenHeight, dpr);
             canvas.style.width = screenWidth + 'px';
             canvas.style.height = screenHeight + 'px';
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -326,33 +527,33 @@
             if (e.touches.length === 1) {
                 isDragging = true;
                 dragMoved = false;
-                startX = e.touches[0].clientX - panX;
-                startY = e.touches[0].clientY - panY;
+                startX = sub(e.touches[0].clientX, panX);
+                startY = sub(e.touches[0].clientY, panY);
             } else if (e.touches.length === 2) {
                 isDragging = false;
                 initialDist = Math.hypot(
-                    e.touches[0].clientX - e.touches[1].clientX,
-                    e.touches[0].clientY - e.touches[1].clientY
+                    sub(e.touches[0].clientX, e.touches[1].clientX),
+                    sub(e.touches[0].clientY, e.touches[1].clientY)
                 );
             }
         });
 
         canvas.addEventListener('touchmove', (e) => {
             if (isDragging && e.touches.length === 1) {
-                const newPanX = e.touches[0].clientX - startX;
-                const newPanY = e.touches[0].clientY - startY;
-                if (Math.hypot(newPanX - panX, newPanY - panY) > 4) {
+                const newPanX = sub(e.touches[0].clientX, startX);
+                const newPanY = sub(e.touches[0].clientY, startY);
+                if (Math.hypot(sub(newPanX, panX), sub(newPanY, panY)) > 4) {
                     dragMoved = true;
                 }
                 panX = newPanX;
                 panY = newPanY;
             } else if (e.touches.length === 2 && initialDist !== null) {
                 const currentDist = Math.hypot(
-                    e.touches[0].clientX - e.touches[1].clientX,
-                    e.touches[0].clientY - e.touches[1].clientY
+                    sub(e.touches[0].clientX, e.touches[1].clientX),
+                    sub(e.touches[0].clientY, e.touches[1].clientY)
                 );
                 const zoomFactor = currentDist / initialDist;
-                scale = Math.max(1.0, Math.min(scale * zoomFactor, 6.0));
+                scale = Math.max(1.0, Math.min(mul(scale, zoomFactor), 6.0));
                 initialDist = currentDist;
             }
         });
@@ -365,14 +566,14 @@
         canvas.addEventListener('mousedown', (e) => {
             isDragging = true;
             dragMoved = false;
-            startX = e.clientX - panX;
-            startY = e.clientY - panY;
+            startX = sub(e.clientX, panX);
+            startY = sub(e.clientY, panY);
         });
         window.addEventListener('mousemove', (e) => {
             if (!isDragging) return;
-            const newPanX = e.clientX - startX;
-            const newPanY = e.clientY - startY;
-            if (Math.hypot(newPanX - panX, newPanY - panY) > 4) {
+            const newPanX = sub(e.clientX, startX);
+            const newPanY = sub(e.clientY, startY);
+            if (Math.hypot(sub(newPanX, panX), sub(newPanY, panY)) > 4) {
                 dragMoved = true;
             }
             panX = newPanX;
@@ -382,39 +583,44 @@
         canvas.addEventListener('wheel', (e) => {
             e.preventDefault();
             const zoomIntensity = 0.12;
-            if (e.deltaY < 0) scale *= (1 + zoomIntensity);
-            else scale /= (1 + zoomIntensity);
+            if (e.deltaY < 0) scale = mul(scale, (1 + zoomIntensity));
+            else scale = scale / (1 + zoomIntensity);
             scale = Math.max(1.0, Math.min(scale, 6.0));
         }, { passive: false });
 
         function calculateDistance(lat1, lon1, lat2, lon2) {
             lat1 = parseFloat(lat1); lon1 = parseFloat(lon1);
             lat2 = parseFloat(lat2); lon2 = parseFloat(lon2);
-            const R = 6371;
-            const dLat = (lat2 - lat1) * Math.PI / 180;
-            const dLon = (lon2 - lon1) * Math.PI / 180;
-            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-                Math.sin(dLon/2) * Math.sin(dLon/2);
-            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            const dLat = mul(sub(lat2, lat1), DEG_TO_RAD);
+            const dLon = mul(sub(lon2, lon1), DEG_TO_RAD);
+            const lat1Rad = mul(lat1, DEG_TO_RAD);
+            const lat2Rad = mul(lat2, DEG_TO_RAD);
+
+            const sinDLat = Math.sin(dLat / 2);
+            const sinDLon = Math.sin(dLon / 2);
+            const a = mul(sinDLat, sinDLat) + mul(mul(Math.cos(lat1Rad), Math.cos(lat2Rad)), mul(sinDLon, sinDLon));
+            const c = mul(2, Math.atan2(Math.sqrt(a), Math.sqrt(sub(1, a))));
+            return mul(6371, c);
         }
 
         function calculateAzimuth(lat1, lon1, lat2, lon2) {
-            const dLon = (lon2 - lon1) * Math.PI / 180;
-            const y = Math.sin(dLon) * Math.cos(lat2 * Math.PI / 180);
-            const x = Math.cos(lat1 * Math.PI / 180) * Math.sin(lat2 * Math.PI / 180) -
-                Math.sin(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.cos(dLon);
-            return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+            const dLon = mul(sub(lon2, lon1), DEG_TO_RAD);
+            const lat1Rad = mul(lat1, DEG_TO_RAD);
+            const lat2Rad = mul(lat2, DEG_TO_RAD);
+
+            const y = mul(Math.sin(dLon), Math.cos(lat2Rad));
+            const x = sub(mul(Math.cos(lat1Rad), Math.sin(lat2Rad)), mul(mul(Math.sin(lat1Rad), Math.cos(lat2Rad)), Math.cos(dLon)));
+            return (mul(Math.atan2(y, x), RAD_TO_DEG) + 360) % 360;
         }
 
         function latLonToRadarXY(lat, lon, cx, cy, radius) {
             const dist = calculateDistance(myLat, myLon, lat, lon);
             const azi = calculateAzimuth(myLat, myLon, lat, lon);
-            const angleRad = (azi - 90) * Math.PI / 180;
-            const distPx = (dist / maxRangeKm) * radius;
+            const angleRad = mul(sub(azi, 90), DEG_TO_RAD);
+            const distPx = mul((dist / maxRangeKm), radius);
             return {
-                x: cx + Math.cos(angleRad) * distPx,
-                y: cy + Math.sin(angleRad) * distPx,
+                x: cx + mul(Math.cos(angleRad), distPx),
+                y: cy + mul(Math.sin(angleRad), distPx),
                 dist: dist
             };
         }
@@ -429,6 +635,16 @@
                 planes.forEach(p => planeMap.set(p.id, p));
 
                 data.forEach(p => {
+                    if (!planeTrails[p.id]) {
+                        planeTrails[p.id] = [];
+                    }
+                    const trail = planeTrails[p.id];
+                    const lastPt = trail.length > 0 ? trail[sub(trail.length, 1)] : null;
+                    if (!lastPt || calculateDistance(lastPt.lat, lastPt.lon, p.lat, p.lon) > 0.4) {
+                        trail.push({ lat: p.lat, lon: p.lon });
+                        if (trail.length > 15) trail.shift();
+                    }
+
                     planeMap.set(p.id, {
                         ...planeMap.get(p.id),
                         ...p,
@@ -439,8 +655,10 @@
 
                 planes = Array.from(planeMap.values()).filter(p => {
                     if (!p.lastSeen) p.lastSeen = now;
-                    return (now - p.lastSeen) < PLANE_KEEP_TIME;
+                    return sub(now, p.lastSeen) < PLANE_KEEP_TIME;
                 });
+
+                updatePinnedBarUI();
 
                 if (selectedPlaneId) {
                     const sel = planes.find(p => p.id === selectedPlaneId);
@@ -448,6 +666,64 @@
                 }
             } catch (e) {
                 console.error("Грешка при API заявка", e);
+            }
+        }
+
+        async function fetchFlightRoute(plane) {
+            if (!plane || !plane.callsign) return;
+            const cleanCs = plane.callsign.replace(' [ВОЕНЕН]', '').trim();
+            const isMil = plane.callsign.includes('[ВОЕНЕН]');
+
+            if (!cleanCs || cleanCs === 'Няма позивна' || cleanCs.toLowerCase() === plane.id.toLowerCase()) {
+                planeRouteCache[plane.id] = isMil ? 'Секретен военен маршрут' : 'Неизвестен маршрут';
+                applyRouteToDOM(plane.id);
+                return;
+            }
+
+            if (planeRouteCache[plane.id] !== undefined) {
+                applyRouteToDOM(plane.id);
+                return;
+            }
+
+            planeRouteCache[plane.id] = 'Търсене на маршрут...';
+            applyRouteToDOM(plane.id);
+
+            try {
+                const res = await fetch('https://api.adsb.lol/api/0/routeset', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        planes: [{ callsign: cleanCs, lat: plane.lat, lng: plane.lon }]
+                    })
+                });
+                const data = await res.json();
+
+                if (Array.isArray(data) && data.length > 0 && data[0]._airports && data[0]._airports.length >= 2) {
+                    const airports = data[0]._airports;
+                    const orig = airports[0];
+                    const dest = airports[sub(airports.length, 1)];
+                    const origCode = orig.iata || orig.icao || '';
+                    const destCode = dest.iata || dest.icao || '';
+                    const origCity = orig.location || orig.name || '';
+                    const destCity = dest.location || dest.name || '';
+
+                    planeRouteCache[plane.id] = `🛫 ${origCode} (${origCity}) ➔ 🛬 ${destCode} (${destCity})`;
+                } else {
+                    planeRouteCache[plane.id] = isMil ? '🔒 Военен / Тактически полет' : 'Маршрутът не е публикуван';
+                }
+            } catch (err) {
+                planeRouteCache[plane.id] = isMil ? '🔒 Военен / Тактически полет' : 'Няма данни за маршрута';
+            }
+
+            if (selectedPlaneId === plane.id) {
+                applyRouteToDOM(plane.id);
+            }
+        }
+
+        function applyRouteToDOM(planeId) {
+            const routeEl = document.getElementById('planeRouteText');
+            if (routeEl && planeRouteCache[planeId]) {
+                routeEl.innerText = planeRouteCache[planeId];
             }
         }
 
@@ -489,7 +765,7 @@
                     return;
                 }
                 ctx.beginPath();
-                ctx.arc(pt.x, pt.y, 2.2 / scale, 0, Math.PI * 2);
+                ctx.arc(pt.x, pt.y, 2.2 / scale, 0, TWO_PI);
                 ctx.fill();
                 ctx.fillText(city.name, pt.x + 4 / scale, pt.y + 3 / scale);
             });
@@ -498,7 +774,7 @@
             if (distToRadishevo > 10) {
                 const rPt = latLonToRadarXY(RADISHEVO_LAT, RADISHEVO_LON, cx, cy, radius);
                 ctx.strokeStyle = '#00ffcc';
-                ctx.strokeRect(rPt.x - 3 / scale, rPt.y - 3 / scale, 6 / scale, 6 / scale);
+                ctx.strokeRect(sub(rPt.x, 3 / scale), sub(rPt.y, 3 / scale), 6 / scale, 6 / scale);
                 ctx.fillStyle = '#00ffcc';
                 ctx.fillText("с.Радишево", rPt.x + 6 / scale, rPt.y + 3 / scale);
             }
@@ -522,33 +798,34 @@
             ctx.lineWidth = 1 / scale;
 
             for (let i = 1; i <= ringsCount; i++) {
-                const r = (ringStep * i / maxRangeKm) * radius;
+                const stepKm = mul(ringStep, i);
+                const r = mul((stepKm / maxRangeKm), radius);
                 ctx.beginPath();
-                ctx.arc(cx, cy, r, 0, Math.PI * 2);
+                ctx.arc(cx, cy, r, 0, TWO_PI);
                 ctx.stroke();
-                ctx.fillText(`${i * ringStep}km`, cx + r - 15 / Math.sqrt(scale), cy - 7 / Math.sqrt(scale));
+                ctx.fillText(`${stepKm}km`, sub(cx + r, 15 / Math.sqrt(scale)), sub(cy, 7 / Math.sqrt(scale)));
             }
 
             ctx.beginPath();
-            ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+            ctx.arc(cx, cy, radius, 0, TWO_PI);
             ctx.strokeStyle = 'rgba(0, 255, 0, 0.65)';
             ctx.stroke();
 
             ctx.strokeStyle = 'rgba(0, 255, 0, 0.12)';
             ctx.beginPath();
-            ctx.moveTo(cx - radius, cy); ctx.lineTo(cx + radius, cy);
-            ctx.moveTo(cx, cy - radius); ctx.lineTo(cx, cy + radius);
+            ctx.moveTo(sub(cx, radius), cy); ctx.lineTo(cx + radius, cy);
+            ctx.moveTo(cx, sub(cy, radius)); ctx.lineTo(cx, cy + radius);
             ctx.stroke();
 
             for (let i = 0; i < 360; i += 10) {
-                const angleRad = (i - 90) * Math.PI / 180;
+                const angleRad = mul(sub(i, 90), DEG_TO_RAD);
                 const isMajor = (i % 30 === 0);
-                const startR = radius - (isMajor ? 6 : 3);
+                const startR = sub(radius, (isMajor ? 6 : 3));
                 const endR = radius + (isMajor ? 6 : 3);
 
                 ctx.beginPath();
-                ctx.moveTo(cx + Math.cos(angleRad) * startR, cy + Math.sin(angleRad) * startR);
-                ctx.lineTo(cx + Math.cos(angleRad) * endR, cy + Math.sin(angleRad) * endR);
+                ctx.moveTo(cx + mul(Math.cos(angleRad), startR), cy + mul(Math.sin(angleRad), startR));
+                ctx.lineTo(cx + mul(Math.cos(angleRad), endR), cy + mul(Math.sin(angleRad), endR));
                 ctx.strokeStyle = isMajor ? 'rgba(0, 255, 0, 0.65)' : 'rgba(0, 255, 0, 0.3)';
                 ctx.stroke();
 
@@ -556,7 +833,7 @@
                     const textR = radius + 15;
                     ctx.fillStyle = '#0f0';
                     ctx.font = `bold ${Math.max(6, 9 / Math.sqrt(scale))}px monospace`;
-                    ctx.fillText(`${i}°`, cx + Math.cos(angleRad) * textR, cy + Math.sin(angleRad) * textR);
+                    ctx.fillText(`${i}°`, cx + mul(Math.cos(angleRad), textR), cy + mul(Math.sin(angleRad), textR));
                 }
             }
         }
@@ -567,8 +844,8 @@
             ctx.fillRect(0, 0, screenWidth, screenHeight);
 
             const cx = screenWidth / 2;
-            const cy = screenHeight * 0.46; // Качено леко нагоре, за да има място за панела долу!
-            const radius = Math.min(screenWidth * 0.44, screenHeight * 0.33);
+            const cy = mul(screenHeight, 0.48);
+            const radius = Math.min(mul(screenWidth, 0.44), mul(screenHeight, 0.32));
 
             const now = Date.now();
 
@@ -580,14 +857,14 @@
             drawBulgariaMap(cx, cy, radius);
             drawRadarGrid(cx, cy, radius);
 
-            const pulseRadius = (4 + (Math.sin(now / 250) + 1) * 4) / scale;
+            const pulseRadius = (4 + mul((Math.sin(now / 250) + 1), 4)) / scale;
             ctx.beginPath();
-            ctx.arc(cx, cy, pulseRadius, 0, Math.PI * 2);
+            ctx.arc(cx, cy, pulseRadius, 0, TWO_PI);
             ctx.fillStyle = isRealGps ? 'rgba(0, 255, 255, 0.25)' : 'rgba(0, 255, 0, 0.25)';
             ctx.fill();
 
             ctx.beginPath();
-            ctx.arc(cx, cy, 3.5 / scale, 0, Math.PI * 2);
+            ctx.arc(cx, cy, 3.5 / scale, 0, TWO_PI);
             ctx.fillStyle = isRealGps ? '#00ffff' : '#00ff00';
             ctx.fill();
             ctx.strokeStyle = '#ffffff';
@@ -600,18 +877,22 @@
             ctx.fillStyle = isRealGps ? '#00ffff' : '#00ff66';
             ctx.font = `bold ${Math.max(6, 9 / Math.sqrt(scale))}px monospace`;
             ctx.textAlign = 'left';
-            ctx.fillText(centerLabel, cx + 6 / scale, cy - 5 / scale);
+            ctx.fillText(centerLabel, cx + 6 / scale, sub(cy, 5 / scale));
 
             let visibleCount = 0;
 
             const sortedPlanes = [...planes].sort((a, b) => {
-                const aSel = (a.id === selectedPlaneId) ? 2 : 0;
-                const bSel = (b.id === selectedPlaneId) ? 2 : 0;
-                if (aSel !== bSel) return aSel - bSel;
+                const aSel = (a.id === selectedPlaneId) ? 3 : 0;
+                const bSel = (b.id === selectedPlaneId) ? 3 : 0;
+                if (aSel !== bSel) return sub(aSel, bSel);
+
+                const aPin = getPinSlotForPlane(a.id) ? 2 : 0;
+                const bPin = getPinSlotForPlane(b.id) ? 2 : 0;
+                if (aPin !== bPin) return sub(aPin, bPin);
 
                 const aMil = (a.callsign && a.callsign.includes('[ВОЕНЕН]')) ? 1 : 0;
                 const bMil = (b.callsign && b.callsign.includes('[ВОЕНЕН]')) ? 1 : 0;
-                return aMil - bMil;
+                return sub(aMil, bMil);
             });
 
             const iconScale = 1 / Math.pow(scale, 0.65);
@@ -621,7 +902,7 @@
                 let currentLon = plane.lon;
 
                 if (plane.lastUpdate && plane.speed > 0) {
-                    const deltaSec = (now - plane.lastUpdate) / 1000;
+                    const deltaSec = sub(now, plane.lastUpdate) / 1000;
                     if (deltaSec > 0 && deltaSec < 30) {
                         const newPos = extrapolatePosition(plane.lat, plane.lon, plane.speed, plane.track || 0, deltaSec);
                         currentLat = newPos.lat;
@@ -636,27 +917,67 @@
 
                 const isMilitary = plane.callsign && plane.callsign.includes('[ВОЕНЕН]');
                 const isSelected = (plane.id === selectedPlaneId);
+                const pinSlot = getPinSlotForPlane(plane.id);
+                const sqkAlert = analyzeSquawkCode(plane.squawk, isMilitary);
 
                 visibleCount++;
 
-                const angleRad = (plane.azi - 90) * Math.PI / 180;
-                const distPx = (plane.dist / maxRangeKm) * radius;
-                const px = cx + Math.cos(angleRad) * distPx;
-                const py = cy + Math.sin(angleRad) * distPx;
+                const angleRad = mul(sub(plane.azi, 90), DEG_TO_RAD);
+                const distPx = mul((plane.dist / maxRangeKm), radius);
+                const px = cx + mul(Math.cos(angleRad), distPx);
+                const py = cy + mul(Math.sin(angleRad), distPx);
 
                 plane.renderX = px;
                 plane.renderY = py;
 
-                const isDimmed = highlightMilitaryOnly && !isMilitary && !isSelected;
+                const isDimmed = highlightMilitaryOnly && !isMilitary && !isSelected && !pinSlot;
+
+                if ((isSelected || pinSlot) && planeTrails[plane.id] && planeTrails[plane.id].length > 1) {
+                    ctx.save();
+                    ctx.beginPath();
+                    planeTrails[plane.id].forEach((pt, idx) => {
+                        const tXY = latLonToRadarXY(pt.lat, pt.lon, cx, cy, radius);
+                        if (idx === 0) ctx.moveTo(tXY.x, tXY.y);
+                        else ctx.lineTo(tXY.x, tXY.y);
+                    });
+                    ctx.lineTo(px, py);
+                    ctx.strokeStyle = pinSlot ? 'rgba(255, 0, 255, 0.7)' : 'rgba(0, 255, 255, 0.7)';
+                    ctx.lineWidth = 1.5 / scale;
+                    ctx.stroke();
+                    ctx.restore();
+                }
 
                 ctx.save();
                 ctx.translate(px, py);
 
+                if (sqkAlert && sqkAlert.level === 'emergency') {
+                    const alertR = mul((10 + mul((Math.sin(now / 150) + 1), 6)), iconScale);
+                    ctx.beginPath();
+                    ctx.arc(0, 0, alertR, 0, TWO_PI);
+                    ctx.strokeStyle = '#ff0000';
+                    ctx.lineWidth = 2 / scale;
+                    ctx.stroke();
+                }
+
+                if (pinSlot) {
+                    const dSize = mul(13, iconScale);
+                    ctx.beginPath();
+                    ctx.moveTo(0, -dSize);
+                    ctx.lineTo(dSize, 0);
+                    ctx.lineTo(0, dSize);
+                    ctx.lineTo(-dSize, 0);
+                    ctx.closePath();
+                    ctx.strokeStyle = '#ff00ff';
+                    ctx.lineWidth = 1.8 / scale;
+                    ctx.stroke();
+                }
+
                 if (isSelected) {
-                    const boxSize = 12 * iconScale;
+                    const boxSize = mul(12, iconScale);
+                    const doubleBox = mul(boxSize, 2);
                     ctx.strokeStyle = '#00ffff';
                     ctx.lineWidth = 1.6 / scale;
-                    ctx.strokeRect(-boxSize, -boxSize, boxSize * 2, boxSize * 2);
+                    ctx.strokeRect(-boxSize, -boxSize, doubleBox, doubleBox);
 
                     ctx.restore();
                     ctx.save();
@@ -674,10 +995,12 @@
                 }
 
                 ctx.scale(iconScale, iconScale);
-                ctx.rotate((plane.track || 0) * Math.PI / 180);
+                ctx.rotate(mul((plane.track || 0), DEG_TO_RAD));
 
                 if (isDimmed) {
                     ctx.fillStyle = 'rgba(255, 204, 0, 0.18)';
+                } else if (pinSlot && !isMilitary) {
+                    ctx.fillStyle = '#ff66ff';
                 } else {
                     ctx.fillStyle = isMilitary ? '#ff2222' : '#ffcc00';
                 }
@@ -697,28 +1020,37 @@
                 ctx.closePath();
                 ctx.fill();
 
-                ctx.rotate(-(plane.track || 0) * Math.PI / 180);
+                ctx.rotate(mul(-(plane.track || 0), DEG_TO_RAD));
 
                 if (!isDimmed) {
-                    ctx.fillStyle = isMilitary ? '#ff4444' : 'rgba(255, 215, 0, 0.9)';
-                    ctx.font = isMilitary ? 'bold 9.5px monospace' : 'bold 8.5px monospace';
+                    ctx.fillStyle = pinSlot ? '#ff77ff' : (isMilitary ? '#ff4444' : 'rgba(255, 215, 0, 0.9)');
+                    ctx.font = (isMilitary || pinSlot) ? 'bold 9.5px monospace' : 'bold 8.5px monospace';
                     ctx.textAlign = 'left';
-                    ctx.fillText(plane.callsign, 10, -3);
+
+                    const pinPrefix = pinSlot ? `[#${pinSlot}] ` : '';
+                    const hasSquawk = plane.squawk && plane.squawk !== '----';
+                    const milSuffix = isMilitary ? ' [ВОЕНЕН]' : '';
+                    const alertSuffix = (sqkAlert && sqkAlert.level === 'emergency') ? ` ⚠️${sqkAlert.short}` : '';
+
+                    const baseCode = hasSquawk ? `${plane.squawk}${milSuffix}` : plane.callsign;
+                    const radarLabel = `${pinPrefix}${baseCode}${alertSuffix}`;
+
+                    ctx.fillText(radarLabel, 10, -3);
                 }
 
                 ctx.restore();
             });
 
             sweepAngle = (sweepAngle + 0.45) % 360;
-            const sweepRad = (sweepAngle - 90) * Math.PI / 180;
+            const sweepRad = mul(sub(sweepAngle, 90), DEG_TO_RAD);
 
-            const gradient = ctx.createLinearGradient(cx, cy, cx + Math.cos(sweepRad) * radius, cy + Math.sin(sweepRad) * radius);
+            const gradient = ctx.createLinearGradient(cx, cy, cx + mul(Math.cos(sweepRad), radius), cy + mul(Math.sin(sweepRad), radius));
             gradient.addColorStop(0, "rgba(0, 255, 0, 0.85)");
             gradient.addColorStop(1, "rgba(0, 255, 0, 0.05)");
 
             ctx.beginPath();
             ctx.moveTo(cx, cy);
-            ctx.lineTo(cx + Math.cos(sweepRad) * radius, cy + Math.sin(sweepRad) * radius);
+            ctx.lineTo(cx + mul(Math.cos(sweepRad), radius), cy + mul(Math.sin(sweepRad), radius));
             ctx.strokeStyle = gradient;
             ctx.lineWidth = 2 / scale;
             ctx.stroke();
@@ -786,7 +1118,7 @@
             const showSvg = cachedPhoto ? 'display:none;' : 'display:block;';
 
             const planeSvg = `
-                <svg id="fallbackPlaneSvg" viewBox="0 0 64 64" width="46" height="46" style="${showSvg} transform: rotate(${trackDeg}deg); filter: drop-shadow(0 0 4px ${color});">
+                <svg id="fallbackPlaneSvg" viewBox="0 0 64 64" width="42" height="42" style="${showSvg} transform: rotate(${trackDeg}deg); filter: drop-shadow(0 0 4px ${color});">
                     <path fill="${color}" d="M32 4 L36 18 L58 30 L58 35 L36 31 L35 48 L45 55 L45 59 L32 56 L19 59 L19 55 L29 48 L28 31 L6 35 L6 30 L28 18 Z"/>
                 </svg>
             `;
@@ -794,6 +1126,16 @@
             const cycleButtonHtml = overlappingCluster.length > 1
                 ? `<button class="action-btn cycle-btn" onclick="cycleNextTarget()">СЛЕДВАЩ (${clusterIndex + 1}/${overlappingCluster.length}) ➔</button>`
                 : '';
+
+            const sqkStatus = analyzeSquawkCode(p.squawk, isMilitary);
+            let squawkAlertHtml = '';
+            if (sqkStatus && (sqkStatus.level === 'emergency' || sqkStatus.level === 'tactical')) {
+                const cls = sqkStatus.level === 'emergency' ? 'squawk-emergency' : 'squawk-tactical';
+                squawkAlertHtml = `<div class="squawk-alert-box ${cls}">${sqkStatus.desc}</div>`;
+            }
+
+            const currentRoute = planeRouteCache[p.id] || 'Търсене на маршрут...';
+            const currentPinSlot = getPinSlotForPlane(p.id);
 
             panel.innerHTML = `
                 <div class="panel-top-actions">
@@ -806,11 +1148,23 @@
                         ${planeSvg}
                     </div>
                     <div>
-                        <div style="font-size: 10px; color: ${color}; letter-spacing: 1px; font-weight: bold;">● ${badgeText}</div>
-                        <div style="font-weight: bold; font-size: 16px; color: #fff; margin: 2px 0;">✈ ${p.callsign}</div>
-                        <div style="font-size: 11px; color: #88ff88;">${p.operator || 'Неизвестен оператор'}</div>
+                        <div style="font-size: 9.5px; color: ${color}; letter-spacing: 1px; font-weight: bold;">● ${badgeText}</div>
+                        <div style="font-weight: bold; font-size: 14px; color: #fff; margin: 2px 0;">
+                            📡 SQK: <span style="color:#00ffff;">${p.squawk || '----'}</span> &nbsp;|&nbsp; ✈ ${p.callsign}
+                        </div>
+                        <div style="font-size: 10.5px; color: #00ffcc; font-weight: bold;">
+                            HEX транспондер: ${p.id.toUpperCase()}
+                        </div>
+                        <div style="font-size: 10px; color: #88ff88;">${p.operator || 'Неизвестен оператор'}</div>
                     </div>
                 </div>
+
+                ${squawkAlertHtml}
+
+                <div class="route-banner">
+                    <span id="planeRouteText">${currentRoute}</span>
+                </div>
+
                 <div class="info-grid">
                     <div class="info-item">
                         <span class="info-label">Азимут / Разстояние</span>
@@ -829,10 +1183,22 @@
                         <span class="info-val">${p.speed || 0} км/ч</span>
                     </div>
                 </div>
+
+                <div class="mark-targets-row">
+                    <button class="mark-btn ${currentPinSlot === 1 ? 'active' : ''}" onclick="togglePinSlot(1, '${p.id}')">🎯 ${currentPinSlot === 1 ? '#1 МАРК' : 'МАРК 1'}</button>
+                    <button class="mark-btn ${currentPinSlot === 2 ? 'active' : ''}" onclick="togglePinSlot(2, '${p.id}')">🎯 ${currentPinSlot === 2 ? '#2 МАРК' : 'МАРК 2'}</button>
+                    <button class="mark-btn ${currentPinSlot === 3 ? 'active' : ''}" onclick="togglePinSlot(3, '${p.id}')">🎯 ${currentPinSlot === 3 ? '#3 МАРК' : 'МАРК 3'}</button>
+                    <button class="mark-btn ${currentPinSlot === 4 ? 'active' : ''}" onclick="togglePinSlot(4, '${p.id}')">🎯 ${currentPinSlot === 4 ? '#4 МАРК' : 'МАРК 4'}</button>
+                    <button class="mark-btn ${currentPinSlot === 5 ? 'active' : ''}" onclick="togglePinSlot(5, '${p.id}')">🎯 ${currentPinSlot === 5 ? '#5 МАРК' : 'МАРК 5'}</button>
+                    <button class="mark-btn ${currentPinSlot === 6 ? 'active' : ''}" onclick="togglePinSlot(6, '${p.id}')">🎯 ${currentPinSlot === 6 ? '#6 МАРК' : 'МАРК 6'}</button>
+                </div>
             `;
 
             if (cachedPhoto === undefined) {
                 fetchRealPlanePhoto(p.id);
+            }
+            if (planeRouteCache[p.id] === undefined) {
+                fetchFlightRoute(p);
             }
         }
 
@@ -847,10 +1213,10 @@
 
             const rect = canvas.getBoundingClientRect();
             const cx = screenWidth / 2;
-            const cy = screenHeight * 0.46;
+            const cy = mul(screenHeight, 0.48);
 
-            const clickX = (e.clientX - rect.left - cx - panX) / scale + cx;
-            const clickY = (e.clientY - rect.top - cy - panY) / scale + cy;
+            const clickX = sub(sub(sub(e.clientX, rect.left), cx), panX) / scale + cx;
+            const clickY = sub(sub(sub(e.clientY, rect.top), cy), panY) / scale + cy;
 
             const hitRadius = 26 / scale;
             let candidates = [];
@@ -858,9 +1224,10 @@
             for (let p of planes) {
                 if (p.dist > maxRangeKm || !p.renderX || !p.renderY) continue;
                 const isMilitary = p.callsign && p.callsign.includes('[ВОЕНЕН]');
-                if (highlightMilitaryOnly && !isMilitary) continue;
+                const isPinned = getPinSlotForPlane(p.id) !== null;
+                if (highlightMilitaryOnly && !isMilitary && !isPinned) continue;
 
-                const d = Math.hypot(p.renderX - clickX, p.renderY - clickY);
+                const d = Math.hypot(sub(p.renderX, clickX), sub(p.renderY, clickY));
                 if (d < hitRadius) {
                     candidates.push({ plane: p, clickDist: d, isMil: isMilitary ? 1 : 0 });
                 }
@@ -868,8 +1235,8 @@
 
             if (candidates.length > 0) {
                 candidates.sort((a, b) => {
-                    if (b.isMil !== a.isMil) return b.isMil - a.isMil;
-                    return a.clickDist - b.clickDist;
+                    if (b.isMil !== a.isMil) return sub(b.isMil, a.isMil);
+                    return sub(a.clickDist, b.clickDist);
                 });
 
                 const newCluster = candidates.map(c => c.plane);
@@ -895,18 +1262,18 @@
 
         function extrapolatePosition(lat, lon, speedKmH, trackDeg, timeDeltaSeconds) {
             if (!speedKmH || speedKmH <= 0) return { lat, lon };
-            const distanceKm = (speedKmH * timeDeltaSeconds) / 3600;
+            const distanceKm = mul(speedKmH, timeDeltaSeconds) / 3600;
             const R = 6371;
-            const brng = trackDeg * Math.PI / 180;
-            const lat1 = lat * Math.PI / 180;
-            const lon1 = lon * Math.PI / 180;
+            const brng = mul(trackDeg, DEG_TO_RAD);
+            const lat1 = mul(lat, DEG_TO_RAD);
+            const lon1 = mul(lon, DEG_TO_RAD);
 
-            const lat2 = Math.asin(Math.sin(lat1) * Math.cos(distanceKm / R) + Math.cos(lat1) * Math.sin(distanceKm / R) * Math.cos(brng));
-            const lon2 = lon1 + Math.atan2(Math.sin(brng) * Math.sin(distanceKm / R) * Math.cos(lat1), Math.cos(distanceKm / R) - Math.sin(lat1) * Math.sin(lat2));
+            const lat2 = Math.asin(mul(Math.sin(lat1), Math.cos(distanceKm / R)) + mul(mul(Math.cos(lat1), Math.sin(distanceKm / R)), Math.cos(brng)));
+            const lon2 = lon1 + Math.atan2(mul(mul(Math.sin(brng), Math.sin(distanceKm / R)), Math.cos(lat1)), sub(Math.cos(distanceKm / R), mul(Math.sin(lat1), Math.sin(lat2))));
 
             return {
-                lat: lat2 * 180 / Math.PI,
-                lon: lon2 * 180 / Math.PI
+                lat: mul(lat2, RAD_TO_DEG),
+                lon: mul(lon2, RAD_TO_DEG)
             };
         }
 
@@ -954,6 +1321,7 @@
             applyNewGpsCoordinates(lat, lon);
         };
 
+        updatePinnedBarUI();
         fetchPlanes();
         setInterval(fetchPlanes, 10000);
         requestAnimationFrame(draw);

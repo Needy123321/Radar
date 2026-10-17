@@ -12,6 +12,7 @@ use Throwable;
 
 class RadarController extends AbstractController
 {
+    #[Route('/', name: 'app_home')]
     #[Route('/radar', name: 'app_radar')]
     public function index(): Response
     {
@@ -21,15 +22,14 @@ class RadarController extends AbstractController
     #[Route('/api/planes', name: 'api_planes')]
     public function getPlanes(Request $request, HttpClientInterface $httpClient): JsonResponse
     {
-        // Дефолтни координати: с. Радишево
         // Точни координати на базата в с. Радишево
-// Точни координати на базата в с. Радишево
         $lat = (float) $request->query->get('lat', 43.36763806288808);
         $lon = (float) $request->query->get('lon', 24.66672222828328);
-        // Числови граници за региона (~400-450 км около теб - Балканите и Черно море)
-        $minLat = $lat - 3.8;
+
+        // Числови граници за региона (~420 км около теб - Балканите и Черно море)
+        $minLat = $lat + (-3.8);
         $maxLat = $lat + 3.8;
-        $minLon = $lon - 4.8;
+        $minLon = $lon + (-4.8);
         $maxLon = $lon + 4.8;
 
         $lamin = number_format($minLat, 4, '.', '');
@@ -42,16 +42,16 @@ class RadarController extends AbstractController
 
         $allPlanes = [];
 
-        // ПЪЛЕН СПИСЪК: 8 потока (Всички цивилни + Всички съществуващи военни агрегатори)
+        // 8 потока: Всички цивилни + Всички съществуващи военни агрегатори
         $urls = [
-            'OpenSky'          => "https://opensky-network.org/api/states/all?lamin={$lamin}&lomin={$lomin}&lamax={$lamax}&lomax={$lomax}",
-            'ADSB.lol'         => "https://api.adsb.lol/v2/lat/{$latStr}/lon/{$lonStr}/dist/350",
-            'Airplanes-Local'  => "https://api.airplanes.live/v2/point/{$latStr}/{$lonStr}/350",
-            'ADSB.lol-MIL'     => 'https://api.adsb.lol/v2/mil',
-            'Airplanes-MIL'    => 'https://api.airplanes.live/v2/mil',
-            'ADSB.fi-MIL'      => 'https://opendata.adsb.fi/api/v2/mil',
-            'TheAirTraffic-MIL'=> 'https://api.theairtraffic.com/v2/mil',
-            'IntelSky'         => 'https://intelsky.org/api/',
+            'OpenSky'           => "https://opensky-network.org/api/states/all?lamin={$lamin}&lomin={$lomin}&lamax={$lamax}&lomax={$lomax}",
+            'ADSB.lol'          => "https://api.adsb.lol/v2/lat/{$latStr}/lon/{$lonStr}/dist/350",
+            'Airplanes-Local'   => "https://api.airplanes.live/v2/point/{$latStr}/{$lonStr}/350",
+            'ADSB.lol-MIL'      => 'https://api.adsb.lol/v2/mil',
+            'Airplanes-MIL'     => 'https://api.airplanes.live/v2/mil',
+            'ADSB.fi-MIL'       => 'https://opendata.adsb.fi/api/v2/mil',
+            'TheAirTraffic-MIL' => 'https://api.theairtraffic.com/v2/mil',
+            'IntelSky'          => 'https://intelsky.org/api/',
         ];
 
         $responses = [];
@@ -80,13 +80,17 @@ class RadarController extends AbstractController
                             $isMil = $this->isKnownMilitary($icao, $rawCallsign, '', '', $squawk);
                             $callsign = ($rawCallsign ?: strtoupper($icao)) . ($isMil ? ' [ВОЕНЕН]' : '');
 
+                            $speedMs = (float) ($state[9] ?? 0);
+                            $speedKmh = round($speedMs / 0.277778);
+
                             $allPlanes[$icao] = [
                                 'id'       => $icao,
+                                'squawk'   => $squawk ?: '----',
                                 'callsign' => $callsign,
                                 'lat'      => (float) $state[6],
                                 'lon'      => (float) $state[5],
                                 'altitude' => round((float) ($state[7] ?? 0)),
-                                'speed'    => round(((float) ($state[9] ?? 0)) * 3.6),
+                                'speed'    => $speedKmh,
                                 'track'    => (float) ($state[10] ?? 0),
                                 'source'   => 'OpenSky',
                                 'type'     => $isMil ? 'Военен обект' : 'Неизвестен',
@@ -144,10 +148,6 @@ class RadarController extends AbstractController
                     $squawk = trim((string)($ac['squawk'] ?? ''));
                     $dbFlags = (int) ($ac['dbFlags'] ?? 0);
 
-                    // Пълна проверка за ВОЕНЕН обект:
-                    // 1. Идва от специализиран /mil ендпойнт
-                    // 2. Има dbFlags bit 1 (Military) или bit 4/8 (PIA/LADD при военен тип)
-                    // 3. Засечен от нашия дълбок НАТО/ВВС скенер (ICAO hex, Callsign, Type, Squawk)
                     $isMilEndpoint = str_contains($src, 'MIL') || $src === 'IntelSky';
                     $isFlaggedMil = ($dbFlags & 1) === 1;
                     $isHeuristicMil = $this->isKnownMilitary($icao, $rawCallsign, $operator, $typeCode, $squawk);
@@ -160,14 +160,20 @@ class RadarController extends AbstractController
                     }
 
                     $altRaw = $ac['alt_baro'] ?? $ac['alt_geom'] ?? 0;
-                    $altitude = is_numeric($altRaw) ? round(((float) $altRaw) * 0.3048) : 0;
+                    $altitude = is_numeric($altRaw) ? round(((float) $altRaw) / 3.28084) : 0;
+
+                    $gsKnots = (float) ($ac['gs'] ?? 0);
+                    $speedKmh = round($gsKnots / 0.539957);
 
                     if (isset($allPlanes[$icao])) {
-                        // Обновяваме с по-пресни координати и добавяме източника
                         $allPlanes[$icao]['lat'] = $acLat;
                         $allPlanes[$icao]['lon'] = $acLon;
-                        if ($altitude > 0) $allPlanes[$icao]['altitude'] = $altitude;
-
+                        if ($altitude > 0) {
+                            $allPlanes[$icao]['altitude'] = $altitude;
+                        }
+                        if (($allPlanes[$icao]['squawk'] ?? '----') === '----' && $squawk !== '') {
+                            $allPlanes[$icao]['squawk'] = $squawk;
+                        }
                         if (!str_contains($allPlanes[$icao]['source'], $src)) {
                             $allPlanes[$icao]['source'] .= ', ' . $src;
                         }
@@ -183,11 +189,12 @@ class RadarController extends AbstractController
                     } else {
                         $allPlanes[$icao] = [
                             'id'       => $icao,
+                            'squawk'   => $squawk ?: '----',
                             'callsign' => $cleanCallsign,
                             'lat'      => $acLat,
                             'lon'      => $acLon,
                             'altitude' => $altitude,
-                            'speed'    => round(((float) ($ac['gs'] ?? 0)) * 1.852),
+                            'speed'    => $speedKmh,
                             'track'    => (float) ($ac['track'] ?? 0),
                             'source'   => $src,
                             'type'     => $typeDesc ?: ($isMilitary ? 'Военен обект' : 'Неизвестен'),
@@ -201,9 +208,6 @@ class RadarController extends AbstractController
         return new JsonResponse(array_values($allPlanes));
     }
 
-    /**
-     * Дълбок скенер за разпознаване на военна авиация (НАТО, ВВС, Дронове, Танкери и Хеликоптери)
-     */
     private function isKnownMilitary(string $icao, string $callsign, string $operator, string $typeCode, string $squawk = ''): bool
     {
         $hex = strtolower(trim($icao));
@@ -211,18 +215,18 @@ class RadarController extends AbstractController
         $op  = strtoupper(trim($operator));
         $tp  = strtoupper(trim($typeCode));
 
-        // 1. Военни ICAO Hex блокове (Транспондерни кодове, запазени за ВВС и НАТО)
+        // 1. Военни ICAO Hex блокове
         $milHexPrefixes = [
-            '45f4', // България - ВВС (Spartan, Cougar, PC-9, L-39, MiG-29)
-            'adf', 'ae', 'af', // САЩ - US Air Force / US Navy / US Army (вкл. Global Hawk, RC-135, KC-135, C-17)
-            '43c',  // Великобритания - Royal Air Force (RAF Typhoon, RC-135, A400M)
-            '3b',   // Франция - French Air Force
-            '3f',   // Германия - Luftwaffe
-            '4d03', // НАТО AWACS (Люксембург военна регистрация - E-3A Sentry)
-            '4781', // Норвегия - ВВС
-            '480',  // Нидерландия - ВВС
-            '33f',  // Италия - ВВС
-            '4b82', // Турция - ВВС
+            '45f4', // България ВВС
+            'adf', 'ae', 'af', // САЩ ВВС / ВМС / Армия
+            '43c',  // Великобритания RAF
+            '3b',   // Франция ВВС
+            '3f',   // Германия Luftwaffe
+            '4d03', // НАТО AWACS
+            '4781', // Норвегия ВВС
+            '480',  // Нидерландия ВВС
+            '33f',  // Италия ВВС
+            '4b82', // Турция ВВС
         ];
         foreach ($milHexPrefixes as $hPrefix) {
             if (str_starts_with($hex, $hPrefix)) {
@@ -230,33 +234,15 @@ class RadarController extends AbstractController
             }
         }
 
-        // 2. Разширен списък с военни позивни (Callsigns) в Югоизточна Европа и Черно море
+        // 2. Военни позивни (Callsigns)
         $milPrefixes = [
-            'BAF', 'BULAF', // България ВВС
-            'ROF',          // Румъния ВВС
-            'RCH', 'REACH', // US Air Mobility Command
-            'NATO', 'MAGIC',// NATO AWACS
-            'FORTE',        // RQ-4 Global Hawk (Черно море)
-            'LAGR', 'NCHO', 'QUID', 'PACK', 'GOLD', 'CLEAN', // US KC-135 / KC-46 Танкери
-            'HOMER', 'JAKE', 'OLIVE', 'COBRA', 'SNUCK',      // RC-135 Разузнавателни
-            'DUKE', 'YANK', 'ARTEMIS', 'BRIO',               // US Army Разузнаване (Констанца/Черно море)
+            'BAF', 'BULAF', 'ROF', 'RCH', 'REACH', 'NATO', 'MAGIC', 'FORTE',
+            'LAGR', 'NCHO', 'QUID', 'PACK', 'GOLD', 'CLEAN', 'HOMER', 'JAKE',
+            'OLIVE', 'COBRA', 'SNUCK', 'DUKE', 'YANK', 'ARTEMIS', 'BRIO',
             'VIPER', 'VENOM', 'HAWK', 'FALCON', 'EAGLE', 'TIGER', 'WOLF', 'JEDI', 'REAPER',
-            'RRR', 'ASCOT', 'TARTAN', 'LOSSIE', 'psycho',    // UK RAF
-            'IAM',          // Италия ВВС
-            'GAF',          // Германия ВВС
-            'FAF', 'CTM', 'FNY', // Франция ВВС / ВМС
-            'PLF',          // Полша ВВС
-            'HUF', 'BART',  // Унгария ВВС / SAC C-17 (Pápa)
-            'TUAF', 'HVK', 'TCB', // Турция ВВС / ВМС
-            'HAF',          // Гърция ВВС
-            'HRZ',          // Хърватия ВВС
-            'SVK', 'SQF',   // Словакия ВВС
-            'CEF',          // Чехия ВВС
-            'SUI',          // Швейцария ВВС
-            'MMF',          // Multinational MRTT Fleet (NATO A330 танкери)
-            'CNV', 'VV',    // US Navy
-            'PAT', 'ARMY',  // US Army
-            'EVAC', 'MEDEVAC', 'RESCUE', 'SAR',
+            'RRR', 'ASCOT', 'TARTAN', 'LOSSIE', 'IAM', 'GAF', 'FAF', 'CTM', 'FNY',
+            'PLF', 'HUF', 'BART', 'TUAF', 'HVK', 'TCB', 'HAF', 'HRZ', 'SVK', 'SQF',
+            'CEF', 'SUI', 'MMF', 'CNV', 'VV', 'PAT', 'ARMY', 'EVAC', 'MEDEVAC', 'RESCUE', 'SAR'
         ];
         foreach ($milPrefixes as $prefix) {
             if ($cs !== '' && str_starts_with($cs, $prefix)) {
@@ -264,7 +250,7 @@ class RadarController extends AbstractController
             }
         }
 
-        // 3. Ключови думи в името на оператора
+        // 3. Ключови думи в оператора
         $milKeywords = [
             'AIR FORCE', 'MILITARY', 'NAVY', 'ARMY', 'NATO', 'DEFENCE', 'DEFENSE',
             'ВВС', 'MARINE', 'GUARD', 'SQUADRON', 'LUFTWAFFE', 'ARMÉE', 'AERONAUTICA',
@@ -276,19 +262,14 @@ class RadarController extends AbstractController
             }
         }
 
-        // 4. Военни модели самолети, хеликоптери, танкери и дронове (ICAO Type Designators)
+        // 4. Военни модели самолети, хеликоптери и дронове
         $milTypes = [
-            // Транспортни и Танкери
             'C27J', 'C130', 'C30J', 'C17', 'C5M', 'A400', 'AN12', 'AN26', 'AN32', 'IL76',
             'K35R', 'K35E', 'KC46', 'A332', 'CN35', 'C295', 'L410', 'C12', 'BE20', 'P180',
-            // Изтребители и Учебни
             'F16', 'F35', 'F15', 'F18', 'FA18', 'EUFI', 'RFAL', 'TORN', 'JAS39', 'SB39',
             'MIG21', 'MG29', 'SU24', 'SU25', 'SU27', 'SU30', 'L39', 'PC9', 'PC21', 'T6', 'M346',
-            // Разузнавателни, AWACS и Патрулни
             'E3TF', 'E3CF', 'E737', 'R135', 'E8', 'E6', 'P8', 'P3', 'CL60', 'GLF5', 'GLEX',
-            // Дронове (UAV)
             'Q4', 'RQ4', 'MQ9', 'Q9', 'TB2', 'HERON',
-            // Военни Хеликоптери
             'AS32', 'AS52', 'EC25', 'H215', 'UH60', 'S70', 'AH64', 'CH47', 'H47',
             'MI8', 'MI17', 'MI24', 'MI35', 'BELL', 'B206', 'NH90', 'AW139', 'AW149', 'KA27', 'KA52', 'V22'
         ];
@@ -296,7 +277,7 @@ class RadarController extends AbstractController
             return true;
         }
 
-        // 5. Военни Squawk кодове в НАТО (често използвани за военни мисии и въздушно патрулиране)
+        // 5. Военни Squawk кодове
         if ($squawk !== '') {
             if (str_starts_with($squawk, '44') || str_starts_with($squawk, '74') || $squawk === '7777') {
                 return true;
