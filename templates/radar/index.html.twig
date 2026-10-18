@@ -312,7 +312,7 @@
         </div>
         <div class="scale-controls">
             <button onclick="toggleMilitaryOnly()" id="btn-mil">★ ВОЕННИ</button>
-            <button onclick="toggleGyroCompass()" id="btn-gyro">🧭 ЖИРО СЕВЕР</button>
+            <button onclick="toggleGyroCompass()" id="btn-gyro">🧭 АВТО СЕВЕР</button>
             <div class="scale-group">
                 <button onclick="setScale(50)" id="btn-50">50</button>
                 <button onclick="setScale(100)" id="btn-100">100</button>
@@ -355,65 +355,67 @@
         let sweepAngle = 0;
         let maxRangeKm = 350;
 
-        // Осеверяване чрез Жироскоп: когато го натиснеш, приема текущата ти посока за Север (0°)!
+        // АВТОМАТИЧНО ОСЕВЕРЯВАНЕ (Истински Север = Магнитен Север + 5.5° за България)
         let gyroEnabled = false;
-        let rawSensorHeading = 0.0;
-        let gyroNorthReference = null; // Запазва посоката, в която си гледал при натискане на бутона
+        let trueNorthHeading = 0.0;
         let smoothedHeadingDeg = 0.0;
+        const BG_MAGNETIC_DECLINATION = 5.5;
 
         window.toggleGyroCompass = function() {
             gyroEnabled = !gyroEnabled;
             const btn = document.getElementById('btn-gyro');
             if (gyroEnabled) {
-                // Заключваме текущата посока на телефона като 0° Север!
-                gyroNorthReference = rawSensorHeading;
-                smoothedHeadingDeg = 0.0;
+                smoothedHeadingDeg = trueNorthHeading;
                 if (btn) {
                     btn.classList.add('active');
-                    btn.innerText = '🧭 СЕВЕР: 0°';
+                    btn.innerText = `🧭 СЕВЕР: ${Math.round(smoothedHeadingDeg)}°`;
                 }
             } else {
-                gyroNorthReference = null;
                 smoothedHeadingDeg = 0.0;
                 if (btn) {
                     btn.classList.remove('active');
-                    btn.innerText = '🧭 ЖИРО СЕВЕР';
+                    btn.innerText = '🧭 АВТО СЕВЕР';
                 }
             }
         };
 
-        function handleOrientation(e) {
+        function applyCompassHeading(magHeadingDeg) {
+            if (magHeadingDeg === null || isNaN(magHeadingDeg)) return;
+
+            trueNorthHeading = (magHeadingDeg + BG_MAGNETIC_DECLINATION + 360) % 360;
+
+            if (!gyroEnabled) return;
+
+            let diff = sub(trueNorthHeading, smoothedHeadingDeg);
+            if (diff > 180) diff = sub(diff, 360);
+            if (diff < -180) diff = diff + 360;
+            smoothedHeadingDeg = (smoothedHeadingDeg + mul(diff, 0.25) + 360) % 360;
+
+            const btn = document.getElementById('btn-gyro');
+            if (btn && gyroEnabled) {
+                btn.innerText = `🧭 СЕВЕР: ${Math.round(smoothedHeadingDeg)}°`;
+            }
+        }
+
+        function handleWebOrientation(e) {
             let heading = null;
             if (typeof e.webkitCompassHeading === 'number') {
                 heading = e.webkitCompassHeading;
             } else if (e.alpha !== null) {
                 heading = (360 + (-e.alpha)) % 360;
             }
-
-            if (heading !== null && !isNaN(heading)) {
-                rawSensorHeading = heading;
-                if (!gyroEnabled) return;
-
-                if (gyroNorthReference === null) {
-                    gyroNorthReference = rawSensorHeading;
-                }
-
-                const relativeHeading = (sub(rawSensorHeading, gyroNorthReference) + 360) % 360;
-
-                let diff = sub(relativeHeading, smoothedHeadingDeg);
-                if (diff > 180) diff = sub(diff, 360);
-                if (diff < -180) diff = diff + 360;
-                smoothedHeadingDeg = (smoothedHeadingDeg + mul(diff, 0.22) + 360) % 360;
-
-                const btn = document.getElementById('btn-gyro');
-                if (btn && gyroEnabled) {
-                    btn.innerText = `🧭 СЕВЕР: ${Math.round(smoothedHeadingDeg)}°`;
-                }
+            if (heading !== null) {
+                applyCompassHeading(heading);
             }
         }
 
-        window.addEventListener('deviceorientationabsolute', handleOrientation, true);
-        window.addEventListener('deviceorientation', handleOrientation, true);
+        window.addEventListener('deviceorientationabsolute', handleWebOrientation, true);
+        window.addEventListener('deviceorientation', handleWebOrientation, true);
+
+        // Директен вход от Android Native хардуерния компас (MainActivity.kt)
+        window.updateCompassFromApp = function(magHeadingDeg) {
+            applyCompassHeading(parseFloat(magHeadingDeg));
+        };
 
         const planePhotoCache = {};
         const planeRouteCache = {};
