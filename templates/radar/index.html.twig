@@ -312,7 +312,7 @@
         </div>
         <div class="scale-controls">
             <button onclick="toggleMilitaryOnly()" id="btn-mil">★ ВОЕННИ</button>
-            <button onclick="toggleGyroCompass()" id="btn-gyro">🧭 АВТО СЕВЕР</button>
+            <button onclick="toggleGyroCompass()" id="btn-gyro">🧭 СЕВЕР: ИСТИНСКИ (0°)</button>
             <div class="scale-group">
                 <button onclick="setScale(50)" id="btn-50">50</button>
                 <button onclick="setScale(100)" id="btn-100">100</button>
@@ -355,67 +355,43 @@
         let sweepAngle = 0;
         let maxRangeKm = 350;
 
-        // АВТОМАТИЧНО ОСЕВЕРЯВАНЕ (Истински Север = Магнитен Север + 5.5° за България)
-        let gyroEnabled = false;
-        let trueNorthHeading = 0.0;
-        let smoothedHeadingDeg = 0.0;
+        // СТАЦИОНАРНО ОСЕВЕРЯВАНЕ: Север винаги е горе (12 часа)!
+        // При натискане превключва между Истински Географски Север (0°) и Магнитен Север за Плевен (-5.5° азимутна корекция)
+        let useMagneticNorth = false;
         const BG_MAGNETIC_DECLINATION = 5.5;
 
         window.toggleGyroCompass = function() {
-            gyroEnabled = !gyroEnabled;
+            useMagneticNorth = !useMagneticNorth;
             const btn = document.getElementById('btn-gyro');
-            if (gyroEnabled) {
-                smoothedHeadingDeg = trueNorthHeading;
+            if (useMagneticNorth) {
                 if (btn) {
                     btn.classList.add('active');
-                    btn.innerText = `🧭 СЕВЕР: ${Math.round(smoothedHeadingDeg)}°`;
+                    btn.innerText = '🧭 СЕВЕР: МАГНИТЕН (-5.5°)';
                 }
             } else {
-                smoothedHeadingDeg = 0.0;
                 if (btn) {
                     btn.classList.remove('active');
-                    btn.innerText = '🧭 АВТО СЕВЕР';
+                    btn.innerText = '🧭 СЕВЕР: ИСТИНСКИ (0°)';
                 }
             }
+            if (selectedPlaneId) {
+                const sel = planes.find(p => p.id === selectedPlaneId);
+                if (sel) updateInfoPanelHTML(sel);
+            }
         };
 
-        function applyCompassHeading(magHeadingDeg) {
-            if (magHeadingDeg === null || isNaN(magHeadingDeg)) return;
+        // Оставяме функцията празна, за да не върти картата наобратно от жироскопа на телефона
+        window.updateCompassFromApp = function(magHeadingDeg) {};
 
-            trueNorthHeading = (magHeadingDeg + BG_MAGNETIC_DECLINATION + 360) % 360;
-
-            if (!gyroEnabled) return;
-
-            let diff = sub(trueNorthHeading, smoothedHeadingDeg);
-            if (diff > 180) diff = sub(diff, 360);
-            if (diff < -180) diff = diff + 360;
-            smoothedHeadingDeg = (smoothedHeadingDeg + mul(diff, 0.25) + 360) % 360;
-
-            const btn = document.getElementById('btn-gyro');
-            if (btn && gyroEnabled) {
-                btn.innerText = `🧭 СЕВЕР: ${Math.round(smoothedHeadingDeg)}°`;
-            }
+        function getActiveRotationDeg() {
+            // Картата на България и 0° винаги стоят изправени горе!
+            return 0.0;
         }
 
-        function handleWebOrientation(e) {
-            let heading = null;
-            if (typeof e.webkitCompassHeading === 'number') {
-                heading = e.webkitCompassHeading;
-            } else if (e.alpha !== null) {
-                heading = (360 + (-e.alpha)) % 360;
-            }
-            if (heading !== null) {
-                applyCompassHeading(heading);
-            }
+        function getAzimuthCorrectionDeg() {
+            // Ако радарът на работа е по Магнитен Север, коригираме азимута на целите с -5.5°
+            return useMagneticNorth ? -BG_MAGNETIC_DECLINATION : 0.0;
         }
-
-        window.addEventListener('deviceorientationabsolute', handleWebOrientation, true);
-        window.addEventListener('deviceorientation', handleWebOrientation, true);
-
-        // Директен вход от Android Native хардуерния компас (MainActivity.kt)
-        window.updateCompassFromApp = function(magHeadingDeg) {
-            applyCompassHeading(parseFloat(magHeadingDeg));
-        };
 
         const planePhotoCache = {};
         const planeRouteCache = {};
@@ -685,18 +661,14 @@
 
             const y = mul(Math.sin(dLon), Math.cos(lat2Rad));
             const x = sub(mul(Math.cos(lat1Rad), Math.sin(lat2Rad)), mul(mul(Math.sin(lat1Rad), Math.cos(lat2Rad)), Math.cos(dLon)));
-            return (mul(Math.atan2(y, x), RAD_TO_DEG) + 360) % 360;
-        }
-
-        function getActiveRotationDeg() {
-            return gyroEnabled ? -smoothedHeadingDeg : 0.0;
+            const trueAzi = (mul(Math.atan2(y, x), RAD_TO_DEG) + 360) % 360;
+            return (trueAzi + getAzimuthCorrectionDeg() + 360) % 360;
         }
 
         function latLonToRadarXY(lat, lon, cx, cy, radius) {
             const dist = calculateDistance(myLat, myLon, lat, lon);
             const azi = calculateAzimuth(myLat, myLon, lat, lon);
-            const effectiveAzi = (azi + getActiveRotationDeg() + 360) % 360;
-            const angleRad = mul(sub(effectiveAzi, 90), DEG_TO_RAD);
+            const angleRad = mul(sub(azi, 90), DEG_TO_RAD);
             const distPx = mul((dist / maxRangeKm), radius);
             return {
                 x: cx + mul(Math.cos(angleRad), distPx),
@@ -920,11 +892,8 @@
             ctx.moveTo(cx, sub(cy, radius)); ctx.lineTo(cx, cy + radius);
             ctx.stroke();
 
-            const rotDeg = getActiveRotationDeg();
-
             for (let i = 0; i < 360; i += 10) {
-                const effectiveDeg = (i + rotDeg + 360) % 360;
-                const angleRad = mul(sub(effectiveDeg, 90), DEG_TO_RAD);
+                const angleRad = mul(sub(i, 90), DEG_TO_RAD);
                 const isMajor = (i % 30 === 0);
                 const startR = sub(radius, (isMajor ? 6 : 3));
                 const endR = radius + (isMajor ? 6 : 3);
@@ -939,7 +908,7 @@
                     const textR = radius + 15;
                     ctx.fillStyle = (i === 0) ? '#00ffff' : '#0f0';
                     ctx.font = `bold ${Math.max(6, 9 / Math.sqrt(scale))}px monospace`;
-                    const label = (i === 0) ? '0°С' : `${i}°`;
+                    const label = (i === 0) ? (useMagneticNorth ? '0°М' : '0°С') : `${i}°`;
                     ctx.fillText(label, cx + mul(Math.cos(angleRad), textR), cy + mul(Math.sin(angleRad), textR));
                 }
             }
@@ -955,7 +924,6 @@
             const radius = Math.min(mul(screenWidth, 0.43), mul(screenHeight, 0.31));
 
             const now = Date.now();
-            const rotDeg = getActiveRotationDeg();
 
             ctx.save();
             ctx.translate(cx + panX, cy + panY);
@@ -1030,8 +998,7 @@
 
                 visibleCount++;
 
-                const effectiveAzi = (plane.azi + rotDeg + 360) % 360;
-                const angleRad = mul(sub(effectiveAzi, 90), DEG_TO_RAD);
+                const angleRad = mul(sub(plane.azi, 90), DEG_TO_RAD);
                 const distPx = mul((plane.dist / maxRangeKm), radius);
                 const px = cx + mul(Math.cos(angleRad), distPx);
                 const py = cy + mul(Math.sin(angleRad), distPx);
@@ -1103,7 +1070,7 @@
                     ctx.translate(px, py);
                 }
 
-                const effectiveTrack = ((plane.track || 0) + rotDeg + 360) % 360;
+                const effectiveTrack = ((plane.track || 0) + getAzimuthCorrectionDeg() + 360) % 360;
                 ctx.scale(iconScale, iconScale);
                 ctx.rotate(mul(effectiveTrack, DEG_TO_RAD));
 
@@ -1277,7 +1244,7 @@
 
                 <div class="info-grid">
                     <div class="info-item">
-                        <span class="info-label">Азимут / Разстояние</span>
+                        <span class="info-label">Азимут (${useMagneticNorth ? 'Магнитен' : 'Истински'}) / Разст.</span>
                         <span class="info-val" style="color:#00ffff;">${azimuthDeg}° / ${p.dist.toFixed(1)} км</span>
                     </div>
                     <div class="info-item">
