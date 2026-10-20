@@ -11,145 +11,105 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
 
 class RadarController extends AbstractController
 {
-    private const CACHE_TTL = 8; // Обновяване от външните API-та максимум веднъж на 8 секунди
-
     #[Route('/radar', name: 'app_radar')]
     public function index(): Response
     {
-        $response = $this->render('radar/index.html.twig');
-        // Забраняваме на браузъра да кешира стар HTML/JS код при деплой
-        $response->headers->set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
-        return $response;
+        return $this->render('radar/index.html.twig');
     }
 
     #[Route('/api/planes', name: 'api_planes')]
-    public function getPlanes(Request $request, HttpClientInterface $client): Response
+    public function getPlanes(Request $request, HttpClientInterface $client): JsonResponse
     {
-        // Централна точка за регионалния буфер (покрива 350nm / ~650km радиус - цяла България и Балканите)
-        $centerLat = 43.37;
-        $centerLon = 24.67;
+        // Закръгляме координатите до 2 знака, за да не се чупи кешът при минимално мърдане на GPS-а
+        $myLat = round((float) $request->query->get('lat', 43.37), 2);
+        $myLon = round((float) $request->query->get('lon', 24.67), 2);
 
-        $cacheDir = sys_get_temp_dir();
-        $cacheFile = $cacheDir . '/radar_bg_master_buffer.json';
-        $lockFile  = $cacheDir . '/radar_bg_master_buffer.lock';
+        if ($myLat < 35.0 || $myLat > 50.0 || $myLon < 15.0 || $myLon > 35.0) {
+            $myLat = 43.37;
+            $myLon = 24.67;
+        }
 
-        $now = time();
-        $cachedJson = null;
-        $cacheAge = 999999;
+        $cacheFile = sys_get_temp_dir() . '/radar_render_stable_cache.json';
 
+        // 1. Ако кешът е на по-малко от 10 секунди -> връщаме го веднага (0.001 сек, без да тормозим API-тата)
+        if (file_exists($cacheFile) && (time() - filemtime($cacheFile)) < 10) {
+            $cachedContent = @file_get_contents($cacheFile);
+            if ($cachedContent) {
+                $decoded = json_decode($cachedContent, true);
+                if (is_array($decoded) && count($decoded) > 0) {
+                    return new JsonResponse($decoded);
+                }
+            }
+        }
+
+        $planesMap = [];
+
+        $headers = [
+            'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36',
+            'Accept' => 'application/json',
+        ];
+
+        // 2. Стартираме всички заявки ПАРАЛЕЛНО с кратък таймаут (2.8 сек общо!), за да не зависва Render
+        $endpoints = [
+            'airplanes_local' => ['url' => "https://api.airplanes.live/v2/point/{$myLat}/{$myLon}/250", 'mil' => false],
+            'airplanes_mil'   => ['url' => "https://api.airplanes.live/v2/mil", 'mil' => true],
+            'adsb_lol_local'  => ['url' => "https://api.adsb.lol/v2/point/{$myLat}/{$myLon}/250", 'mil' => false],
+            'adsb_lol_mil'    => ['url' => "https://api.adsb.lol/v2/mil", 'mil' => true],
+            'adsb_fi_local'   => ['url' => "https://opendata.adsb.fi/api/v2/lat/{$myLat}/lon/{$myLon}/dist/250", 'mil' => false],
+        ];
+
+        $asyncResponses = [];
+        foreach ($endpoints as $key => $cfg) {
+            try {
+                $asyncResponses[$key] = [
+                    'res' => $client->request('GET', $cfg['url'], [
+                        'timeout' => 2.5,
+                        'max_duration' => 2.8,
+                        'headers' => $headers,
+                    ]),
+                    'mil' => $cfg['mil']
+                ];
+            } catch (\Throwable $e) {
+            }
+        }
+
+        // Събираме само тези, които са отговорили бързо и успешно
+        foreach ($asyncResponses as $item) {
+            try {
+                if ($item['res']->getStatusCode() === 200) {
+                    $data = $item['res']->toArray(false);
+                    $list = $data['ac'] ?? $data['aircraft'] ?? [];
+                    $this->parseAdsbV2List($list, $planesMap, $myLat, $myLon, $item['mil']);
+                }
+            } catch (\Throwable $e) {
+                continue;
+            }
+        }
+
+        $finalPlanes = array_values($planesMap);
+
+        // 3. АКО ИМАМЕ НОВИ САМОЛЕТИ -> презаписваме кеша и ги връщаме
+        if (count($finalPlanes) > 0) {
+            @file_put_contents($cacheFile, json_encode($finalPlanes));
+            return new JsonResponse($finalPlanes);
+        }
+
+        // 4. ЗЛАТНА ЗАЩИТА: Ако в тази секунда всички API-та са блокирали Render,
+        // връщаме последния запазен кеш (за да НЕ изчезват самолетите от екрана!)
         if (file_exists($cacheFile)) {
-            $cacheAge = $now - (int) @filemtime($cacheFile);
-            $cachedJson = @file_get_contents($cacheFile);
-        }
-
-        // 1. БЪРЗ БУФЕР: Ако кешът е пресен (под 8 сек), връщаме го веднага като суров JSON (0% CPU разход!)
-        if ($cachedJson && $cacheAge < self::CACHE_TTL && strlen($cachedJson) > 10) {
-            return $this->createBufferedResponse($cachedJson, 'HIT', $cacheAge);
-        }
-
-        // 2. ЗАЩИТА ОТ ЗАПИЧАНЕ (Mutex Lock):
-        // Само 1 процес има право да тегли от външните API-та.
-        // Ако друг телефон вече е стартирал обновяване в тази секунда, останалите веднага взимат стария буфер без да чакат!
-        $lockFp = @fopen($lockFile, 'c+');
-        $gotLock = $lockFp && @flock($lockFp, LOCK_EX | LOCK_NB);
-
-        if (!$gotLock) {
-            if ($lockFp) {
-                @fclose($lockFp);
-            }
-            if ($cachedJson && strlen($cachedJson) > 10) {
-                return $this->createBufferedResponse($cachedJson, 'STALE-LOCKED', $cacheAge);
-            }
-            return $this->createBufferedResponse('[]', 'EMPTY-LOCKED', 0);
-        }
-
-        // Този процес спечели ключалката -> обновява буфера за всички устройства
-        try {
-            // Докосваме файла веднага, за да знаят другите процеси, че се обновява
-            if (file_exists($cacheFile)) {
-                @touch($cacheFile);
-            }
-
-            $planesMap = [];
-            $headers = [
-                'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36',
-                'Accept'     => 'application/json',
-            ];
-
-            // Използваме най-бързите и надеждни потоци с голям радиус (350 морски мили = 648 км)
-            $endpoints = [
-                'airplanes_local' => ['url' => "https://api.airplanes.live/v2/point/{$centerLat}/{$centerLon}/350", 'mil' => false],
-                'airplanes_mil'   => ['url' => "https://api.airplanes.live/v2/mil", 'mil' => true],
-                'adsb_lol_local'  => ['url' => "https://api.adsb.lol/v2/point/{$centerLat}/{$centerLon}/350", 'mil' => false],
-                'adsb_lol_mil'    => ['url' => "https://api.adsb.lol/v2/mil", 'mil' => true],
-            ];
-
-            $asyncResponses = [];
-            foreach ($endpoints as $key => $cfg) {
-                try {
-                    $asyncResponses[$key] = [
-                        'res' => $client->request('GET', $cfg['url'], [
-                            'timeout'      => 2.2,
-                            'max_duration' => 2.5,
-                            'headers'      => $headers,
-                        ]),
-                        'mil' => $cfg['mil']
-                    ];
-                } catch (\Throwable $e) {
+            $fallbackContent = @file_get_contents($cacheFile);
+            if ($fallbackContent) {
+                $decodedFallback = json_decode($fallbackContent, true);
+                if (is_array($decodedFallback) && count($decodedFallback) > 0) {
+                    return new JsonResponse($decodedFallback);
                 }
             }
-
-            foreach ($asyncResponses as $item) {
-                try {
-                    if ($item['res']->getStatusCode() === 200) {
-                        $data = $item['res']->toArray(false);
-                        $list = $data['ac'] ?? $data['aircraft'] ?? [];
-                        $this->parseAdsbV2List($list, $planesMap, $centerLat, $centerLon, $item['mil']);
-                    }
-                } catch (\Throwable $e) {
-                    continue;
-                }
-            }
-
-            $finalPlanes = array_values($planesMap);
-
-            // Ако сме получили самолети -> записваме ги атомарно в буфера
-            if (count($finalPlanes) > 0) {
-                $newJson = json_encode($finalPlanes, JSON_UNESCAPED_UNICODE);
-                $tmpFile = $cacheFile . '.tmp.' . getmypid();
-                if (@file_put_contents($tmpFile, $newJson) !== false) {
-                    @rename($tmpFile, $cacheFile);
-                }
-                return $this->createBufferedResponse($newJson, 'MISS-UPDATED', 0);
-            }
-
-            // Ако външните API-та временно са върнали празно -> пазим стария буфер жив!
-            if ($cachedJson && strlen($cachedJson) > 10) {
-                return $this->createBufferedResponse($cachedJson, 'FALLBACK-CACHE', $cacheAge);
-            }
-
-            return $this->createBufferedResponse('[]', 'EMPTY', 0);
-        } finally {
-            if ($lockFp) {
-                @flock($lockFp, LOCK_UN);
-                @fclose($lockFp);
-            }
         }
+
+        return new JsonResponse([]);
     }
 
-    private function createBufferedResponse(string $jsonContent, string $bufferStatus, int $ageSeconds): Response
-    {
-        $response = new Response($jsonContent, 200, [
-            'Content-Type'           => 'application/json; charset=UTF-8',
-            'Cache-Control'          => 'public, max-age=3, stale-while-revalidate=5',
-            'X-Radar-Buffer-Status'  => $bufferStatus,
-            'X-Radar-Buffer-Age'     => (string) $ageSeconds,
-        ]);
-
-        return $response;
-    }
-
-    private function parseAdsbV2List(array $aircraftList, array &$planesMap, float $centerLat, float $centerLon, bool $isMilitaryFeed): void
+    private function parseAdsbV2List(array $aircraftList, array &$planesMap, float $myLat, float $myLon, bool $isMilitaryFeed): void
     {
         foreach ($aircraftList as $ac) {
             $lat = $ac['lat'] ?? $ac['latitude'] ?? null;
@@ -159,10 +119,7 @@ class RadarController extends AbstractController
                 continue;
             }
 
-            $latF = (float) $lat;
-            $lonF = (float) $lon;
-
-            if (abs($latF - $centerLat) > 5.0 || abs($lonF - $centerLon) > 6.5) {
+            if (abs((float)$lat - $myLat) > 4.5 || abs((float)$lon - $myLon) > 6.0) {
                 continue;
             }
 
@@ -208,8 +165,8 @@ class RadarController extends AbstractController
             $planesMap[$id] = [
                 'id'       => $id,
                 'callsign' => $displayCallsign,
-                'lat'      => $latF,
-                'lon'      => $lonF,
+                'lat'      => (float) $lat,
+                'lon'      => (float) $lon,
                 'track'    => $track,
                 'altitude' => $altitudeMeters,
                 'speed'    => $speedKmh,

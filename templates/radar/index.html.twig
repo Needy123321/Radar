@@ -964,8 +964,9 @@
                 const latFixed = parseFloat(myLat).toFixed(2);
                 const lonFixed = parseFloat(myLon).toFixed(2);
 
-                const response = await fetch(`/api/planes?lat=${latFixed}&lon=${lonFixed}`, {
-                    signal: controller.signal
+                const response = await fetch(`/api/planes?lat=${latFixed}&lon=${lonFixed}&_t=${Date.now()}`, {
+                    signal: controller.signal,
+                    cache: 'no-store'
                 });
                 clearTimeout(timeoutId);
 
