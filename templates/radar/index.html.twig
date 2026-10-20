@@ -1654,8 +1654,17 @@
         function applyNewGpsCoordinates(newLat, newLon) {
             newLat = parseFloat(newLat);
             newLon = parseFloat(newLon);
+            if (isNaN(newLat) || isNaN(newLon)) return;
 
-            if (calculateDistance(myLat, myLon, newLat, newLon) > 10) {
+            const movedKm = calculateDistance(myLat, myLon, newLat, newLon);
+
+            // Ако вече сме взели реален GPS и сме мръднали с по-малко от 200 метра (0.2 км),
+            // НЕ пускаме излишна заявка към сървъра!
+            if (isRealGps && movedKm < 0.2) {
+                return;
+            }
+
+            if (movedKm > 20) {
                 planes = [];
             }
 

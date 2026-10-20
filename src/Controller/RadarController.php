@@ -20,18 +20,19 @@ class RadarController extends AbstractController
     #[Route('/api/planes', name: 'api_planes')]
     public function getPlanes(Request $request, HttpClientInterface $client): JsonResponse
     {
-        $myLat = (float) $request->query->get('lat', 43.367638);
-        $myLon = (float) $request->query->get('lon', 24.666722);
+        // Закръгляме координатите до 2 знака, за да не се чупи кешът при минимално мърдане на GPS-а
+        $myLat = round((float) $request->query->get('lat', 43.37), 2);
+        $myLon = round((float) $request->query->get('lon', 24.67), 2);
 
-        // Защита от грешни координати (напр. от емулатор в САЩ)
         if ($myLat < 35.0 || $myLat > 50.0 || $myLon < 15.0 || $myLon > 35.0) {
-            $myLat = 43.367638;
-            $myLon = 24.666722;
+            $myLat = 43.37;
+            $myLon = 24.67;
         }
 
-        // 1. КЕШ СИСТЕМА ЗА МНОГО ПОТРЕБИТЕЛИ (пази данните за 5 секунди, за да не блокират Render)
-        $cacheFile = sys_get_temp_dir() . '/radar_shared_planes_cache.json';
-        if (file_exists($cacheFile) && (time() - filemtime($cacheFile)) < 5) {
+        $cacheFile = sys_get_temp_dir() . '/radar_render_stable_cache.json';
+
+        // 1. Ако кешът е на по-малко от 10 секунди -> връщаме го веднага (0.001 сек, без да тормозим API-тата)
+        if (file_exists($cacheFile) && (time() - filemtime($cacheFile)) < 10) {
             $cachedContent = @file_get_contents($cacheFile);
             if ($cachedContent) {
                 $decoded = json_decode($cachedContent, true);
@@ -44,26 +45,26 @@ class RadarController extends AbstractController
         $planesMap = [];
 
         $headers = [
-            'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36',
             'Accept' => 'application/json',
         ];
 
+        // 2. Стартираме всички заявки ПАРАЛЕЛНО с кратък таймаут (2.8 сек общо!), за да не зависва Render
         $endpoints = [
-            'adsb_lol_local'    => ['url' => "https://api.adsb.lol/v2/point/{$myLat}/{$myLon}/250", 'mil' => false],
-            'adsb_lol_mil'      => ['url' => "https://api.adsb.lol/v2/mil", 'mil' => true],
-            'adsb_fi_local'     => ['url' => "https://opendata.adsb.fi/api/v2/lat/{$myLat}/lon/{$myLon}/dist/250", 'mil' => false],
-            'adsb_fi_mil'       => ['url' => "https://opendata.adsb.fi/api/v2/mil", 'mil' => true],
-            'airplanes_local'   => ['url' => "https://api.airplanes.live/v2/point/{$myLat}/{$myLon}/250", 'mil' => false],
-            'airplanes_mil'     => ['url' => "https://api.airplanes.live/v2/mil", 'mil' => true],
+            'airplanes_local' => ['url' => "https://api.airplanes.live/v2/point/{$myLat}/{$myLon}/250", 'mil' => false],
+            'airplanes_mil'   => ['url' => "https://api.airplanes.live/v2/mil", 'mil' => true],
+            'adsb_lol_local'  => ['url' => "https://api.adsb.lol/v2/point/{$myLat}/{$myLon}/250", 'mil' => false],
+            'adsb_lol_mil'    => ['url' => "https://api.adsb.lol/v2/mil", 'mil' => true],
+            'adsb_fi_local'   => ['url' => "https://opendata.adsb.fi/api/v2/lat/{$myLat}/lon/{$myLon}/dist/250", 'mil' => false],
         ];
 
-        $responses = [];
+        $asyncResponses = [];
         foreach ($endpoints as $key => $cfg) {
             try {
-                $responses[$key] = [
-                    'response' => $client->request('GET', $cfg['url'], [
-                        'timeout' => 4.5,
-                        'max_duration' => 5.0,
+                $asyncResponses[$key] = [
+                    'res' => $client->request('GET', $cfg['url'], [
+                        'timeout' => 2.5,
+                        'max_duration' => 2.8,
                         'headers' => $headers,
                     ]),
                     'mil' => $cfg['mil']
@@ -72,10 +73,11 @@ class RadarController extends AbstractController
             }
         }
 
-        foreach ($responses as $key => $item) {
+        // Събираме само тези, които са отговорили бързо и успешно
+        foreach ($asyncResponses as $item) {
             try {
-                if ($item['response']->getStatusCode() === 200) {
-                    $data = $item['response']->toArray(false);
+                if ($item['res']->getStatusCode() === 200) {
+                    $data = $item['res']->toArray(false);
                     $list = $data['ac'] ?? $data['aircraft'] ?? [];
                     $this->parseAdsbV2List($list, $planesMap, $myLat, $myLon, $item['mil']);
                 }
@@ -86,12 +88,25 @@ class RadarController extends AbstractController
 
         $finalPlanes = array_values($planesMap);
 
-        // Записваме в общия кеш, ако сме получили самолети
+        // 3. АКО ИМАМЕ НОВИ САМОЛЕТИ -> презаписваме кеша и ги връщаме
         if (count($finalPlanes) > 0) {
             @file_put_contents($cacheFile, json_encode($finalPlanes));
+            return new JsonResponse($finalPlanes);
         }
 
-        return new JsonResponse($finalPlanes);
+        // 4. ЗЛАТНА ЗАЩИТА: Ако в тази секунда всички API-та са блокирали Render,
+        // връщаме последния запазен кеш (за да НЕ изчезват самолетите от екрана!)
+        if (file_exists($cacheFile)) {
+            $fallbackContent = @file_get_contents($cacheFile);
+            if ($fallbackContent) {
+                $decodedFallback = json_decode($fallbackContent, true);
+                if (is_array($decodedFallback) && count($decodedFallback) > 0) {
+                    return new JsonResponse($decodedFallback);
+                }
+            }
+        }
+
+        return new JsonResponse([]);
     }
 
     private function parseAdsbV2List(array $aircraftList, array &$planesMap, float $myLat, float $myLon, bool $isMilitaryFeed): void
@@ -104,7 +119,7 @@ class RadarController extends AbstractController
                 continue;
             }
 
-            if (abs($lat - $myLat) > 4.5 || abs($lon - $myLon) > 6.0) {
+            if (abs((float)$lat - $myLat) > 4.5 || abs((float)$lon - $myLon) > 6.0) {
                 continue;
             }
 
