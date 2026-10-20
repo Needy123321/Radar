@@ -958,25 +958,22 @@
             isFetchingPlanes = true;
 
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 8000);
+            const timeoutId = setTimeout(() => controller.abort(), 9000);
 
             try {
-                const latFixed = parseFloat(myLat).toFixed(2);
-                const lonFixed = parseFloat(myLon).toFixed(2);
-
-                const response = await fetch(`/api/planes?lat=${latFixed}&lon=${lonFixed}`, {
+                const response = await fetch(`/api/planes?lat=${myLat}&lon=${myLon}`, {
                     signal: controller.signal
                 });
                 clearTimeout(timeoutId);
 
                 if (!response.ok) {
+                    isFetchingPlanes = false;
                     return;
                 }
 
                 const data = await response.json();
                 const now = Date.now();
 
-                // Обновяваме само ако сървърът е върнал реален списък със самолети
                 if (Array.isArray(data) && data.length > 0) {
                     const planeMap = new Map();
                     planes.forEach(p => planeMap.set(p.id, p));
@@ -1014,18 +1011,15 @@
                         const sel = planes.find(p => p.id === selectedPlaneId);
                         if (sel) updateInfoPanelHTML(sel);
                     }
-                } else {
-                    // Ако сървърът временно върне 0, чистим само изтеклите стари цели (над 3 минути), без да гасим екрана
-                    planes = planes.filter(p => p.lastSeen && sub(now, p.lastSeen) < PLANE_KEEP_TIME);
-                    updatePinnedBarUI();
                 }
             } catch (e) {
-                console.warn("Временно забавяне на връзката, запазваме текущите цели на екрана.");
+                console.warn("Пропусната заявка, запазваме текущите цели на екрана.");
             } finally {
                 clearTimeout(timeoutId);
                 isFetchingPlanes = false;
             }
         }
+
         async function fetchFlightRoute(plane) {
             if (!plane || !plane.callsign) return;
             const cleanCs = plane.callsign.replace(' [ВОЕНЕН]', '').trim();
