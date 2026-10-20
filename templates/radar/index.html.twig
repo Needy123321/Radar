@@ -961,17 +961,24 @@
             const timeoutId = setTimeout(() => controller.abort(), 9000);
 
             try {
-                const response = await fetch(`/api/planes?lat=${myLat}&lon=${myLon}`, {
-                    signal: controller.signal
-                });
-                clearTimeout(timeoutId);
-
-                if (!response.ok) {
-                    isFetchingPlanes = false;
-                    return;
+                let data = [];
+                try {
+                    const response = await fetch(`/api/planes?lat=${myLat}&lon=${myLon}`, {
+                        signal: controller.signal
+                    });
+                    if (response.ok) {
+                        data = await response.json();
+                    }
+                } catch (serverErr) {
+                    console.warn("Сървърът се забави, превключване към директен поток през телефона...");
                 }
 
-                const data = await response.json();
+                clearTimeout(timeoutId);
+
+                if (!Array.isArray(data) || data.length === 0) {
+                    data = await fetchDirectFromBrowser();
+                }
+
                 const now = Date.now();
 
                 if (Array.isArray(data) && data.length > 0) {
