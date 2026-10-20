@@ -102,13 +102,67 @@
             box-shadow: 0 0 12px #00ffff;
         }
 
-        /* 6 бързи бутона за маркираните цели (2 реда по 3) */
+        /* Панел за оперативно водене на 21 цели */
+        .pinned-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 10px;
+            background: rgba(20, 0, 30, 0.92);
+            padding: 3px 6px;
+            border-radius: 4px;
+            border: 1px solid rgba(255, 0, 255, 0.35);
+            color: #ff88ff;
+            pointer-events: auto;
+            gap: 4px;
+        }
+        .pinned-header-actions {
+            display: flex;
+            gap: 4px;
+        }
+        .hud-mini-btn {
+            background: rgba(65, 0, 75, 0.9);
+            border: 1px solid #ff33cc;
+            color: #ffccff;
+            font-family: monospace;
+            font-size: 9.5px;
+            font-weight: bold;
+            padding: 2px 6px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .reset-tracks-btn {
+            background: rgba(80, 0, 40, 0.9);
+            border: 1px solid #ff3388;
+            color: #ffccdd;
+        }
+
         .pinned-bar {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
             gap: 4px;
             pointer-events: auto;
+            max-height: 52px; /* Компактно: показва 2 реда, скролва се за останалите до 21 */
+            overflow-y: auto;
+            padding-right: 2px;
+            touch-action: pan-y;
+            transition: max-height 0.2s ease;
         }
+        .pinned-bar.expanded {
+            max-height: 185px; /* Разгънато: показва всичките 21 слота (7 реда по 3) */
+            background: rgba(10, 0, 15, 0.92);
+            padding: 4px;
+            border: 1px solid rgba(255, 0, 255, 0.4);
+            border-radius: 4px;
+        }
+        .pinned-bar::-webkit-scrollbar {
+            width: 4px;
+        }
+        .pinned-bar::-webkit-scrollbar-thumb {
+            background: #ff00ff;
+            border-radius: 2px;
+        }
+
         .pin-slot {
             background: rgba(25, 0, 35, 0.88);
             border: 1px dashed rgba(255, 0, 255, 0.45);
@@ -251,12 +305,34 @@
             font-weight: bold;
         }
 
+        .auto-track-btn {
+            width: 100%;
+            margin-top: 7px;
+            background: rgba(60, 0, 80, 0.95);
+            border: 1px solid #ff00ff;
+            color: #ffffff;
+            font-family: monospace;
+            font-size: 11px;
+            font-weight: bold;
+            padding: 6px;
+            border-radius: 4px;
+            cursor: pointer;
+            text-align: center;
+            box-shadow: 0 0 8px rgba(255, 0, 255, 0.35);
+        }
+        .auto-track-btn.active {
+            background: #ff00ff;
+            color: #000;
+            box-shadow: 0 0 12px #ff00ff;
+        }
+
+        /* Решетка с 21 слота в инфо панела (7 на ред, 3 реда) */
         .mark-targets-row {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 4px;
-            margin-top: 7px;
-            padding-top: 6px;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 3px;
+            margin-top: 6px;
+            padding-top: 5px;
             border-top: 1px solid rgba(0, 255, 0, 0.25);
         }
         .mark-btn {
@@ -264,12 +340,19 @@
             border: 1px solid #cc00cc;
             color: #ff77ff;
             font-family: monospace;
-            font-size: 10px;
+            font-size: 9.5px;
             font-weight: bold;
-            padding: 6px 2px;
-            border-radius: 4px;
+            padding: 4px 1px;
+            border-radius: 3px;
             cursor: pointer;
             text-align: center;
+            white-space: nowrap;
+            overflow: hidden;
+        }
+        .mark-btn.occupied {
+            background: rgba(75, 15, 90, 0.9);
+            border-color: #ff66ff;
+            color: #ffffff;
         }
         .mark-btn.active {
             background: #ff00ff;
@@ -320,13 +403,17 @@
                 <button onclick="setScale(350)" id="btn-350" class="active">350km</button>
             </div>
         </div>
-        <div class="pinned-bar">
-            <button class="pin-slot" id="pin-slot-1" onclick="selectPinnedTarget(1)">🎯 1: -</button>
-            <button class="pin-slot" id="pin-slot-2" onclick="selectPinnedTarget(2)">🎯 2: -</button>
-            <button class="pin-slot" id="pin-slot-3" onclick="selectPinnedTarget(3)">🎯 3: -</button>
-            <button class="pin-slot" id="pin-slot-4" onclick="selectPinnedTarget(4)">🎯 4: -</button>
-            <button class="pin-slot" id="pin-slot-5" onclick="selectPinnedTarget(5)">🎯 5: -</button>
-            <button class="pin-slot" id="pin-slot-6" onclick="selectPinnedTarget(6)">🎯 6: -</button>
+        <div class="pinned-header">
+            <span id="trackCounterInfo">🎯 АКТИВНИ: 0/21 | Следваща: #1</span>
+            <div class="pinned-header-actions">
+                <button class="hud-mini-btn" id="toggleSlotsBtn" onclick="toggleExpandSlots()">▼ РАЗГЪНИ (21)</button>
+                <button class="hud-mini-btn reset-tracks-btn" onclick="resetAllTrackedTargets()">🔄 НУЛИРАЙ</button>
+            </div>
+        </div>
+        <div class="pinned-bar" id="pinnedBarContainer">
+            {% for i in 1..21 %}
+                <button class="pin-slot" id="pin-slot-{{ i }}" onclick="selectPinnedTarget({{ i }})">Слот {{ i }}: -</button>
+            {% endfor %}
         </div>
     </div>
 
@@ -345,20 +432,31 @@
         const DEG_TO_RAD = 0.017453292519943295;
         const RAD_TO_DEG = 57.29577951308232;
 
+        const TOTAL_PIN_SLOTS = 21;
+        const ALL_SLOTS = Array.from({ length: TOTAL_PIN_SLOTS }, (_, i) => i + 1);
+
         let planes = [];
         let selectedPlaneId = null;
         let overlappingCluster = [];
         let clusterIndex = 0;
         let highlightMilitaryOnly = false;
         let isFetchingPlanes = false;
+        let slotsExpanded = false;
 
         let sweepAngle = 0;
         let maxRangeKm = 350;
 
         // СТАЦИОНАРНО ОСЕВЕРЯВАНЕ: Север винаги е горе (12 часа)!
-        // При натискане превключва между Истински Географски Север (0°) и Магнитен Север за Плевен (-5.5° азимутна корекция)
         let useMagneticNorth = false;
         const BG_MAGNETIC_DECLINATION = 5.5;
+
+        window.toggleExpandSlots = function() {
+            slotsExpanded = !slotsExpanded;
+            const bar = document.getElementById('pinnedBarContainer');
+            const btn = document.getElementById('toggleSlotsBtn');
+            if (bar) bar.classList.toggle('expanded', slotsExpanded);
+            if (btn) btn.innerText = slotsExpanded ? '▲ СВИЙ (6)' : '▼ РАЗГЪНИ (21)';
+        };
 
         window.toggleGyroCompass = function() {
             useMagneticNorth = !useMagneticNorth;
@@ -380,16 +478,13 @@
             }
         };
 
-        // Оставяме функцията празна, за да не върти картата наобратно от жироскопа на телефона
         window.updateCompassFromApp = function(magHeadingDeg) {};
 
         function getActiveRotationDeg() {
-            // Картата на България и 0° винаги стоят изправени горе!
             return 0.0;
         }
 
         function getAzimuthCorrectionDeg() {
-            // Ако радарът на работа е по Магнитен Север, коригираме азимута на целите с -5.5°
             return useMagneticNorth ? -BG_MAGNETIC_DECLINATION : 0.0;
         }
 
@@ -397,13 +492,187 @@
         const planeRouteCache = {};
         const planeTrails = {};
 
-        let pinnedTargets = { 1: null, 2: null, 3: null, 4: null, 5: null, 6: null };
+        // ИНТЕЛИГЕНТНА СИСТЕМА ЗА ОПЕРАТИВНО ВОДЕНЕ НА 21 ЦЕЛИ (#1..#21 -> #22..#50+)
+        let pinnedTargets = {};
+        ALL_SLOTS.forEach(s => { pinnedTargets[s] = null; });
+        let highestTrackNumber = 0;
+
         try {
-            const savedPins = localStorage.getItem('radar_pinned_targets');
+            const savedPins = localStorage.getItem('radar_pinned_targets_21');
+            const savedCounter = localStorage.getItem('radar_highest_track_num_21');
             if (savedPins) {
-                pinnedTargets = JSON.parse(savedPins);
+                const parsed = JSON.parse(savedPins);
+                ALL_SLOTS.forEach(s => {
+                    pinnedTargets[s] = parsed[s] || null;
+                });
+            }
+            if (savedCounter) {
+                highestTrackNumber = parseInt(savedCounter, 10) || 0;
             }
         } catch (e) {}
+
+        function savePinState() {
+            try {
+                localStorage.setItem('radar_pinned_targets_21', JSON.stringify(pinnedTargets));
+                localStorage.setItem('radar_highest_track_num_21', String(highestTrackNumber));
+            } catch (e) {}
+        }
+
+        function checkAutoResetCounter() {
+            const anyActive = ALL_SLOTS.some(s => pinnedTargets[s] !== null);
+            if (!anyActive) {
+                highestTrackNumber = 0; // Когато всички 21 са размаркирани, почваме пак от #1 до #21!
+            }
+        }
+
+        function getPinDataForPlane(planeId) {
+            if (!planeId) return null;
+            for (let slot of ALL_SLOTS) {
+                if (pinnedTargets[slot] && pinnedTargets[slot].id === planeId) {
+                    return { slot: slot, trackNum: pinnedTargets[slot].trackNum };
+                }
+            }
+            return null;
+        }
+
+        function getNextTrackNumberForSlot(slot) {
+            if (highestTrackNumber < TOTAL_PIN_SLOTS) {
+                const usedNums = ALL_SLOTS.map(s => pinnedTargets[s] ? pinnedTargets[s].trackNum : 0);
+                if (!usedNums.includes(slot)) {
+                    highestTrackNumber = Math.max(highestTrackNumber, slot);
+                    return slot;
+                }
+            }
+            highestTrackNumber = highestTrackNumber + 1;
+            return highestTrackNumber;
+        }
+
+        window.togglePinSlot = function(slot, planeId) {
+            if (pinnedTargets[slot] && pinnedTargets[slot].id === planeId) {
+                pinnedTargets[slot] = null;
+                checkAutoResetCounter();
+            } else {
+                for (let s of ALL_SLOTS) {
+                    if (pinnedTargets[s] && pinnedTargets[s].id === planeId) {
+                        pinnedTargets[s] = null;
+                    }
+                }
+                checkAutoResetCounter();
+                const assignedTrackNum = getNextTrackNumberForSlot(slot);
+                pinnedTargets[slot] = {
+                    id: planeId,
+                    trackNum: assignedTrackNum
+                };
+            }
+
+            savePinState();
+            updatePinnedBarUI();
+            if (selectedPlaneId) {
+                const sel = planes.find(p => p.id === selectedPlaneId);
+                if (sel) updateInfoPanelHTML(sel);
+            }
+        };
+
+        // Умен бутон: Автоматично слага самолета в първия свободен слот (от 1 до 21) със следващия пореден номер
+        window.autoAssignNextTrack = function(planeId) {
+            const existing = getPinDataForPlane(planeId);
+            if (existing) {
+                pinnedTargets[existing.slot] = null;
+                checkAutoResetCounter();
+            } else {
+                let targetSlot = ALL_SLOTS.find(s => pinnedTargets[s] === null);
+                if (!targetSlot) {
+                    let oldestSlot = 1;
+                    let minTrack = 999999;
+                    for (let s of ALL_SLOTS) {
+                        if (pinnedTargets[s] && pinnedTargets[s].trackNum < minTrack) {
+                            minTrack = pinnedTargets[s].trackNum;
+                            oldestSlot = s;
+                        }
+                    }
+                    targetSlot = oldestSlot;
+                }
+                highestTrackNumber = highestTrackNumber + 1;
+                pinnedTargets[targetSlot] = {
+                    id: planeId,
+                    trackNum: highestTrackNumber
+                };
+            }
+
+            savePinState();
+            updatePinnedBarUI();
+            if (selectedPlaneId) {
+                const sel = planes.find(p => p.id === selectedPlaneId);
+                if (sel) updateInfoPanelHTML(sel);
+            }
+        };
+
+        window.resetAllTrackedTargets = function() {
+            ALL_SLOTS.forEach(s => { pinnedTargets[s] = null; });
+            highestTrackNumber = 0;
+            savePinState();
+            updatePinnedBarUI();
+            if (selectedPlaneId) {
+                const sel = planes.find(p => p.id === selectedPlaneId);
+                if (sel) updateInfoPanelHTML(sel);
+            }
+        };
+
+        window.selectPinnedTarget = function(slot) {
+            const slotObj = pinnedTargets[slot];
+            if (!slotObj || !slotObj.id) return;
+
+            const found = planes.find(p => p.id === slotObj.id);
+            if (found) {
+                selectedPlaneId = found.id;
+                overlappingCluster = [found];
+                clusterIndex = 0;
+                const panel = document.getElementById('infoPanel');
+                panel.style.display = 'block';
+                updateInfoPanelHTML(found);
+            } else {
+                pinnedTargets[slot] = null;
+                checkAutoResetCounter();
+                savePinState();
+                updatePinnedBarUI();
+            }
+        };
+
+        function updatePinnedBarUI() {
+            checkAutoResetCounter();
+            let activePinnedCount = 0;
+
+            for (let slot of ALL_SLOTS) {
+                const btn = document.getElementById(`pin-slot-${slot}`);
+                if (!btn) continue;
+
+                const slotObj = pinnedTargets[slot];
+                const p = (slotObj && slotObj.id) ? planes.find(pl => pl.id === slotObj.id) : null;
+
+                btn.classList.remove('filled', 'alert');
+
+                if (p && slotObj) {
+                    activePinnedCount++;
+                    btn.classList.add('filled');
+                    const isMil = p.callsign && p.callsign.includes('[ВОЕНЕН]');
+                    const sqkStatus = analyzeSquawkCode(p.squawk, isMil);
+                    if (sqkStatus && sqkStatus.level === 'emergency') {
+                        btn.classList.add('alert');
+                    }
+                    const cleanName = p.callsign.replace(' [ВОЕНЕН]', '');
+                    const labelSqk = (p.squawk && p.squawk !== '----') ? p.squawk : cleanName;
+                    btn.innerText = `🎯#${slotObj.trackNum}: ${labelSqk}`;
+                } else {
+                    btn.innerText = `Слот ${slot}: -`;
+                }
+            }
+
+            const nextNum = highestTrackNumber + 1;
+            const counterSpan = document.getElementById('trackCounterInfo');
+            if (counterSpan) {
+                counterSpan.innerText = `🎯 ВОДЕНИ: ${activePinnedCount}/${TOTAL_PIN_SLOTS} | Следв: #${nextNum}`;
+            }
+        }
 
         const RADISHEVO_LAT = 43.36763806288808;
         const RADISHEVO_LON = 24.66672222828328;
@@ -470,79 +739,6 @@
             if (s === '0020' || s === '0033') return { level: 'tactical', short: 'СПЕШЕН/ДЕСАНТ', desc: '🚁 Спешна медицинска мисия или Десант' };
 
             return null;
-        }
-
-        function getPinSlotForPlane(planeId) {
-            if (!planeId) return null;
-            for (let slot of [1, 2, 3, 4, 5, 6]) {
-                if (pinnedTargets[slot] === planeId) return slot;
-            }
-            return null;
-        }
-
-        window.togglePinSlot = function(slot, planeId) {
-            if (pinnedTargets[slot] === planeId) {
-                pinnedTargets[slot] = null;
-            } else {
-                for (let s of [1, 2, 3, 4, 5, 6]) {
-                    if (pinnedTargets[s] === planeId) pinnedTargets[s] = null;
-                }
-                pinnedTargets[slot] = planeId;
-            }
-
-            try {
-                localStorage.setItem('radar_pinned_targets', JSON.stringify(pinnedTargets));
-            } catch (e) {}
-
-            updatePinnedBarUI();
-            if (selectedPlaneId) {
-                const sel = planes.find(p => p.id === selectedPlaneId);
-                if (sel) updateInfoPanelHTML(sel);
-            }
-        };
-
-        window.selectPinnedTarget = function(slot) {
-            const targetId = pinnedTargets[slot];
-            if (!targetId) return;
-
-            const found = planes.find(p => p.id === targetId);
-            if (found) {
-                selectedPlaneId = found.id;
-                overlappingCluster = [found];
-                clusterIndex = 0;
-                const panel = document.getElementById('infoPanel');
-                panel.style.display = 'block';
-                updateInfoPanelHTML(found);
-            } else {
-                pinnedTargets[slot] = null;
-                updatePinnedBarUI();
-            }
-        };
-
-        function updatePinnedBarUI() {
-            for (let slot of [1, 2, 3, 4, 5, 6]) {
-                const btn = document.getElementById(`pin-slot-${slot}`);
-                if (!btn) continue;
-
-                const targetId = pinnedTargets[slot];
-                const p = targetId ? planes.find(pl => pl.id === targetId) : null;
-
-                btn.classList.remove('filled', 'alert');
-
-                if (p) {
-                    btn.classList.add('filled');
-                    const isMil = p.callsign && p.callsign.includes('[ВОЕНЕН]');
-                    const sqkStatus = analyzeSquawkCode(p.squawk, isMil);
-                    if (sqkStatus && sqkStatus.level === 'emergency') {
-                        btn.classList.add('alert');
-                    }
-                    const cleanName = p.callsign.replace(' [ВОЕНЕН]', '');
-                    const labelSqk = (p.squawk && p.squawk !== '----') ? p.squawk : cleanName;
-                    btn.innerText = `🎯#${slot}: ${labelSqk}`;
-                } else {
-                    btn.innerText = `🎯 ${slot}: -`;
-                }
-            }
         }
 
         function setScale(km) {
@@ -677,25 +873,112 @@
             };
         }
 
+        function isDirectMilitary(ac, isMilFeed) {
+            if (isMilFeed) return true;
+            if (ac.dbFlags && (ac.dbFlags & 1) === 1) return true;
+            const hex = String(ac.hex || '').toLowerCase().trim();
+            const cs = String(ac.flight || '').toUpperCase().trim();
+            const sqk = String(ac.squawk || '').trim();
+            const type = String(ac.t || '').toUpperCase().trim();
+
+            if (hex.startsWith('45f4') || hex.startsWith('ae') || hex.startsWith('af') || hex.startsWith('43c') || hex.startsWith('3f')) return true;
+            if (sqk === '7777' || sqk.startsWith('44') || sqk.startsWith('74')) return true;
+
+            const milCallsigns = ['BAF', 'BULAF', 'BGF', 'NATO', 'FORTE', 'LAGR', 'NCHO', 'JAKE', 'RCH', 'RRR', 'ASCOT', 'DUKE', 'VIPER', 'COBRA', 'HAWK', 'GAF', 'FAF', 'IAM', 'TUAF', 'HAF', 'ROAF', 'PLF', 'SAM', 'SPAR'];
+            for (let pref of milCallsigns) {
+                if (cs.startsWith(pref)) return true;
+            }
+
+            const milTypes = ['F16', 'C27J', 'C130', 'C30J', 'PC9', 'PC12', 'L39', 'MIG', 'SU25', 'AS32', 'UH60', 'CH47', 'MI8', 'MI17', 'MI24', 'KC135', 'K35R', 'E3TF', 'E3CF', 'B52', 'RQ4', 'MQ9', 'P8', 'C17', 'A400'];
+            for (let mt of milTypes) {
+                if (type.includes(mt)) return true;
+            }
+            return false;
+        }
+
+        async function fetchDirectFromBrowser() {
+            const urls = [
+                { url: `https://api.adsb.lol/v2/point/${myLat}/${myLon}/250`, mil: false },
+                { url: `https://api.adsb.lol/v2/mil`, mil: true },
+                { url: `https://opendata.adsb.fi/api/v2/lat/${myLat}/lon/${myLon}/dist/250`, mil: false }
+            ];
+
+            const results = await Promise.allSettled(
+                urls.map(u => fetch(u.url).then(r => r.ok ? r.json() : null).then(d => ({ data: d, mil: u.mil })))
+            );
+
+            const directMap = new Map();
+
+            results.forEach(res => {
+                if (res.status !== 'fulfilled' || !res.value || !res.value.data) return;
+                const list = res.value.data.ac || res.value.data.aircraft || [];
+                const isMilFeed = res.value.mil;
+
+                list.forEach(ac => {
+                    const lat = ac.lat ?? ac.latitude ?? null;
+                    const lon = ac.lon ?? ac.longitude ?? null;
+                    if (lat === null || lon === null) return;
+
+                    if (Math.abs(sub(lat, myLat)) > 4.5 || Math.abs(sub(lon, myLon)) > 6.0) return;
+
+                    const id = String(ac.hex || '').toLowerCase().trim();
+                    if (!id) return;
+
+                    const isMil = isDirectMilitary(ac, isMilFeed);
+                    let rawCs = String(ac.flight || '').trim();
+                    if (!rawCs) rawCs = id.toUpperCase();
+                    const callsign = isMil ? `${rawCs} [ВОЕНЕН]` : rawCs;
+
+                    const altFeet = ac.alt_baro ?? ac.alt_geom ?? 0;
+                    const altMeters = (typeof altFeet === 'number') ? Math.round(mul(altFeet, 0.3048)) : 0;
+                    const speedKnots = ac.gs ?? 0;
+                    const speedKmh = (typeof speedKnots === 'number') ? Math.round(mul(speedKnots, 1.852)) : 0;
+
+                    directMap.set(id, {
+                        id: id,
+                        callsign: callsign,
+                        lat: parseFloat(lat),
+                        lon: parseFloat(lon),
+                        track: parseFloat(ac.track ?? ac.true_heading ?? 0),
+                        altitude: altMeters,
+                        speed: speedKmh,
+                        squawk: String(ac.squawk || '----'),
+                        type: String(ac.t || ac.desc || 'Няма данни'),
+                        operator: String(ac.ownOp || (isMil ? 'Военновъздушни сили (ВВС)' : 'Граждански полет')),
+                        age: parseFloat(ac.seen_pos ?? ac.seen ?? 0.5)
+                    });
+                });
+            });
+
+            return Array.from(directMap.values());
+        }
+
         async function fetchPlanes() {
             if (isFetchingPlanes) return;
             isFetchingPlanes = true;
 
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 6000);
+            const timeoutId = setTimeout(() => controller.abort(), 9000);
 
             try {
-                const response = await fetch(`/api/planes?lat=${myLat}&lon=${myLon}`, {
-                    signal: controller.signal
-                });
-                clearTimeout(timeoutId);
-
-                if (!response.ok) {
-                    isFetchingPlanes = false;
-                    return;
+                let data = [];
+                try {
+                    const response = await fetch(`/api/planes?lat=${myLat}&lon=${myLon}`, {
+                        signal: controller.signal
+                    });
+                    if (response.ok) {
+                        data = await response.json();
+                    }
+                } catch (serverErr) {
+                    console.warn("Сървърът се забави, превключване към директен поток през телефона...");
                 }
 
-                const data = await response.json();
+                clearTimeout(timeoutId);
+
+                if (!Array.isArray(data) || data.length === 0) {
+                    data = await fetchDirectFromBrowser();
+                }
+
                 const now = Date.now();
 
                 if (Array.isArray(data) && data.length > 0) {
@@ -920,7 +1203,7 @@
             ctx.fillRect(0, 0, screenWidth, screenHeight);
 
             const cx = screenWidth / 2;
-            const cy = mul(screenHeight, 0.50);
+            const cy = mul(screenHeight, 0.53);
             const radius = Math.min(mul(screenWidth, 0.43), mul(screenHeight, 0.31));
 
             const now = Date.now();
@@ -962,8 +1245,8 @@
                 const bSel = (b.id === selectedPlaneId) ? 3 : 0;
                 if (aSel !== bSel) return sub(aSel, bSel);
 
-                const aPin = getPinSlotForPlane(a.id) ? 2 : 0;
-                const bPin = getPinSlotForPlane(b.id) ? 2 : 0;
+                const aPin = getPinDataForPlane(a.id) ? 2 : 0;
+                const bPin = getPinDataForPlane(b.id) ? 2 : 0;
                 if (aPin !== bPin) return sub(aPin, bPin);
 
                 const aMil = (a.callsign && a.callsign.includes('[ВОЕНЕН]')) ? 1 : 0;
@@ -993,7 +1276,7 @@
 
                 const isMilitary = plane.callsign && plane.callsign.includes('[ВОЕНЕН]');
                 const isSelected = (plane.id === selectedPlaneId);
-                const pinSlot = getPinSlotForPlane(plane.id);
+                const pinData = getPinDataForPlane(plane.id);
                 const sqkAlert = analyzeSquawkCode(plane.squawk, isMilitary);
 
                 visibleCount++;
@@ -1006,9 +1289,9 @@
                 plane.renderX = px;
                 plane.renderY = py;
 
-                const isDimmed = highlightMilitaryOnly && !isMilitary && !isSelected && !pinSlot;
+                const isDimmed = highlightMilitaryOnly && !isMilitary && !isSelected && !pinData;
 
-                if ((isSelected || pinSlot) && planeTrails[plane.id] && planeTrails[plane.id].length > 1) {
+                if ((isSelected || pinData) && planeTrails[plane.id] && planeTrails[plane.id].length > 1) {
                     ctx.save();
                     ctx.beginPath();
                     planeTrails[plane.id].forEach((pt, idx) => {
@@ -1017,7 +1300,7 @@
                         else ctx.lineTo(tXY.x, tXY.y);
                     });
                     ctx.lineTo(px, py);
-                    ctx.strokeStyle = pinSlot ? 'rgba(255, 0, 255, 0.7)' : 'rgba(0, 255, 255, 0.7)';
+                    ctx.strokeStyle = pinData ? 'rgba(255, 0, 255, 0.7)' : 'rgba(0, 255, 255, 0.7)';
                     ctx.lineWidth = 1.5 / scale;
                     ctx.stroke();
                     ctx.restore();
@@ -1035,7 +1318,7 @@
                     ctx.stroke();
                 }
 
-                if (pinSlot) {
+                if (pinData) {
                     const dSize = mul(13, iconScale);
                     ctx.beginPath();
                     ctx.moveTo(0, -dSize);
@@ -1076,7 +1359,7 @@
 
                 if (isDimmed) {
                     ctx.fillStyle = 'rgba(255, 204, 0, 0.18)';
-                } else if (pinSlot && !isMilitary) {
+                } else if (pinData && !isMilitary) {
                     ctx.fillStyle = '#ff66ff';
                 } else {
                     ctx.fillStyle = isMilitary ? '#ff2222' : '#ffcc00';
@@ -1100,11 +1383,11 @@
                 ctx.rotate(mul(-effectiveTrack, DEG_TO_RAD));
 
                 if (!isDimmed) {
-                    ctx.fillStyle = pinSlot ? '#ff77ff' : (isMilitary ? '#ff4444' : 'rgba(255, 215, 0, 0.9)');
-                    ctx.font = (isMilitary || pinSlot) ? 'bold 9.5px monospace' : 'bold 8.5px monospace';
+                    ctx.fillStyle = pinData ? '#ff77ff' : (isMilitary ? '#ff4444' : 'rgba(255, 215, 0, 0.9)');
+                    ctx.font = (isMilitary || pinData) ? 'bold 9.5px monospace' : 'bold 8.5px monospace';
                     ctx.textAlign = 'left';
 
-                    const pinPrefix = pinSlot ? `[#${pinSlot}] ` : '';
+                    const pinPrefix = pinData ? `[#${pinData.trackNum}] ` : '';
                     const hasSquawk = plane.squawk && plane.squawk !== '----';
                     const milSuffix = isMilitary ? ' [ВОЕНЕН]' : '';
                     const alertSuffix = (sqkAlert && sqkAlert.level === 'emergency') ? ` ⚠️${sqkAlert.short}` : '';
@@ -1212,7 +1495,29 @@
             }
 
             const currentRoute = planeRouteCache[p.id] || 'Търсене на маршрут...';
-            const currentPinSlot = getPinSlotForPlane(p.id);
+            const pinData = getPinDataForPlane(p.id);
+            const currentPinSlot = pinData ? pinData.slot : null;
+            const nextAutoNum = highestTrackNumber + 1;
+
+            const autoBtnText = pinData
+                ? `🎯 ВОДИ СЕ КАТО ЦЕЛ #${pinData.trackNum} (В СЛОТ ${pinData.slot}) — [СПРИ ВОДЕНЕ]`
+                : `➕ ВОДИ КАТО ЦЕЛ #${nextAutoNum} (АВТО-СЛОТ 1-21)`;
+
+            let slotButtonsHtml = '';
+            for (let s of ALL_SLOTS) {
+                const slotObj = pinnedTargets[s];
+                const isThisPlane = (currentPinSlot === s);
+                let btnLabel = `С${s}`;
+                let extraClass = '';
+                if (isThisPlane && slotObj) {
+                    btnLabel = `✓#${slotObj.trackNum}`;
+                    extraClass = 'active';
+                } else if (slotObj) {
+                    btnLabel = `${s}:#${slotObj.trackNum}`;
+                    extraClass = 'occupied';
+                }
+                slotButtonsHtml += `<button class="mark-btn ${extraClass}" onclick="togglePinSlot(${s}, '${p.id}')">${btnLabel}</button>`;
+            }
 
             panel.innerHTML = `
                 <div class="panel-top-actions">
@@ -1225,7 +1530,7 @@
                         ${planeSvg}
                     </div>
                     <div>
-                        <div style="font-size: 9.5px; color: ${color}; letter-spacing: 1px; font-weight: bold;">● ${badgeText}</div>
+                        <div style="font-size: 9.5px; color: ${color}; letter-spacing: 1px; font-weight: bold;">● ${badgeText} ${pinData ? `| 🎯 ЦЕЛ #${pinData.trackNum}` : ''}</div>
                         <div style="font-weight: bold; font-size: 14px; color: #fff; margin: 2px 0;">
                             📡 SQK: <span style="color:#00ffff;">${p.squawk || '----'}</span> &nbsp;|&nbsp; ✈ ${p.callsign}
                         </div>
@@ -1261,13 +1566,12 @@
                     </div>
                 </div>
 
+                <button class="auto-track-btn ${pinData ? 'active' : ''}" onclick="autoAssignNextTrack('${p.id}')">
+                    ${autoBtnText}
+                </button>
+
                 <div class="mark-targets-row">
-                    <button class="mark-btn ${currentPinSlot === 1 ? 'active' : ''}" onclick="togglePinSlot(1, '${p.id}')">🎯 ${currentPinSlot === 1 ? '#1 МАРК' : 'МАРК 1'}</button>
-                    <button class="mark-btn ${currentPinSlot === 2 ? 'active' : ''}" onclick="togglePinSlot(2, '${p.id}')">🎯 ${currentPinSlot === 2 ? '#2 МАРК' : 'МАРК 2'}</button>
-                    <button class="mark-btn ${currentPinSlot === 3 ? 'active' : ''}" onclick="togglePinSlot(3, '${p.id}')">🎯 ${currentPinSlot === 3 ? '#3 МАРК' : 'МАРК 3'}</button>
-                    <button class="mark-btn ${currentPinSlot === 4 ? 'active' : ''}" onclick="togglePinSlot(4, '${p.id}')">🎯 ${currentPinSlot === 4 ? '#4 МАРК' : 'МАРК 4'}</button>
-                    <button class="mark-btn ${currentPinSlot === 5 ? 'active' : ''}" onclick="togglePinSlot(5, '${p.id}')">🎯 ${currentPinSlot === 5 ? '#5 МАРК' : 'МАРК 5'}</button>
-                    <button class="mark-btn ${currentPinSlot === 6 ? 'active' : ''}" onclick="togglePinSlot(6, '${p.id}')">🎯 ${currentPinSlot === 6 ? '#6 МАРК' : 'МАРК 6'}</button>
+                    ${slotButtonsHtml}
                 </div>
             `;
 
@@ -1290,7 +1594,7 @@
 
             const rect = canvas.getBoundingClientRect();
             const cx = screenWidth / 2;
-            const cy = mul(screenHeight, 0.50);
+            const cy = mul(screenHeight, 0.53);
 
             const clickX = sub(sub(sub(e.clientX, rect.left), cx), panX) / scale + cx;
             const clickY = sub(sub(sub(e.clientY, rect.top), cy), panY) / scale + cy;
@@ -1301,7 +1605,7 @@
             for (let p of planes) {
                 if (p.dist > maxRangeKm || !p.renderX || !p.renderY) continue;
                 const isMilitary = p.callsign && p.callsign.includes('[ВОЕНЕН]');
-                const isPinned = getPinSlotForPlane(p.id) !== null;
+                const isPinned = getPinDataForPlane(p.id) !== null;
                 if (highlightMilitaryOnly && !isMilitary && !isPinned) continue;
 
                 const d = Math.hypot(sub(p.renderX, clickX), sub(p.renderY, clickY));

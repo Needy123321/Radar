@@ -6,13 +6,11 @@ use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
-use Symfony\Component\Routing\Annotation\Route;
+use Symfony\Component\Routing\Attribute\Route;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
-use Throwable;
 
 class RadarController extends AbstractController
 {
-    #[Route('/', name: 'app_home')]
     #[Route('/radar', name: 'app_radar')]
     public function index(): Response
     {
@@ -20,206 +18,195 @@ class RadarController extends AbstractController
     }
 
     #[Route('/api/planes', name: 'api_planes')]
-    public function getPlanes(Request $request, HttpClientInterface $httpClient): JsonResponse
+    public function getPlanes(Request $request, HttpClientInterface $client): JsonResponse
     {
-        $requestStartTime = microtime(true);
+        $myLat = (float) $request->query->get('lat', 43.367638);
+        $myLon = (float) $request->query->get('lon', 24.666722);
 
-        // Точни координати на базата в с. Радишево
-        $lat = (float) $request->query->get('lat', 43.36763806288808);
-        $lon = (float) $request->query->get('lon', 24.66672222828328);
+        // Защита от грешни координати (напр. от емулатор в САЩ)
+        if ($myLat < 35.0 || $myLat > 50.0 || $myLon < 15.0 || $myLon > 35.0) {
+            $myLat = 43.367638;
+            $myLon = 24.666722;
+        }
 
-        $minLat = $lat + (-4.5);
-        $maxLat = $lat + 4.5;
-        $minLon = $lon + (-5.5);
-        $maxLon = $lon + 5.5;
+        // 1. КЕШ СИСТЕМА ЗА МНОГО ПОТРЕБИТЕЛИ (пази данните за 5 секунди, за да не блокират Render)
+        $cacheFile = sys_get_temp_dir() . '/radar_shared_planes_cache.json';
+        if (file_exists($cacheFile) && (time() - filemtime($cacheFile)) < 5) {
+            $cachedContent = @file_get_contents($cacheFile);
+            if ($cachedContent) {
+                $decoded = json_decode($cachedContent, true);
+                if (is_array($decoded) && count($decoded) > 0) {
+                    return new JsonResponse($decoded);
+                }
+            }
+        }
 
-        $latStr = number_format($lat, 4, '.', '');
-        $lonStr = number_format($lon, 4, '.', '');
+        $planesMap = [];
 
-        $allPlanes = [];
+        $headers = [
+            'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept' => 'application/json',
+        ];
 
-        // Бързите и надеждни ADS-B агрегатори (отговарят за ~0.3 - 0.5 сек без лимити!)
-        // Радиус 250 морски мили (~460 км) покрива цяла България, Румъния, Сърбия, Гърция и Черно море
-        $adsbUrls = [
-            'ADSB.lol'       => "https://api.adsb.lol/v2/lat/{$latStr}/lon/{$lonStr}/dist/250",
-            'Airplanes.live' => "https://api.airplanes.live/v2/point/{$latStr}/{$lonStr}/250",
-            'ADSB.fi'        => "https://opendata.adsb.fi/api/v2/lat/{$latStr}/lon/{$lonStr}/dist/250",
-            'ADSB.lol-MIL'   => 'https://api.adsb.lol/v2/mil',
-            'Airplanes-MIL'  => 'https://api.airplanes.live/v2/mil',
-            'ADSB.fi-MIL'    => 'https://opendata.adsb.fi/api/v2/mil',
+        $endpoints = [
+            'adsb_lol_local'    => ['url' => "https://api.adsb.lol/v2/point/{$myLat}/{$myLon}/250", 'mil' => false],
+            'adsb_lol_mil'      => ['url' => "https://api.adsb.lol/v2/mil", 'mil' => true],
+            'adsb_fi_local'     => ['url' => "https://opendata.adsb.fi/api/v2/lat/{$myLat}/lon/{$myLon}/dist/250", 'mil' => false],
+            'adsb_fi_mil'       => ['url' => "https://opendata.adsb.fi/api/v2/mil", 'mil' => true],
+            'airplanes_local'   => ['url' => "https://api.airplanes.live/v2/point/{$myLat}/{$myLon}/250", 'mil' => false],
+            'airplanes_mil'     => ['url' => "https://api.airplanes.live/v2/mil", 'mil' => true],
         ];
 
         $responses = [];
-        foreach ($adsbUrls as $sourceName => $url) {
+        foreach ($endpoints as $key => $cfg) {
             try {
-                $responses[$sourceName] = $httpClient->request('GET', $url, [
-                    'timeout'      => 3.5,
-                    'max_duration' => 3.5,
-                    'headers'      => [
-                        'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0.0.0 Safari/537.36',
-                        'Accept'     => 'application/json',
-                    ],
-                ]);
-            } catch (Throwable $e) {}
+                $responses[$key] = [
+                    'response' => $client->request('GET', $cfg['url'], [
+                        'timeout' => 4.5,
+                        'max_duration' => 5.0,
+                        'headers' => $headers,
+                    ]),
+                    'mil' => $cfg['mil']
+                ];
+            } catch (\Throwable $e) {
+            }
         }
 
-        foreach ($adsbUrls as $src => $url) {
+        foreach ($responses as $key => $item) {
             try {
-                if (!isset($responses[$src]) || $responses[$src]->getStatusCode() !== 200) {
-                    continue;
+                if ($item['response']->getStatusCode() === 200) {
+                    $data = $item['response']->toArray(false);
+                    $list = $data['ac'] ?? $data['aircraft'] ?? [];
+                    $this->parseAdsbV2List($list, $planesMap, $myLat, $myLon, $item['mil']);
                 }
-
-                $dataAdsb = $responses[$src]->toArray(false);
-                $aircraftList = $dataAdsb['ac'] ?? $dataAdsb['aircraft'] ?? [];
-
-                if (!is_array($aircraftList)) {
-                    continue;
-                }
-
-                foreach ($aircraftList as $ac) {
-                    $icao = trim(strtolower($ac['hex'] ?? ''));
-                    $acLat = isset($ac['lat']) ? (float) $ac['lat'] : 0.0;
-                    $acLon = isset($ac['lon']) ? (float) $ac['lon'] : 0.0;
-
-                    if (!$icao || $acLat === 0.0 || $acLon === 0.0) {
-                        continue;
-                    }
-
-                    // За глобалните военни списъци филтрираме само Балканите и Черно море
-                    if ($acLat < $minLat || $acLat > $maxLat || $acLon < $minLon || $acLon > $maxLon) {
-                        continue;
-                    }
-
-                    $rawCallsign = trim($ac['flight'] ?? '');
-                    $typeCode = trim($ac['t'] ?? '');
-                    $desc = trim($ac['desc'] ?? '');
-                    $typeDesc = trim($typeCode . ($desc ? ' - ' . $desc : ''));
-                    $operator = trim($ac['ownOp'] ?? 'Неизвестен');
-                    $squawk = trim((string)($ac['squawk'] ?? ''));
-                    $dbFlags = (int) ($ac['dbFlags'] ?? 0);
-
-                    $isMilEndpoint = str_contains($src, 'MIL');
-                    $isFlaggedMil = ($dbFlags & 1) === 1;
-                    $isHeuristicMil = $this->isKnownMilitary($icao, $rawCallsign, $operator, $typeCode, $squawk);
-
-                    $isMilitary = $isMilEndpoint || $isFlaggedMil || $isHeuristicMil;
-
-                    $cleanCallsign = $rawCallsign ?: strtoupper($icao);
-                    if ($isMilitary && !str_contains($cleanCallsign, '[ВОЕНЕН]')) {
-                        $cleanCallsign .= ' [ВОЕНЕН]';
-                    }
-
-                    $altRaw = $ac['alt_baro'] ?? $ac['alt_geom'] ?? 0;
-                    $altitude = is_numeric($altRaw) ? round(((float) $altRaw) / 3.28084) : 0;
-
-                    $gsKnots = (float) ($ac['gs'] ?? 0);
-                    $speedKmh = round($gsKnots / 0.539957);
-                    $trackDeg = (float) ($ac['track'] ?? $ac['true_heading'] ?? $ac['mag_heading'] ?? 0);
-
-                    $posAge = isset($ac['seen_pos']) ? (float) $ac['seen_pos'] : (isset($ac['seen']) ? (float) $ac['seen'] : 0.8);
-                    if ($posAge < 0 || $posAge > 60) {
-                        $posAge = 0.8;
-                    }
-
-                    if (isset($allPlanes[$icao])) {
-                        $existingAge = (float) ($allPlanes[$icao]['age'] ?? 99.0);
-                        if ($posAge <= $existingAge + 1.0) {
-                            $allPlanes[$icao]['lat'] = $acLat;
-                            $allPlanes[$icao]['lon'] = $acLon;
-                            $allPlanes[$icao]['age'] = $posAge;
-                            if ($speedKmh > 0) $allPlanes[$icao]['speed'] = $speedKmh;
-                            if ($trackDeg > 0) $allPlanes[$icao]['track'] = $trackDeg;
-                            if ($altitude > 0) $allPlanes[$icao]['altitude'] = $altitude;
-                        }
-                        if (($allPlanes[$icao]['squawk'] ?? '----') === '----' && $squawk !== '') {
-                            $allPlanes[$icao]['squawk'] = $squawk;
-                        }
-                        if ($isMilitary && !str_contains($allPlanes[$icao]['callsign'], '[ВОЕНЕН]')) {
-                            $allPlanes[$icao]['callsign'] = $cleanCallsign;
-                        }
-                        if (($allPlanes[$icao]['type'] === 'Неизвестен' || $allPlanes[$icao]['type'] === 'Военен обект') && $typeDesc) {
-                            $allPlanes[$icao]['type'] = $typeDesc;
-                        }
-                        if (($allPlanes[$icao]['operator'] === 'Неизвестен' || $allPlanes[$icao]['operator'] === 'Военновъздушни сили') && $operator !== 'Неизвестен') {
-                            $allPlanes[$icao]['operator'] = $operator;
-                        }
-                    } else {
-                        $allPlanes[$icao] = [
-                            'id'       => $icao,
-                            'squawk'   => $squawk ?: '----',
-                            'callsign' => $cleanCallsign,
-                            'lat'      => $acLat,
-                            'lon'      => $acLon,
-                            'altitude' => $altitude,
-                            'speed'    => $speedKmh,
-                            'track'    => $trackDeg,
-                            'age'      => $posAge,
-                            'source'   => $src,
-                            'type'     => $typeDesc ?: ($isMilitary ? 'Военен обект' : 'Неизвестен'),
-                            'operator' => ($operator !== 'Неизвестен') ? $operator : ($isMilitary ? 'Военновъздушни сили' : 'Неизвестен')
-                        ];
-                    }
-                }
-            } catch (Throwable $e) {}
+            } catch (\Throwable $e) {
+                continue;
+            }
         }
 
-        $fetchDuration = max(0.0, microtime(true) + (-$requestStartTime));
-        foreach ($allPlanes as &$p) {
-            $p['age'] = round(($p['age'] ?? 0.8) + $fetchDuration, 2);
-        }
-        unset($p);
+        $finalPlanes = array_values($planesMap);
 
-        return new JsonResponse(array_values($allPlanes));
+        // Записваме в общия кеш, ако сме получили самолети
+        if (count($finalPlanes) > 0) {
+            @file_put_contents($cacheFile, json_encode($finalPlanes));
+        }
+
+        return new JsonResponse($finalPlanes);
     }
 
-    private function isKnownMilitary(string $icao, string $callsign, string $operator, string $typeCode, string $squawk = ''): bool
+    private function parseAdsbV2List(array $aircraftList, array &$planesMap, float $myLat, float $myLon, bool $isMilitaryFeed): void
     {
-        $hex = strtolower(trim($icao));
-        $cs  = strtoupper(trim($callsign));
-        $op  = strtoupper(trim($operator));
-        $tp  = strtoupper(trim($typeCode));
+        foreach ($aircraftList as $ac) {
+            $lat = $ac['lat'] ?? $ac['latitude'] ?? null;
+            $lon = $ac['lon'] ?? $ac['longitude'] ?? null;
 
-        $milHexPrefixes = ['45f4', 'adf', 'ae', 'af', '43c', '3b', '3f', '4d03', '4781', '480', '33f', '4b82'];
-        foreach ($milHexPrefixes as $hPrefix) {
-            if (str_starts_with($hex, $hPrefix)) return true;
+            if ($lat === null || $lon === null) {
+                continue;
+            }
+
+            if (abs($lat - $myLat) > 4.5 || abs($lon - $myLon) > 6.0) {
+                continue;
+            }
+
+            $id = strtolower(trim((string) ($ac['hex'] ?? '')));
+            if ($id === '') {
+                continue;
+            }
+
+            $dbFlags = (int) ($ac['dbFlags'] ?? 0);
+            $rawCallsign = trim((string) ($ac['flight'] ?? $ac['call'] ?? ''));
+            $squawk = (string) ($ac['squawk'] ?? '----');
+            $aircraftType = trim((string) ($ac['t'] ?? $ac['type'] ?? ''));
+            $desc = trim((string) ($ac['desc'] ?? ''));
+            $operator = trim((string) ($ac['ownOp'] ?? $ac['op'] ?? ''));
+
+            $isMil = $isMilitaryFeed
+                || (($dbFlags & 1) === 1)
+                || $this->isKnownMilitary($id, $rawCallsign, $squawk, $aircraftType, $operator);
+
+            $displayCallsign = $rawCallsign !== '' ? $rawCallsign : strtoupper($id);
+            if ($isMil && !str_contains($displayCallsign, '[ВОЕНЕН]')) {
+                $displayCallsign .= ' [ВОЕНЕН]';
+            }
+
+            $altBaro = $ac['alt_baro'] ?? $ac['alt_geom'] ?? $ac['alt'] ?? 0;
+            $altitudeMeters = is_numeric($altBaro) ? (int) round(((float) $altBaro) * 0.3048) : 0;
+
+            $gsKnots = (float) ($ac['gs'] ?? $ac['spd'] ?? 0);
+            $speedKmh = (int) round($gsKnots * 1.852);
+
+            $track = (float) ($ac['track'] ?? $ac['true_heading'] ?? $ac['mag_heading'] ?? 0);
+            $seenPos = (float) ($ac['seen_pos'] ?? $ac['seen'] ?? 0.5);
+
+            $existing = $planesMap[$id] ?? null;
+
+            $typeLabel = $desc !== '' ? $desc : ($aircraftType !== '' ? $aircraftType : ($existing['type'] ?? 'Няма данни'));
+            $opLabel = $operator !== '' ? $operator : ($existing['operator'] ?? ($isMil ? 'Военновъздушни сили (ВВС)' : 'Граждански полет'));
+
+            if ($existing && str_contains($existing['callsign'], '[ВОЕНЕН]') && !str_contains($displayCallsign, '[ВОЕНЕН]')) {
+                $displayCallsign .= ' [ВОЕНЕН]';
+            }
+
+            $planesMap[$id] = [
+                'id'       => $id,
+                'callsign' => $displayCallsign,
+                'lat'      => (float) $lat,
+                'lon'      => (float) $lon,
+                'track'    => $track,
+                'altitude' => $altitudeMeters,
+                'speed'    => $speedKmh,
+                'squawk'   => $squawk !== '' ? $squawk : ($existing['squawk'] ?? '----'),
+                'type'     => $typeLabel,
+                'operator' => $opLabel,
+                'age'      => min($seenPos, 15.0),
+            ];
+        }
+    }
+
+    private function isKnownMilitary(string $hex, string $callsign, string $squawk, string $type, string $operator): bool
+    {
+        $hex = strtolower($hex);
+        $cs = strtoupper($callsign);
+        $type = strtoupper($type);
+        $op = strtoupper($operator);
+
+        if (str_starts_with($hex, '45f4') || str_starts_with($hex, 'ae') || str_starts_with($hex, 'af') || str_starts_with($hex, '43c') || str_starts_with($hex, '3f')) {
+            return true;
+        }
+
+        if ($squawk === '7777' || str_starts_with($squawk, '44') || str_starts_with($squawk, '74')) {
+            return true;
         }
 
         $milPrefixes = [
-            'BAF', 'BULAF', 'ROF', 'RCH', 'REACH', 'NATO', 'MAGIC', 'FORTE',
-            'LAGR', 'NCHO', 'QUID', 'PACK', 'GOLD', 'CLEAN', 'HOMER', 'JAKE',
-            'OLIVE', 'COBRA', 'SNUCK', 'DUKE', 'YANK', 'ARTEMIS', 'BRIO',
-            'VIPER', 'VENOM', 'HAWK', 'FALCON', 'EAGLE', 'TIGER', 'WOLF', 'JEDI', 'REAPER',
-            'RRR', 'ASCOT', 'TARTAN', 'LOSSIE', 'IAM', 'GAF', 'FAF', 'CTM', 'FNY',
-            'PLF', 'HUF', 'BART', 'TUAF', 'HVK', 'TCB', 'HAF', 'HRZ', 'SVK', 'SQF',
-            'CEF', 'SUI', 'MMF', 'CNV', 'VV', 'PAT', 'ARMY', 'EVAC', 'MEDEVAC', 'RESCUE', 'SAR'
+            'BAF', 'BULAF', 'BGF', 'NATO', 'FORTE', 'LAGR', 'NCHO', 'JAKE', 'RCH', 'RRR',
+            'ASCOT', 'DUKE', 'HKY', 'HERKY', 'SPARTAN', 'VIPER', 'COBRA', 'HAWK', 'PANTHER',
+            'GAF', 'FAF', 'CTM', 'IAM', 'AME', 'TUAF', 'HAF', 'ROAF', 'PLF', 'FNY', 'MMF',
+            'CNV', 'PAT', 'EVAC', 'SAM', 'SPAR', 'BALL', 'HOBO', 'SNTRY', 'DARK'
         ];
         foreach ($milPrefixes as $prefix) {
-            if ($cs !== '' && str_starts_with($cs, $prefix)) return true;
-        }
-
-        $milKeywords = [
-            'AIR FORCE', 'MILITARY', 'NAVY', 'ARMY', 'NATO', 'DEFENCE', 'DEFENSE',
-            'ВВС', 'MARINE', 'GUARD', 'SQUADRON', 'LUFTWAFFE', 'ARMÉE', 'AERONAUTICA',
-            'FORTELE AERIENE', 'GOVERNMENT', 'STATE', 'POLICE', 'BORDER'
-        ];
-        foreach ($milKeywords as $kw) {
-            if ($op !== '' && str_contains($op, $kw)) return true;
+            if ($cs !== '' && str_starts_with($cs, $prefix)) {
+                return true;
+            }
         }
 
         $milTypes = [
-            'C27J', 'C130', 'C30J', 'C17', 'C5M', 'A400', 'AN12', 'AN26', 'AN32', 'IL76',
-            'K35R', 'K35E', 'KC46', 'A332', 'CN35', 'C295', 'L410', 'C12', 'BE20', 'P180',
-            'F16', 'F35', 'F15', 'F18', 'FA18', 'EUFI', 'RFAL', 'TORN', 'JAS39', 'SB39',
-            'MIG21', 'MG29', 'SU24', 'SU25', 'SU27', 'SU30', 'L39', 'PC9', 'PC21', 'T6', 'M346',
-            'E3TF', 'E3CF', 'E737', 'R135', 'E8', 'E6', 'P8', 'P3', 'CL60', 'GLF5', 'GLEX',
-            'Q4', 'RQ4', 'MQ9', 'Q9', 'TB2', 'HERON',
-            'AS32', 'AS52', 'EC25', 'H215', 'UH60', 'S70', 'AH64', 'CH47', 'H47',
-            'MI8', 'MI17', 'MI24', 'MI35', 'BELL', 'B206', 'NH90', 'AW139', 'AW149', 'KA27', 'KA52', 'V22'
+            'F16', 'C27J', 'C130', 'C30J', 'PC9', 'PC12', 'L39', 'MIG29', 'MG29', 'SU25',
+            'AS32', 'AS65', 'BELL', 'UH60', 'H60', 'CH47', 'MI8', 'MI17', 'MI24',
+            'KC135', 'K35R', 'KC46', 'A332', 'A400', 'C17', 'E3TF', 'E3CF', 'E737',
+            'P8', 'EP3', 'RC135', 'R135', 'RQ4', 'MQ9', 'B52', 'F15', 'F18', 'F35', 'TYPH', 'EUFI', 'RAFL'
         ];
-        if ($tp !== '' && in_array($tp, $milTypes, true)) return true;
+        foreach ($milTypes as $mt) {
+            if ($type !== '' && str_contains($type, $mt)) {
+                return true;
+            }
+        }
 
-        if ($squawk !== '' && (str_starts_with($squawk, '44') || str_starts_with($squawk, '74') || $squawk === '7777')) {
-            return true;
+        $milOpKeywords = ['AIR FORCE', 'MILITARY', 'NAVY', 'ARMY', 'NATO', 'DEFENCE', 'DEFENSE', 'LUFTWAFFE', 'GUARD', 'ВВС'];
+        foreach ($milOpKeywords as $kw) {
+            if ($op !== '' && str_contains($op, $kw)) {
+                return true;
+            }
         }
 
         return false;
