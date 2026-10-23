@@ -8,7 +8,7 @@
     <style>
         :root {
             --neon: #00ff66;
-            --neon-bg: rgba(6, 18, 10, 0.92);
+            --neon-bg: rgba(6, 18, 10, 0.90);
             --mil-red: #ff2222;
             --plane-yellow: #ffdd00;
             --warn-amber: #ffaa00;
@@ -59,50 +59,63 @@
             pointer-events: none;
         }
 
+        /* Оптимизиран горен панел за Android (избягва статус бара/камерата) */
         .top-hud {
             position: fixed;
-            top: 8px;
-            left: 8px;
-            right: 8px;
+            top: max(6px, env(safe-area-inset-top, 24px));
+            left: 6px;
+            right: 6px;
             display: flex;
             flex-direction: column;
-            gap: 5px;
+            gap: 4px;
             z-index: 100;
             pointer-events: none;
         }
 
+        @media (max-width: 600px) {
+            .top-hud {
+                top: 28px;
+            }
+        }
+
         .hud-row {
             display: flex;
-            flex-wrap: wrap;
-            justify-content: space-between;
-            align-items: center;
-            gap: 6px;
+            flex-direction: column;
+            gap: 4px;
             background: var(--neon-bg);
-            border: 1px solid rgba(0, 255, 102, 0.55);
-            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.65);
-            padding: 6px 10px;
-            border-radius: 7px;
+            border: 1px solid rgba(0, 255, 102, 0.5);
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.65);
+            padding: 5px 8px;
+            border-radius: 6px;
             pointer-events: auto;
-            backdrop-filter: blur(6px);
+            backdrop-filter: blur(5px);
         }
 
         .status-header {
             display: flex;
             flex-wrap: wrap;
+            justify-content: space-between;
             align-items: center;
-            gap: 10px;
-            font-size: 12px;
+            gap: 6px;
+            font-size: 11px;
             font-weight: bold;
             color: #eafff0;
+        }
+
+        .status-left, .status-right {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
         }
 
         .live-badge {
             display: inline-flex;
             align-items: center;
-            gap: 5px;
-            padding: 2px 7px;
+            gap: 4px;
+            padding: 1px 6px;
             border-radius: 4px;
-            font-size: 11px;
+            font-size: 10px;
             background: rgba(0, 255, 102, 0.2);
             border: 1px solid var(--neon);
             color: var(--neon);
@@ -115,30 +128,31 @@
         }
 
         .live-dot {
-            width: 7px;
-            height: 7px;
+            width: 6px;
+            height: 6px;
             border-radius: 50%;
             background: var(--neon);
-            box-shadow: 0 0 8px var(--neon);
+            box-shadow: 0 0 6px var(--neon);
         }
 
-        .loc-bar {
+        .controls-compact-bar {
             display: flex;
             flex-wrap: wrap;
             align-items: center;
-            gap: 5px;
+            gap: 4px;
         }
 
         .radar-btn {
             background: rgba(12, 32, 18, 0.92);
             color: #dfffee;
             border: 1px solid rgba(0, 255, 102, 0.5);
-            padding: 5px 8px;
-            font-size: 11px;
+            padding: 3px 6px;
+            font-size: 10px;
             font-weight: bold;
-            border-radius: 5px;
+            border-radius: 4px;
             cursor: pointer;
             transition: all 0.15s ease;
+            white-space: nowrap;
         }
 
         .radar-btn:hover { background: rgba(0, 255, 102, 0.25); }
@@ -147,7 +161,7 @@
             background: var(--neon);
             color: #031a0b;
             border-color: var(--neon);
-            box-shadow: 0 0 10px rgba(0, 255, 102, 0.5);
+            box-shadow: 0 0 8px rgba(0, 255, 102, 0.4);
         }
 
         .radar-btn.loc-btn {
@@ -159,7 +173,7 @@
             background: #00e5ff;
             color: #001a22;
             border-color: #00e5ff;
-            box-shadow: 0 0 10px rgba(0, 229, 255, 0.6);
+            box-shadow: 0 0 8px rgba(0, 229, 255, 0.5);
         }
 
         .radar-btn.mil-btn {
@@ -170,7 +184,7 @@
         .radar-btn.mil-btn.active {
             background: var(--mil-red);
             color: #fff;
-            box-shadow: 0 0 10px rgba(255, 34, 34, 0.6);
+            box-shadow: 0 0 8px rgba(255, 34, 34, 0.5);
         }
 
         .radar-btn.amber-btn {
@@ -181,7 +195,7 @@
         .radar-btn.amber-btn.active {
             background: var(--warn-amber);
             color: #1a0f00;
-            box-shadow: 0 0 10px rgba(255, 170, 0, 0.6);
+            box-shadow: 0 0 8px rgba(255, 170, 0, 0.5);
         }
 
         #btn-gyro {
@@ -192,18 +206,19 @@
         #btn-gyro.active {
             background: #00ffff;
             color: #000;
-            box-shadow: 0 0 12px #00ffff;
+            box-shadow: 0 0 10px #00ffff;
         }
 
+        /* Компактна лента за маркирани цели */
         .pinned-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            font-size: 11px;
-            background: rgba(25, 0, 35, 0.92);
-            padding: 4px 8px;
-            border-radius: 6px;
-            border: 1px solid rgba(255, 0, 255, 0.5);
+            font-size: 10.5px;
+            background: rgba(25, 0, 35, 0.90);
+            padding: 3px 8px;
+            border-radius: 5px;
+            border: 1px solid rgba(255, 0, 255, 0.45);
             color: #ff99ff;
             pointer-events: auto;
             font-weight: bold;
@@ -213,9 +228,9 @@
             background: rgba(75, 0, 90, 0.9);
             border: 1px solid #ff33cc;
             color: #ffccff;
-            font-size: 10px;
+            font-size: 9.5px;
             font-weight: bold;
-            padding: 3px 8px;
+            padding: 2px 6px;
             border-radius: 4px;
             cursor: pointer;
         }
@@ -226,34 +241,33 @@
             color: #ffffff;
         }
 
+        /* Слотовете са скрити по подразбиране, за да не закриват картата! */
         .pinned-bar {
-            display: grid;
+            display: none;
             grid-template-columns: repeat(3, 1fr);
-            gap: 4px;
+            gap: 3px;
             pointer-events: auto;
-            max-height: 54px;
+            max-height: 135px;
             overflow-y: auto;
-            padding-right: 2px;
-            transition: max-height 0.2s ease;
+            background: rgba(12, 0, 18, 0.92);
+            padding: 4px;
+            border: 1px solid rgba(255, 0, 255, 0.45);
+            border-radius: 5px;
         }
 
         .pinned-bar.expanded {
-            max-height: 195px;
-            background: rgba(12, 0, 18, 0.94);
-            padding: 5px;
-            border: 1px solid rgba(255, 0, 255, 0.5);
-            border-radius: 6px;
+            display: grid;
         }
 
         .pin-slot {
             background: rgba(25, 0, 35, 0.88);
-            border: 1px dashed rgba(255, 0, 255, 0.45);
+            border: 1px dashed rgba(255, 0, 255, 0.4);
             color: #cc88cc;
-            padding: 4px 6px;
+            padding: 3px 4px;
             font-family: monospace;
-            font-size: 10.5px;
+            font-size: 9.5px;
             font-weight: bold;
-            border-radius: 4px;
+            border-radius: 3px;
             cursor: pointer;
             text-align: center;
             white-space: nowrap;
@@ -265,59 +279,48 @@
             background: rgba(75, 0, 95, 0.96);
             border: 1px solid #ff00ff;
             color: #ffffff;
-            box-shadow: 0 0 8px rgba(255, 0, 255, 0.4);
-        }
-
-        .pin-slot.alert {
-            background: rgba(150, 0, 0, 0.96);
-            border-color: #ff0000;
-            color: #ffff00;
-            animation: blinkAlert 0.7s infinite alternate;
-        }
-
-        @keyframes blinkAlert {
-            from { box-shadow: 0 0 4px #ff0000; }
-            to { box-shadow: 0 0 16px #ff0000; background: rgba(200, 0, 0, 1); }
+            box-shadow: 0 0 6px rgba(255, 0, 255, 0.4);
         }
 
         .map-side-controls {
             position: fixed;
-            right: 12px;
-            top: 55%;
+            right: 8px;
+            top: 52%;
             transform: translateY(-50%);
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 6px;
             z-index: 100;
         }
 
         .circle-btn {
-            width: 42px;
-            height: 42px;
+            width: 36px;
+            height: 36px;
             border-radius: 50%;
-            background: rgba(20, 30, 24, 0.9);
+            background: rgba(20, 30, 24, 0.88);
             border: 1px solid rgba(0, 255, 102, 0.5);
             color: #fff;
-            font-size: 20px;
+            font-size: 18px;
             display: flex;
             align-items: center;
             justify-content: center;
             cursor: pointer;
-            box-shadow: 0 3px 10px rgba(0,0,0,0.6);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.6);
         }
 
         /* МАШИНА НА ВРЕМЕТО (ИСТОРИЯ ПАНЕЛ) */
         #timeMachineDock {
             position: fixed;
-            bottom: 70px;
-            right: 14px;
-            width: 420px;
-            max-width: calc(100vw - 28px);
-            background: rgba(18, 12, 8, 0.96);
-            border: 2px solid var(--warn-amber);
-            box-shadow: 0 6px 25px rgba(0, 0, 0, 0.85);
-            border-radius: 9px;
-            padding: 10px 12px;
+            bottom: 50px;
+            right: 8px;
+            left: 8px;
+            max-width: 400px;
+            margin: 0 auto;
+            background: rgba(18, 12, 8, 0.95);
+            border: 1.5px solid var(--warn-amber);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.85);
+            border-radius: 8px;
+            padding: 8px 10px;
             z-index: 210;
             display: none;
             backdrop-filter: blur(8px);
@@ -327,8 +330,8 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 8px;
-            font-size: 12px;
+            margin-bottom: 6px;
+            font-size: 11px;
             color: var(--warn-amber);
             font-weight: bold;
         }
@@ -336,8 +339,8 @@
         .tm-slider-wrap {
             display: flex;
             align-items: center;
-            gap: 8px;
-            margin-bottom: 10px;
+            gap: 6px;
+            margin-bottom: 8px;
         }
 
         #historySlider {
@@ -350,48 +353,48 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            gap: 6px;
+            gap: 5px;
         }
 
-        /* ДОЛЕН ИНФОРМАЦИОНЕН ПАНЕЛ ЗА САМОЛЕТА */
+        /* КОМПАКТЕН ДОЛЕН ПАНЕЛ ЗА САМОЛЕТА (пази бутоните на Андроид) */
         #infoPanel {
             position: fixed;
-            bottom: 14px;
-            left: 14px;
-            background: rgba(4, 18, 9, 0.97);
-            border: 2px solid var(--neon);
-            box-shadow: 0 0 25px rgba(0, 255, 68, 0.45);
-            padding: 10px 12px;
-            border-radius: 8px;
+            bottom: max(42px, env(safe-area-inset-bottom, 42px));
+            left: 8px;
+            right: 8px;
+            background: rgba(4, 18, 9, 0.95);
+            border: 1.5px solid var(--neon);
+            box-shadow: 0 0 18px rgba(0, 255, 68, 0.4);
+            padding: 7px 9px;
+            border-radius: 7px;
             display: none;
-            width: 95%;
-            max-width: 440px;
-            font-size: 12px;
+            max-width: 420px;
+            font-size: 11px;
             z-index: 200;
         }
 
         #infoPanel.mil-panel {
             border-color: var(--mil-red);
-            box-shadow: 0 0 25px rgba(255, 34, 34, 0.55);
+            box-shadow: 0 0 18px rgba(255, 34, 34, 0.5);
         }
 
         .plane-card-header {
             display: flex;
             align-items: center;
-            border-bottom: 1px solid rgba(0, 255, 0, 0.3);
-            padding-bottom: 6px;
-            margin-bottom: 6px;
-            gap: 10px;
-            padding-right: 40px;
+            border-bottom: 1px solid rgba(0, 255, 0, 0.25);
+            padding-bottom: 5px;
+            margin-bottom: 5px;
+            gap: 8px;
+            padding-right: 32px;
         }
 
         .plane-photo-box {
-            width: 86px;
-            height: 56px;
-            min-width: 86px;
+            width: 68px;
+            height: 44px;
+            min-width: 68px;
             background: radial-gradient(circle, rgba(0,60,0,0.6) 0%, rgba(0,15,0,0.95) 100%);
             border: 1px solid var(--neon);
-            border-radius: 6px;
+            border-radius: 5px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -407,11 +410,11 @@
 
         .route-banner {
             background: rgba(0, 50, 40, 0.7);
-            border: 1px solid rgba(0, 255, 200, 0.4);
-            padding: 4px 7px;
+            border: 1px solid rgba(0, 255, 200, 0.35);
+            padding: 3px 6px;
             border-radius: 4px;
-            margin-bottom: 6px;
-            font-size: 11px;
+            margin-bottom: 5px;
+            font-size: 10px;
             color: #00ffcc;
             font-weight: bold;
         }
@@ -419,40 +422,45 @@
         .info-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 5px 8px;
+            gap: 4px 6px;
         }
 
         .info-item {
             background: rgba(0, 255, 0, 0.07);
-            padding: 5px 7px;
+            padding: 3px 6px;
             border-radius: 4px;
-            border-left: 3px solid var(--neon);
+            border-left: 2.5px solid var(--neon);
         }
 
         .info-label {
-            font-size: 9.5px;
+            font-size: 8.5px;
             color: #88cc99;
             text-transform: uppercase;
             display: block;
         }
 
         .info-val {
-            font-size: 12px;
+            font-size: 11px;
             color: #ffffff;
             font-weight: bold;
         }
 
+        .card-actions-row {
+            display: flex;
+            gap: 5px;
+            margin-top: 5px;
+        }
+
         .auto-track-btn {
-            width: 100%;
-            margin-top: 7px;
+            flex: 1;
             background: rgba(75, 0, 95, 0.95);
             border: 1px solid #ff00ff;
             color: #ffffff;
             font-family: monospace;
-            font-size: 11.5px;
+            font-size: 10.5px;
             font-weight: bold;
-            padding: 7px;
-            border-radius: 5px;
+            padding: 5px;
+            border-radius: 4px;
             cursor: pointer;
             text-align: center;
         }
@@ -460,16 +468,32 @@
         .auto-track-btn.active {
             background: #ff00ff;
             color: #000;
-            box-shadow: 0 0 12px #ff00ff;
+            box-shadow: 0 0 10px #ff00ff;
+        }
+
+        .toggle-card-slots-btn {
+            background: rgba(35, 0, 45, 0.9);
+            border: 1px solid #cc00cc;
+            color: #ffccff;
+            font-size: 10px;
+            font-weight: bold;
+            padding: 5px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            white-space: nowrap;
         }
 
         .mark-targets-row {
-            display: grid;
+            display: none;
             grid-template-columns: repeat(7, 1fr);
-            gap: 3px;
-            margin-top: 6px;
-            padding-top: 5px;
+            gap: 2.5px;
+            margin-top: 5px;
+            padding-top: 4px;
             border-top: 1px solid rgba(0, 255, 0, 0.25);
+        }
+
+        .mark-targets-row.open {
+            display: grid;
         }
 
         .mark-btn {
@@ -477,9 +501,9 @@
             border: 1px solid #cc00cc;
             color: #ff77ff;
             font-family: monospace;
-            font-size: 9.5px;
+            font-size: 9px;
             font-weight: bold;
-            padding: 4px 1px;
+            padding: 3px 1px;
             border-radius: 3px;
             cursor: pointer;
         }
@@ -497,19 +521,19 @@
 
         .panel-top-actions {
             position: absolute;
-            top: 8px;
-            right: 10px;
+            top: 6px;
+            right: 8px;
             display: flex;
-            gap: 5px;
+            gap: 4px;
         }
 
         .action-btn {
             background: rgba(0, 40, 0, 0.85);
             border: 1px solid #0f0;
             color: #0f0;
-            font-size: 12px;
+            font-size: 11px;
             font-weight: bold;
-            padding: 3px 8px;
+            padding: 2px 6px;
             border-radius: 4px;
             cursor: pointer;
         }
@@ -522,51 +546,50 @@
 <div id="terrainMap"></div>
 <canvas id="radarCanvas"></canvas>
 
-<!-- ГОРЕН ТАКТИЧЕСКИ ПАНЕЛ -->
+<!-- КОМПАКТЕН ГОРЕН ТАКТИЧЕСКИ ПАНЕЛ -->
 <div class="top-hud">
     <div class="hud-row">
         <div class="status-header">
-            <span id="modeBadge" class="live-badge">
-                <span class="live-dot"></span>
-                <span id="modeText">LIVE</span>
-            </span>
-            <span id="gpsText" style="color:#00e5ff;">📍 БАЗА: с. Радишево</span>
-            <span>ЦЕЛИ: <strong id="planesCount" style="color:#ffdd00;">0</strong></span>
-            <span>ВОЕННИ: <strong id="milCount" style="color:#ff4444;">0</strong></span>
-            <span id="clockDisplay">--:--:--</span>
+            <div class="status-left">
+                <span id="modeBadge" class="live-badge">
+                    <span class="live-dot"></span>
+                    <span id="modeText">LIVE</span>
+                </span>
+                <span id="gpsText" style="color:#00e5ff;">📍 с. Радишево</span>
+            </div>
+            <div class="status-right">
+                <span>ЦЕЛИ: <strong id="planesCount" style="color:#ffdd00;">0</strong></span>
+                <span>ВОЕННИ: <strong id="milCount" style="color:#ff4444;">0</strong></span>
+                <span id="clockDisplay">--:--:--</span>
+            </div>
         </div>
 
-        <div class="loc-bar">
+        <!-- Всички бутони събрани компактно (без Център карта, БГ Граница и Червен лъч) -->
+        <div class="controls-compact-bar">
             <button class="radar-btn loc-btn active" id="locRadishevo" onclick="setBaseLocation(43.3676, 24.6667, 'с. Радишево', 'locRadishevo')">📍 РАДИШЕВО</button>
             <button class="radar-btn loc-btn" id="locPleven" onclick="setBaseLocation(43.4170, 24.6067, 'гр. Плевен', 'locPleven')">📍 ПЛЕВЕН</button>
             <button class="radar-btn loc-btn" id="locEmona" onclick="setBaseLocation(42.7136, 27.8986, 'нос ЕМОНА', 'locEmona')">🌊 ЕМОНА</button>
-            <button class="radar-btn loc-btn" id="locGps" onclick="activateRealGps()">📡 АВТО GPS</button>
-            <button class="radar-btn loc-btn" id="locCenter" onclick="setBaseFromMapCenter()" title="Вземи центъра на картата за твоя база">🎯 ЦЕНТЪР КАРТА</button>
-            <button class="radar-btn loc-btn" id="locManual" onclick="promptManualCoords()">✍️ КООРДИНАТИ</button>
-        </div>
-
-        <div class="loc-bar">
-            <button class="radar-btn" id="btn-gyro" onclick="toggleGyroCompass()">🧭 СЕВЕР: ИСТИНСКИ (0°)</button>
+            <button class="radar-btn loc-btn" id="locGps" onclick="activateRealGps()">📡 GPS</button>
+            <button class="radar-btn loc-btn" id="locManual" onclick="promptManualCoords()">✍️ КООРД.</button>
+            <button class="radar-btn" id="btn-gyro" onclick="toggleGyroCompass()">🧭 0° ИСТ.</button>
             <button class="radar-btn mil-btn" id="btnMilOnly">⚔️ ВОЕННИ</button>
-            <button class="radar-btn amber-btn" id="btnHistory" title="Машина на времето (Архив)">⏪ ИСТОРИЯ</button>
-            <button class="radar-btn active" id="btnBorder">🟥 БГ ГРАНИЦА</button>
-            <button class="radar-btn mil-btn active" id="btnSweep">📡 ЧЕРВЕН ЛЪЧ</button>
+            <button class="radar-btn amber-btn" id="btnHistory">⏪ ИСТОРИЯ</button>
             <button class="radar-btn" id="btnMapStyle">🗺️ РЕЛЕФ</button>
         </div>
     </div>
 
-    <!-- Оперативно водене и маркиране на цели -->
+    <!-- Оперативно водене (слотовете са скрити по подразбиране за чист екран) -->
     <div class="pinned-header">
-        <span id="trackCounterInfo">🎯 МАРКИРАНИ ЦЕЛИ: 0/21 | Следваща: #1</span>
-        <div style="display:flex; gap:5px;">
-            <button class="hud-mini-btn" id="toggleSlotsBtn" onclick="toggleExpandSlots()">▼ РАЗГЪНИ (21)</button>
-            <button class="hud-mini-btn reset-tracks-btn" onclick="resetAllTrackedTargets()">🗑️ РАЗМАРКИРАЙ ВСИЧКИ</button>
+        <span id="trackCounterInfo">🎯 МАРКИРАНИ: 0/21 | Следв: #1</span>
+        <div style="display:flex; gap:4px;">
+            <button class="hud-mini-btn" id="toggleSlotsBtn" onclick="toggleExpandSlots()">▼ ЦЕЛИ (21)</button>
+            <button class="hud-mini-btn reset-tracks-btn" onclick="resetAllTrackedTargets()">🗑️ ИЗЧИСТИ</button>
         </div>
     </div>
 
     <div class="pinned-bar" id="pinnedBarContainer">
         {% for i in 1..21 %}
-            <button class="pin-slot" id="pin-slot-{{ i }}" onclick="selectPinnedTarget({{ i }})">Цел #{{ i }}: -</button>
+            <button class="pin-slot" id="pin-slot-{{ i }}" onclick="selectPinnedTarget({{ i }})">#{{ i }}: -</button>
         {% endfor %}
     </div>
 </div>
@@ -580,20 +603,20 @@
 <!-- МАШИНА НА ВРЕМЕТО (ИСТОРИЯ НА ПОЛЕТИТЕ) -->
 <div id="timeMachineDock">
     <div class="tm-header">
-        <span>⏪ ИСТОРИЯ НА ПОЛЕТИТЕ (АРХИВ)</span>
+        <span>⏪ ИСТОРИЯ НА ПОЛЕТИТЕ</span>
         <span id="tmTimestampLabel">НА ЖИВО</span>
     </div>
     <div class="tm-slider-wrap">
-        <span style="font-size:11px; color:#ccc;">НАЗАД</span>
+        <span style="font-size:10px; color:#ccc;">НАЗАД</span>
         <input type="range" id="historySlider" min="0" max="0" value="0">
-        <span style="font-size:11px; color:#ccc;">СЕГА</span>
+        <span style="font-size:10px; color:#ccc;">СЕГА</span>
     </div>
     <div class="tm-controls">
-        <div style="display:flex; gap:6px;">
+        <div style="display:flex; gap:5px;">
             <button class="radar-btn amber-btn" id="btnPlayHistory">▶ ПУСНИ</button>
             <button class="radar-btn" id="btnSpeedHistory">1x</button>
         </div>
-        <span id="tmFramesCount" style="font-size:11px; color:#ccc;">Записи в буфера: 0</span>
+        <span id="tmFramesCount" style="font-size:10px; color:#ccc;">Записи: 0</span>
         <button class="radar-btn active" id="btnBackToLive">🔴 НА ЖИВО</button>
     </div>
 </div>
@@ -620,10 +643,10 @@
         const btn = document.getElementById('btn-gyro');
         if (useMagneticNorth) {
             btn.classList.add('active');
-            btn.innerText = '🧭 СЕВЕР: МАГНИТЕН (-5.5°)';
+            btn.innerText = '🧭 -5.5° МАГ.';
         } else {
             btn.classList.remove('active');
-            btn.innerText = '🧭 СЕВЕР: ИСТИНСКИ (0°)';
+            btn.innerText = '🧭 0° ИСТ.';
         }
         if (selectedPlaneId) {
             const sel = planes.find(p => p.id === selectedPlaneId);
@@ -660,11 +683,8 @@
             if (map.hasLayer(bgBorderLayer)) map.removeLayer(bgBorderLayer);
             bgBorderLayer = L.geoJSON(geoData, {
                 style: { color: '#ff1111', weight: 3.5, opacity: 0.95, fillColor: '#ff0000', fillOpacity: 0.04, className: 'bg-border-glow' }
-            });
-            if (showBorder) bgBorderLayer.addTo(map);
+            }).addTo(map);
         }).catch(() => {});
-
-    let showBorder = true;
 
     function highlightLocBtn(activeId) {
         document.querySelectorAll('.loc-btn').forEach(b => b.classList.remove('active'));
@@ -680,19 +700,14 @@
         myLat = parseFloat(lat);
         myLon = parseFloat(lon);
         myBaseName = label;
-        document.getElementById('gpsText').textContent = `📍 БАЗА: ${label} (${myLat.toFixed(2)}, ${myLon.toFixed(2)})`;
+        document.getElementById('gpsText').textContent = `📍 ${label}`;
         if (btnId) highlightLocBtn(btnId);
         map.setView([myLat, myLon], map.getZoom());
         fetchPlanes(true);
     };
 
-    window.setBaseFromMapCenter = function() {
-        const c = map.getCenter();
-        window.setBaseLocation(c.lat, c.lng, 'Център карта', 'locCenter');
-    };
-
     window.promptManualCoords = function() {
-        const input = prompt('Въведи координати (Ширина, Дължина) - напр. 42.7136, 27.8986 за Емона:', `${myLat.toFixed(4)}, ${myLon.toFixed(4)}`);
+        const input = prompt('Въведи координати (Ширина, Дължина):', `${myLat.toFixed(4)}, ${myLon.toFixed(4)}`);
         if (!input) return;
         const parts = input.split(/[ ,;]+/);
         if (parts.length >= 2) {
@@ -706,18 +721,18 @@
 
     window.activateRealGps = function() {
         highlightLocBtn('locGps');
-        document.getElementById('gpsText').textContent = '📡 Търсене на GPS...';
+        document.getElementById('gpsText').textContent = '📡 Търсене...';
         if (!navigator.geolocation) return alert('Няма GPS поддръжка.');
         gpsWatchId = navigator.geolocation.watchPosition(
             (pos) => {
                 myLat = pos.coords.latitude;
                 myLon = pos.coords.longitude;
                 myBaseName = 'АВТО GPS';
-                document.getElementById('gpsText').textContent = `📡 GPS АКТИВЕН (${myLat.toFixed(3)}, ${myLon.toFixed(3)})`;
+                document.getElementById('gpsText').textContent = `📡 GPS (${myLat.toFixed(2)}, ${myLon.toFixed(2)})`;
                 map.panTo([myLat, myLon]);
                 fetchPlanes(true);
             },
-            (err) => alert('GPS блокиран. Натисни бутона 🌊 ЕМОНА или 🎯 ЦЕНТЪР КАРТА!'),
+            () => alert('GPS не е достъпен. Избери база от бутоните!'),
             { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
         );
     };
@@ -728,9 +743,12 @@
     ALL_SLOTS.forEach(s => { pinnedTargets[s] = null; });
     let highestTrackNumber = 0;
     let slotsExpanded = false;
+    let cardSlotsOpen = false;
 
     const planePhotoCache = {};
     const planeRouteCache = {};
+    // Локална памет за последния валиден транспондер (предотвратява премигването на ----)
+    const knownSquawkMemory = {};
 
     try {
         const savedPins = localStorage.getItem('radar_pinned_targets_21');
@@ -765,7 +783,13 @@
     window.toggleExpandSlots = function() {
         slotsExpanded = !slotsExpanded;
         document.getElementById('pinnedBarContainer').classList.toggle('expanded', slotsExpanded);
-        document.getElementById('toggleSlotsBtn').innerText = slotsExpanded ? '▲ СВИЙ (6)' : '▼ РАЗГЪНИ (21)';
+        document.getElementById('toggleSlotsBtn').innerText = slotsExpanded ? '▲ СКРИЙ (21)' : '▼ ЦЕЛИ (21)';
+    };
+
+    window.toggleCardSlots = function() {
+        cardSlotsOpen = !cardSlotsOpen;
+        const row = document.getElementById('cardSlotsGrid');
+        if (row) row.classList.toggle('open', cardSlotsOpen);
     };
 
     window.togglePinSlot = function(slot, planeId) {
@@ -831,6 +855,21 @@
         }
     };
 
+    function getBestPlaneLabel(plane) {
+        const sqk = String(plane.squawk || '').trim();
+        if (sqk !== '' && sqk !== '----' && sqk !== '0000') {
+            return sqk;
+        }
+        const cs = cleanCallsign(plane.callsign, '');
+        if (cs !== '' && !cs.startsWith('FR_')) {
+            return cs.slice(0, 7);
+        }
+        if (plane.type && plane.type !== 'Няма данни' && plane.type !== 'Въздушна цел') {
+            return String(plane.type).slice(0, 6);
+        }
+        return String(plane.id || '').replace(/^fr_/i, '').toUpperCase().slice(0, 6);
+    }
+
     function updatePinnedBarUI() {
         checkAutoResetCounter();
         let activePinnedCount = 0;
@@ -843,14 +882,13 @@
             if (p && slotObj) {
                 activePinnedCount++;
                 btn.classList.add('filled');
-                const cleanName = cleanCallsign(p.callsign, p.id);
-                const sqk = (p.squawk && p.squawk !== '----') ? p.squawk : cleanName;
-                btn.innerText = `🎯#${slotObj.trackNum}: ${sqk} (${(p.distKm || 0).toFixed(0)}km)`;
+                const lbl = getBestPlaneLabel(p);
+                btn.innerText = `🎯#${slotObj.trackNum}: ${lbl} (${(p.distKm || 0).toFixed(0)}km)`;
             } else {
-                btn.innerText = `Цел #${slot}: -`;
+                btn.innerText = `#${slot}: -`;
             }
         }
-        document.getElementById('trackCounterInfo').innerText = `🎯 МАРКИРАНИ ЦЕЛИ: ${activePinnedCount}/${TOTAL_PIN_SLOTS} | Следваща: #${highestTrackNumber + 1}`;
+        document.getElementById('trackCounterInfo').innerText = `🎯 МАРКИРАНИ: ${activePinnedCount}/${TOTAL_PIN_SLOTS} | Следв: #${highestTrackNumber + 1}`;
     }
 
     const canvas = document.getElementById('radarCanvas');
@@ -865,7 +903,6 @@
 
     let planes = [];
     let selectedPlaneId = null;
-    let showSweep = true;
     let milOnlyFilter = false;
     let sweepAngle = 0;
     let isFetchingPlanes = false;
@@ -882,7 +919,6 @@
         return String(callsign || fallback).replace(/\s*\[ВОЕНЕН\]/ig, '').trim();
     }
 
-    // МАШИНА НА ВРЕМЕТО ПРОМЕНЛИВИ
     let isReplayMode = false;
     let historyTimestamps = [];
     let replayPlaying = false;
@@ -956,7 +992,6 @@
         }
     }
 
-    // ЧЕРВЕНИКАВА КОМПАСНА РЕШЕТКА С МАГНИТЕН/ИСТИНСКИ СЕВЕР
     function drawRadarGrid(cx, cy) {
         const radius = Math.min(canvas.width, canvas.height) * 0.42;
         ctx.save();
@@ -991,12 +1026,12 @@
                 let labelText = (i === 0) ? (useMagneticNorth ? '0°М' : '0°С') : `${Math.round(labelNum)}°`;
 
                 ctx.fillStyle = (i === 0) ? '#00e5ff' : '#ff4444';
-                ctx.font = 'bold 11.5px monospace';
+                ctx.font = 'bold 11px monospace';
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.shadowColor = '#000';
                 ctx.shadowBlur = 4;
-                ctx.fillText(labelText, Math.cos(angleRad) * (radius + 17), Math.sin(angleRad) * (radius + 17));
+                ctx.fillText(labelText, Math.cos(angleRad) * (radius + 16), Math.sin(angleRad) * (radius + 16));
             }
         }
 
@@ -1033,39 +1068,36 @@
         ctx.fillText(`📍 ${myBaseName}`, myScreenPt.x + 10, myScreenPt.y + 4);
         ctx.restore();
 
-        // ЧЕРВЕН РАДАРЕН ЛЪЧ
-        if (showSweep) {
-            const sweepRadius = Math.min(canvas.width, canvas.height) * 0.42;
-            sweepAngle = (sweepAngle + 0.032) % (Math.PI * 2);
+        // ПОСТОЯНЕН ЧЕРВЕН РАДАРЕН ЛЪЧ
+        const sweepRadius = Math.min(canvas.width, canvas.height) * 0.42;
+        sweepAngle = (sweepAngle + 0.032) % (Math.PI * 2);
 
-            ctx.save();
-            ctx.translate(myScreenPt.x, myScreenPt.y);
-            ctx.rotate(sweepAngle);
+        ctx.save();
+        ctx.translate(myScreenPt.x, myScreenPt.y);
+        ctx.rotate(sweepAngle);
 
-            const grad = ctx.createConicGradient(-0.55, 0, 0);
-            grad.addColorStop(0, 'rgba(255, 20, 20, 0)');
-            grad.addColorStop(0.08, 'rgba(255, 30, 30, 0.32)');
-            grad.addColorStop(0.14, 'rgba(255, 45, 20, 0.72)');
-            grad.addColorStop(0.16, 'rgba(255, 90, 50, 0.96)');
-            grad.addColorStop(0.165, 'rgba(255, 20, 20, 0)');
+        const grad = ctx.createConicGradient(-0.55, 0, 0);
+        grad.addColorStop(0, 'rgba(255, 20, 20, 0)');
+        grad.addColorStop(0.08, 'rgba(255, 30, 30, 0.32)');
+        grad.addColorStop(0.14, 'rgba(255, 45, 20, 0.72)');
+        grad.addColorStop(0.16, 'rgba(255, 90, 50, 0.96)');
+        grad.addColorStop(0.165, 'rgba(255, 20, 20, 0)');
 
-            ctx.fillStyle = grad;
-            ctx.beginPath();
-            ctx.arc(0, 0, sweepRadius, -0.55, 0);
-            ctx.lineTo(0, 0);
-            ctx.fill();
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(0, 0, sweepRadius, -0.55, 0);
+        ctx.lineTo(0, 0);
+        ctx.fill();
 
-            ctx.beginPath();
-            ctx.moveTo(0, 0);
-            ctx.lineTo(sweepRadius, 0);
-            ctx.strokeStyle = '#ff3322';
-            ctx.shadowColor = '#ff0000';
-            ctx.shadowBlur = 12;
-            ctx.lineWidth = 3;
-            ctx.stroke();
-
-            ctx.restore();
-        }
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(sweepRadius, 0);
+        ctx.strokeStyle = '#ff3322';
+        ctx.shadowColor = '#ff0000';
+        ctx.shadowBlur = 12;
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        ctx.restore();
 
         // САМОЛЕТИ
         let totalCount = 0;
@@ -1109,15 +1141,15 @@
 
             drawRealisticPlane(screenPt.x, screenPt.y, plane.track, isMil, isSelected, pinData);
 
-            const hasSqk = plane.squawk && plane.squawk !== '----' && String(plane.squawk).trim() !== '';
-            const sqkText = hasSqk ? String(plane.squawk) : '----';
+            // Показваме Squawk, а ако липсва (----), показваме Позивен или Модел вместо тирета!
+            const labelText = getBestPlaneLabel(plane);
 
             ctx.save();
-            ctx.font = 'bold 11px Segoe UI, sans-serif';
+            ctx.font = 'bold 10.5px Segoe UI, sans-serif';
 
-            const textWidth = ctx.measureText(sqkText).width;
-            const boxW = textWidth + 8;
-            const boxH = 18;
+            const textWidth = ctx.measureText(labelText).width;
+            const boxW = textWidth + 7;
+            const boxH = 16;
 
             ctx.fillStyle = 'rgba(0, 10, 4, 0.82)';
 
@@ -1130,8 +1162,8 @@
             }
 
             ctx.lineWidth = 1;
-            ctx.fillRect(screenPt.x + 14, screenPt.y - 10, boxW, boxH);
-            ctx.strokeRect(screenPt.x + 14, screenPt.y - 10, boxW, boxH);
+            ctx.fillRect(screenPt.x + 13, screenPt.y - 9, boxW, boxH);
+            ctx.strokeRect(screenPt.x + 13, screenPt.y - 9, boxW, boxH);
 
             if (isMil) {
                 ctx.fillStyle = '#ff5555';
@@ -1141,7 +1173,7 @@
                 ctx.fillStyle = '#ffdd00';
             }
 
-            ctx.fillText(sqkText, screenPt.x + 18, screenPt.y + 3);
+            ctx.fillText(labelText, screenPt.x + 16.5, screenPt.y + 2.5);
             ctx.restore();
         });
 
@@ -1235,7 +1267,7 @@
         const nextAutoNum = highestTrackNumber + 1;
 
         const autoBtnText = pinData
-            ? `🎯 МАРКИРАН КАТО ЦЕЛ #${pinData.trackNum} (СЛОТ ${pinData.slot}) — [РАЗМАРКИРАЙ]`
+            ? `🎯 ЦЕЛ #${pinData.trackNum} (С${pinData.slot}) [МАХНИ]`
             : `📌 МАРКИРАЙ КАТО ЦЕЛ #${nextAutoNum}`;
 
         let slotButtonsHtml = '';
@@ -1250,6 +1282,7 @@
         }
 
         const currentRoute = planeRouteCache[p.id] || 'Проверка на маршрут...';
+        const sqkDisplay = (p.squawk && p.squawk !== '----' && p.squawk !== '0000') ? p.squawk : 'Няма (MLAT)';
 
         panel.innerHTML = `
             <div class="panel-top-actions">
@@ -1258,32 +1291,35 @@
             <div class="plane-card-header">
                 <div class="plane-photo-box">
                     <img id="realPlaneImg" src="${cachedPhoto || ''}" style="${showImg}" alt="Снимка" />
-                    <svg id="fallbackPlaneSvg" viewBox="0 0 64 64" width="42" height="42" style="${showSvg} transform: rotate(${trackDeg}deg);">
+                    <svg id="fallbackPlaneSvg" viewBox="0 0 64 64" width="36" height="36" style="${showSvg} transform: rotate(${trackDeg}deg);">
                         <path fill="${color}" d="M32 4 L36 18 L58 30 L58 35 L36 31 L35 48 L45 55 L45 59 L32 56 L19 59 L19 55 L29 48 L28 31 L6 35 L6 30 L28 18 Z"/>
                     </svg>
                 </div>
                 <div>
-                    <div style="font-size: 10px; color: ${color}; font-weight: bold;">● ${badgeText} ${pinData ? `| 🎯 ЦЕЛ #${pinData.trackNum}` : ''}</div>
-                    <div style="font-weight: bold; font-size: 14px; color: #fff; margin: 2px 0;">
-                        📡 ТРАНСПОНДЕР SQK: <span style="color:#00ffff;">${p.squawk || '----'}</span> | ✈ ${p.callsign}
+                    <div style="font-size: 9.5px; color: ${color}; font-weight: bold;">● ${badgeText} ${pinData ? `| 🎯 ЦЕЛ #${pinData.trackNum}` : ''}</div>
+                    <div style="font-weight: bold; font-size: 12.5px; color: #fff; margin: 1px 0;">
+                        SQK: <span style="color:#00ffff;">${sqkDisplay}</span> | ✈ ${cleanCallsign(p.callsign, p.id)}
                     </div>
-                    <div style="font-size: 10.5px; color: #00ffcc; font-weight: bold;">HEX: ${p.id.toUpperCase()} | Модел: ${p.type || 'Няма данни'}</div>
-                    <div style="font-size: 10px; color: #88ff88;">${p.operator || 'Неизвестен оператор'}</div>
+                    <div style="font-size: 10px; color: #00ffcc; font-weight: bold;">HEX: ${p.id.toUpperCase()} | ${p.type || 'Няма данни'}</div>
+                    <div style="font-size: 9.5px; color: #88ff88;">${p.operator || 'Неизвестен оператор'}</div>
                 </div>
             </div>
             <div class="route-banner"><span id="planeRouteText">${currentRoute}</span></div>
             <div class="info-grid">
                 <div class="info-item">
-                    <span class="info-label">АЗИМУТ (${useMagneticNorth ? 'МАГНИТЕН' : 'ИСТИНСКИ'}) / РАЗСТ.</span>
-                    <span class="info-val" style="color:#00ff66; font-size:13.5px;">AZ: ${p.bearing}° / ${(p.distKm || 0).toFixed(1)} км</span>
+                    <span class="info-label">АЗИМУТ (${useMagneticNorth ? 'МАГН.' : 'ИСТ.'}) / РАЗСТ.</span>
+                    <span class="info-val" style="color:#00ff66;">AZ: ${p.bearing}° / ${(p.distKm || 0).toFixed(1)} км</span>
                 </div>
                 <div class="info-item">
                     <span class="info-label">КУРС / ВИСОЧИНА / СКОРОСТ</span>
                     <span class="info-val">${trackDeg}° | ${p.altitude || 0} м | ${p.speed || 0} км/ч</span>
                 </div>
             </div>
-            <button class="auto-track-btn ${pinData ? 'active' : ''}" onclick="autoAssignNextTrack('${p.id}')">${autoBtnText}</button>
-            <div class="mark-targets-row">${slotButtonsHtml}</div>
+            <div class="card-actions-row">
+                <button class="auto-track-btn ${pinData ? 'active' : ''}" onclick="autoAssignNextTrack('${p.id}')">${autoBtnText}</button>
+                <button class="toggle-card-slots-btn" onclick="toggleCardSlots()">🎛️ СЛОТОВЕ</button>
+            </div>
+            <div id="cardSlotsGrid" class="mark-targets-row ${cardSlotsOpen ? 'open' : ''}">${slotButtonsHtml}</div>
         `;
 
         if (cachedPhoto === undefined) fetchRealPlanePhoto(p.id);
@@ -1299,6 +1335,15 @@
             .map(item => {
                 const normalized = { ...item };
                 normalized.isMilitary = isMilitaryPlane(item);
+
+                // Запазваме последния известен Squawk код, ако текущият пакет временно върне '----'
+                const incomingSqk = String(normalized.squawk || '').trim();
+                if (incomingSqk !== '' && incomingSqk !== '----' && incomingSqk !== '0000') {
+                    knownSquawkMemory[normalized.id] = incomingSqk;
+                } else if (knownSquawkMemory[normalized.id]) {
+                    normalized.squawk = knownSquawkMemory[normalized.id];
+                }
+
                 if (normalized.isMilitary && !/\[ВОЕНЕН\]/i.test(String(normalized.callsign || ''))) {
                     normalized.callsign = `${normalized.callsign || normalized.id || ''} [ВОЕНЕН]`.trim();
                 }
@@ -1317,7 +1362,6 @@
         if (isReplayMode || (isFetchingPlanes && !force)) return;
         isFetchingPlanes = true;
         try {
-            // Винаги питаме спрямо избраната БАЗА (myLat, myLon), за да пазим сървърния кеш!
             const res = await fetch(`/api/planes?lat=${myLat.toFixed(4)}&lon=${myLon.toFixed(4)}${force ? '&force=1' : ''}`);
             if (res.ok) {
                 const data = await res.json();
@@ -1328,7 +1372,6 @@
         } catch (e) {} finally { isFetchingPlanes = false; }
     }
 
-    // МАШИНА НА ВРЕМЕТО (ИСТОРИЯ ФУНКЦИИ)
     async function syncHistoryMeta() {
         try {
             const res = await fetch('/api/history');
@@ -1340,7 +1383,7 @@
                 const atEnd = Number(slider.value) >= Number(slider.max) - 1;
                 slider.max = historyTimestamps.length - 1;
                 if (!isReplayMode || atEnd) slider.value = slider.max;
-                document.getElementById('tmFramesCount').textContent = `Записи в буфера: ${historyTimestamps.length}`;
+                document.getElementById('tmFramesCount').textContent = `Записи: ${historyTimestamps.length}`;
             }
         } catch (e) {}
     }
@@ -1426,8 +1469,6 @@
     document.getElementById('btnZoomOut').onclick = () => map.zoomOut();
     document.getElementById('btnMyLoc').onclick = () => map.setView([myLat, myLon], 9);
     document.getElementById('btnMilOnly').onclick = function() { milOnlyFilter = !milOnlyFilter; this.classList.toggle('active', milOnlyFilter); };
-    document.getElementById('btnBorder').onclick = function() { showBorder = !showBorder; if (showBorder) bgBorderLayer.addTo(map); else map.removeLayer(bgBorderLayer); this.classList.toggle('active', showBorder); };
-    document.getElementById('btnSweep').onclick = function() { showSweep = !showSweep; this.classList.toggle('active', showSweep); };
     document.getElementById('btnMapStyle').onclick = function() {
         currentMapMode = (currentMapMode + 1) % 3;
         map.removeLayer(googleTerrainLayer); map.removeLayer(googleHybridLayer); map.removeLayer(openTopoLayer);

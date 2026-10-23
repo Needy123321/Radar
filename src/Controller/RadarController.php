@@ -784,21 +784,46 @@ class RadarController extends AbstractController
         $desc = strtoupper(trim($description));
         $regClean = strtoupper(trim($reg));
 
-        // 1. Известни военни ICAO HEX диапазони (45f4xx е Български ВВС)
-        $hexPrefixes = ['45f4', 'ae', 'af', '43c', '3f'];
-        foreach ($hexPrefixes as $prefix) {
-            if ($hex !== '' && str_starts_with($hex, $prefix)) {
+        // 0. Защита: Игнорираме сигурни граждански авиокомпании (Turkish, Wizz, Ryanair, Bulgaria Air и др.)
+        $civilCallsigns = [
+            'THY', 'WZZ', 'WMT', 'RYR', 'RYS', 'DLH', 'LZB', 'AUA', 'BAW',
+            'AFR', 'KLM', 'SWR', 'EZY', 'EJU', 'TAR', 'ROT', 'ASL', 'AEE',
+            'PGT', 'SXS', 'CAI', 'LOT', 'TVS', 'BTI', 'ELAL', 'ELY', 'QTR',
+            'UAE', 'ETD', 'FDB', 'tuk', 'BGH', 'VBB', 'LAZ',
+        ];
+        foreach ($civilCallsigns as $civ) {
+            if ($cs !== '' && str_starts_with($cs, $civ)) {
+                return false;
+            }
+        }
+
+        // 1. Точни военни ICAO HEX диапазони:
+        // 45f4xx = Български ВВС
+        // ae / af = САЩ (USAF / US Navy / US Army)
+        // 43cxxx = Великобритания (RAF)
+        // 3f4..3fb = Германия (Luftwaffe)
+        if ($hex !== '') {
+            if (
+                str_starts_with($hex, '45f4') ||
+                str_starts_with($hex, 'ae') ||
+                str_starts_with($hex, 'af') ||
+                str_starts_with($hex, '43c') ||
+                preg_match('/^3f[4-9a-b]/', $hex)
+            ) {
                 return true;
             }
         }
 
-        // 2. Военни транспондерни кодове (Squawk)
-        if ($squawk === '7777' || str_starts_with($squawk, '44') || str_starts_with($squawk, '74')) {
-            return true;
+        // 2. Строго военен Squawk (махнати са 44xx и 74xx, защото в Европа са за граждански трафик!)
+        if ($squawk === '7777' || $squawk === '0000') {
+            // 0000 зачитаме само ако е комбиниран с военен тип или регистрация по-долу
+            if ($squawk === '7777') {
+                return true;
+            }
         }
 
-        // 3. Бордни номера на Българските ВВС (напр. REG 664 на PC-9M от твоя скрийншот, 071/072/073 за C-27J)
-        if (preg_match('/^(66\d|07[123]|11\d|20\d)$/', $regClean)) {
+        // 3. Бордни номера на Българските ВВС (напр. 664 за PC-9M, 071/072/073 за C-27J Spartan)
+        if ($regClean !== '' && preg_match('/^(66\d|07[123]|11\d|20\d)$/', $regClean)) {
             return true;
         }
 
@@ -816,10 +841,10 @@ class RadarController extends AbstractController
             }
         }
 
-        // 5. Типове самолети (вкл. PC9, L39, AS532 Cougar, Bell 206 на Долна Митрополия/Крумово)
+        // 5. Военни типове самолети (вкл. PC-9M, L-39, Spartan, Cougar)
         $milTypes = [
             'F16', 'C27J', 'C130', 'C30J', 'PC9', 'PC7', 'L39', 'MIG29',
-            'SU25', 'UH60', 'CH47', 'MI8', 'MI17', 'MI24', 'AS32', 'ULH',
+            'SU25', 'UH60', 'CH47', 'MI8', 'MI17', 'MI24', 'AS32', 'AS532',
             'KC135', 'E3TF', 'C17', 'A400', 'P8', 'RQ4', 'MQ9', 'B52',
             'F15', 'F18', 'F35', 'TYPH', 'EUFI', 'RAFL', 'PILATUS',
         ];
