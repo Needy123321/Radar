@@ -1,94 +1,187 @@
-{% extends 'base.html.twig' %}
-
-{% block title %}Радар-Радишево{% endblock %}
-
-{% block stylesheets %}
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ТАКТИЧЕСКИ ВЪЗДУШЕН РАДАР - БЪЛГАРИЯ</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        html, body {
-            background: #000;
-            color: #0f0;
-            font-family: 'Courier New', monospace;
+        :root {
+            --neon: #00ff66;
+            --neon-bg: rgba(6, 18, 10, 0.92);
+            --mil-red: #ff2222;
+            --plane-yellow: #ffdd00;
+            --warn-amber: #ffaa00;
+            --pin-magenta: #ff00ff;
+        }
+
+        * {
+            box-sizing: border-box;
             margin: 0;
             padding: 0;
-            width: 100%;
-            height: 100dvh;
-            overflow: hidden;
-            touch-action: none;
             user-select: none;
-        }
-        canvas {
-            display: block;
-            background: #020802;
+            -webkit-user-select: none;
         }
 
-        /* Горен тактически панел */
+        body, html {
+            width: 100%;
+            height: 100%;
+            background-color: #08120c;
+            color: var(--neon);
+            font-family: 'Segoe UI', Tahoma, monospace;
+            overflow: hidden;
+            position: fixed;
+        }
+
+        #terrainMap {
+            position: absolute;
+            inset: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 1;
+            background: #101c14;
+        }
+
+        .map-tactical-filter .leaflet-tile-pane {
+            filter: brightness(0.75) contrast(1.14) saturate(0.85);
+        }
+
+        .bg-border-glow {
+            filter: drop-shadow(0 0 6px #ff0000) drop-shadow(0 0 12px rgba(255, 0, 0, 0.8));
+        }
+
+        #radarCanvas {
+            position: absolute;
+            inset: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 10;
+            pointer-events: none;
+        }
+
         .top-hud {
             position: fixed;
-            top: 42px;
-            left: 10px;
-            right: 10px;
-            z-index: 10;
+            top: 8px;
+            left: 8px;
+            right: 8px;
             display: flex;
             flex-direction: column;
             gap: 5px;
+            z-index: 100;
             pointer-events: none;
         }
-        #status {
-            font-size: 11.5px;
-            font-weight: bold;
-            color: #00ff66;
-            text-shadow: 0 0 6px rgba(0, 255, 0, 0.7);
-            background: rgba(0, 22, 5, 0.9);
-            padding: 5px 8px;
-            border-left: 3px solid #0f0;
-            border-top: 1px solid rgba(0, 255, 0, 0.3);
-            border-right: 1px solid rgba(0, 255, 0, 0.3);
-            border-bottom: 1px solid rgba(0, 255, 0, 0.3);
-            border-radius: 4px;
+
+        .hud-row {
             display: flex;
+            flex-wrap: wrap;
             justify-content: space-between;
             align-items: center;
+            gap: 6px;
+            background: var(--neon-bg);
+            border: 1px solid rgba(0, 255, 102, 0.55);
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.65);
+            padding: 6px 10px;
+            border-radius: 7px;
             pointer-events: auto;
-        }
-        .scale-controls {
-            display: flex;
-            flex-direction: row;
-            justify-content: space-between;
-            align-items: center;
-            gap: 4px;
-            pointer-events: auto;
-        }
-        .scale-group {
-            display: flex;
-            gap: 3px;
-        }
-        .scale-controls button {
-            background: rgba(0, 30, 0, 0.9);
-            border: 1px solid #0f0;
-            color: #0f0;
-            padding: 5px 6px;
-            cursor: pointer;
-            font-family: monospace;
-            font-size: 10px;
-            font-weight: bold;
-            border-radius: 4px;
-            transition: all 0.15s;
-        }
-        .scale-controls button.active {
-            background: #0f0;
-            color: #000;
-            box-shadow: 0 0 10px #0f0;
+            backdrop-filter: blur(6px);
         }
 
-        #btn-mil {
-            border-color: #ff3333;
-            color: #ff5555;
-            background: rgba(40, 0, 0, 0.85);
+        .status-header {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 10px;
+            font-size: 12px;
+            font-weight: bold;
+            color: #eafff0;
         }
-        #btn-mil.active {
-            background: #ff3333;
+
+        .live-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 2px 7px;
+            border-radius: 4px;
+            font-size: 11px;
+            background: rgba(0, 255, 102, 0.2);
+            border: 1px solid var(--neon);
+            color: var(--neon);
+        }
+
+        .live-badge.replay {
+            background: rgba(255, 170, 0, 0.25);
+            border-color: var(--warn-amber);
+            color: var(--warn-amber);
+        }
+
+        .live-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--neon);
+            box-shadow: 0 0 8px var(--neon);
+        }
+
+        .loc-bar {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .radar-btn {
+            background: rgba(12, 32, 18, 0.92);
+            color: #dfffee;
+            border: 1px solid rgba(0, 255, 102, 0.5);
+            padding: 5px 8px;
+            font-size: 11px;
+            font-weight: bold;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .radar-btn:hover { background: rgba(0, 255, 102, 0.25); }
+
+        .radar-btn.active {
+            background: var(--neon);
+            color: #031a0b;
+            border-color: var(--neon);
+            box-shadow: 0 0 10px rgba(0, 255, 102, 0.5);
+        }
+
+        .radar-btn.loc-btn {
+            border-color: #00e5ff;
+            color: #99f5ff;
+        }
+
+        .radar-btn.loc-btn.active {
+            background: #00e5ff;
+            color: #001a22;
+            border-color: #00e5ff;
+            box-shadow: 0 0 10px rgba(0, 229, 255, 0.6);
+        }
+
+        .radar-btn.mil-btn {
+            border-color: var(--mil-red);
+            color: #ff8888;
+        }
+
+        .radar-btn.mil-btn.active {
+            background: var(--mil-red);
             color: #fff;
-            box-shadow: 0 0 12px #ff3333;
+            box-shadow: 0 0 10px rgba(255, 34, 34, 0.6);
+        }
+
+        .radar-btn.amber-btn {
+            border-color: var(--warn-amber);
+            color: var(--warn-amber);
+        }
+
+        .radar-btn.amber-btn.active {
+            background: var(--warn-amber);
+            color: #1a0f00;
+            box-shadow: 0 0 10px rgba(255, 170, 0, 0.6);
         }
 
         #btn-gyro {
@@ -102,39 +195,35 @@
             box-shadow: 0 0 12px #00ffff;
         }
 
-        /* Панел за оперативно водене на 21 цели */
         .pinned-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            font-size: 10px;
-            background: rgba(20, 0, 30, 0.92);
-            padding: 3px 6px;
-            border-radius: 4px;
-            border: 1px solid rgba(255, 0, 255, 0.35);
-            color: #ff88ff;
+            font-size: 11px;
+            background: rgba(25, 0, 35, 0.92);
+            padding: 4px 8px;
+            border-radius: 6px;
+            border: 1px solid rgba(255, 0, 255, 0.5);
+            color: #ff99ff;
             pointer-events: auto;
-            gap: 4px;
+            font-weight: bold;
         }
-        .pinned-header-actions {
-            display: flex;
-            gap: 4px;
-        }
+
         .hud-mini-btn {
-            background: rgba(65, 0, 75, 0.9);
+            background: rgba(75, 0, 90, 0.9);
             border: 1px solid #ff33cc;
             color: #ffccff;
-            font-family: monospace;
-            font-size: 9.5px;
+            font-size: 10px;
             font-weight: bold;
-            padding: 2px 6px;
-            border-radius: 3px;
+            padding: 3px 8px;
+            border-radius: 4px;
             cursor: pointer;
         }
+
         .reset-tracks-btn {
-            background: rgba(80, 0, 40, 0.9);
-            border: 1px solid #ff3388;
-            color: #ffccdd;
+            background: rgba(130, 0, 30, 0.95);
+            border-color: #ff3355;
+            color: #ffffff;
         }
 
         .pinned-bar {
@@ -142,34 +231,27 @@
             grid-template-columns: repeat(3, 1fr);
             gap: 4px;
             pointer-events: auto;
-            max-height: 52px; /* Компактно: показва 2 реда, скролва се за останалите до 21 */
+            max-height: 54px;
             overflow-y: auto;
             padding-right: 2px;
-            touch-action: pan-y;
             transition: max-height 0.2s ease;
         }
+
         .pinned-bar.expanded {
-            max-height: 185px; /* Разгънато: показва всичките 21 слота (7 реда по 3) */
-            background: rgba(10, 0, 15, 0.92);
-            padding: 4px;
-            border: 1px solid rgba(255, 0, 255, 0.4);
-            border-radius: 4px;
-        }
-        .pinned-bar::-webkit-scrollbar {
-            width: 4px;
-        }
-        .pinned-bar::-webkit-scrollbar-thumb {
-            background: #ff00ff;
-            border-radius: 2px;
+            max-height: 195px;
+            background: rgba(12, 0, 18, 0.94);
+            padding: 5px;
+            border: 1px solid rgba(255, 0, 255, 0.5);
+            border-radius: 6px;
         }
 
         .pin-slot {
             background: rgba(25, 0, 35, 0.88);
             border: 1px dashed rgba(255, 0, 255, 0.45);
             color: #cc88cc;
-            padding: 4px 5px;
+            padding: 4px 6px;
             font-family: monospace;
-            font-size: 10px;
+            font-size: 10.5px;
             font-weight: bold;
             border-radius: 4px;
             cursor: pointer;
@@ -178,41 +260,119 @@
             overflow: hidden;
             text-overflow: ellipsis;
         }
+
         .pin-slot.filled {
-            background: rgba(65, 0, 85, 0.95);
+            background: rgba(75, 0, 95, 0.96);
             border: 1px solid #ff00ff;
             color: #ffffff;
             box-shadow: 0 0 8px rgba(255, 0, 255, 0.4);
         }
+
         .pin-slot.alert {
-            background: rgba(120, 0, 0, 0.95);
+            background: rgba(150, 0, 0, 0.96);
             border-color: #ff0000;
             color: #ffff00;
-            animation: blinkAlert 0.8s infinite alternate;
+            animation: blinkAlert 0.7s infinite alternate;
         }
 
         @keyframes blinkAlert {
             from { box-shadow: 0 0 4px #ff0000; }
-            to { box-shadow: 0 0 16px #ff0000; background: rgba(180, 0, 0, 1); }
+            to { box-shadow: 0 0 16px #ff0000; background: rgba(200, 0, 0, 1); }
         }
 
-        /* Долен информационен панел */
+        .map-side-controls {
+            position: fixed;
+            right: 12px;
+            top: 55%;
+            transform: translateY(-50%);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            z-index: 100;
+        }
+
+        .circle-btn {
+            width: 42px;
+            height: 42px;
+            border-radius: 50%;
+            background: rgba(20, 30, 24, 0.9);
+            border: 1px solid rgba(0, 255, 102, 0.5);
+            color: #fff;
+            font-size: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.6);
+        }
+
+        /* МАШИНА НА ВРЕМЕТО (ИСТОРИЯ ПАНЕЛ) */
+        #timeMachineDock {
+            position: fixed;
+            bottom: 70px;   /* беше 14px */
+            right: 14px;
+            width: 420px;
+            max-width: calc(100vw - 28px);
+            background: rgba(18, 12, 8, 0.96);
+            border: 2px solid var(--warn-amber);
+            box-shadow: 0 6px 25px rgba(0, 0, 0, 0.85);
+            border-radius: 9px;
+            padding: 10px 12px;
+            z-index: 210;
+            display: none;
+            backdrop-filter: blur(8px);
+        }
+
+        .tm-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            font-size: 12px;
+            color: var(--warn-amber);
+            font-weight: bold;
+        }
+
+        .tm-slider-wrap {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        #historySlider {
+            flex: 1;
+            accent-color: var(--warn-amber);
+            cursor: pointer;
+        }
+
+        .tm-controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 6px;
+        }
+
+        /* ДОЛЕН ИНФОРМАЦИОНЕН ПАНЕЛ ЗА САМОЛЕТА */
         #infoPanel {
             position: fixed;
-            bottom: calc(68px + env(safe-area-inset-bottom, 0px));
-            left: 50%;
-            transform: translateX(-50%);
-            background: rgba(0, 18, 5, 0.97);
-            border: 2px solid #00ff44;
+            bottom: 14px;
+            left: 14px;
+            background: rgba(4, 18, 9, 0.97);
+            border: 2px solid var(--neon);
             box-shadow: 0 0 25px rgba(0, 255, 68, 0.45);
             padding: 10px 12px;
             border-radius: 8px;
             display: none;
             width: 95%;
-            max-width: 460px;
+            max-width: 440px;
             font-size: 12px;
-            z-index: 999;
-            box-sizing: border-box;
+            z-index: 200;
+        }
+
+        #infoPanel.mil-panel {
+            border-color: var(--mil-red);
+            box-shadow: 0 0 25px rgba(255, 34, 34, 0.55);
         }
 
         .plane-card-header {
@@ -222,55 +382,31 @@
             padding-bottom: 6px;
             margin-bottom: 6px;
             gap: 10px;
-            padding-right: 90px;
+            padding-right: 40px;
         }
 
         .plane-photo-box {
-            width: 84px;
-            height: 54px;
-            min-width: 84px;
+            width: 86px;
+            height: 56px;
+            min-width: 86px;
             background: radial-gradient(circle, rgba(0,60,0,0.6) 0%, rgba(0,15,0,0.95) 100%);
-            border: 1px solid #0f0;
+            border: 1px solid var(--neon);
             border-radius: 6px;
             display: flex;
             align-items: center;
             justify-content: center;
-            position: relative;
             overflow: hidden;
-            box-shadow: inset 0 0 10px rgba(0, 255, 0, 0.3);
         }
+
         .plane-photo-box img {
             width: 100%;
             height: 100%;
             object-fit: cover;
             display: none;
-            filter: contrast(1.08) saturate(1.1);
-        }
-
-        .squawk-alert-box {
-            padding: 5px 7px;
-            border-radius: 4px;
-            font-size: 11px;
-            font-weight: bold;
-            margin-bottom: 6px;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        .squawk-emergency {
-            background: rgba(160, 0, 0, 0.9);
-            border: 1px solid #ff3333;
-            color: #ffff00;
-            animation: blinkAlert 0.7s infinite alternate;
-        }
-        .squawk-tactical {
-            background: rgba(70, 35, 0, 0.9);
-            border: 1px solid #ff9900;
-            color: #ffcc00;
         }
 
         .route-banner {
-            background: rgba(0, 50, 40, 0.65);
+            background: rgba(0, 50, 40, 0.7);
             border: 1px solid rgba(0, 255, 200, 0.4);
             padding: 4px 7px;
             border-radius: 4px;
@@ -284,23 +420,24 @@
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 5px 8px;
-            width: 100%;
         }
+
         .info-item {
-            background: rgba(0, 255, 0, 0.06);
-            padding: 4px 7px;
+            background: rgba(0, 255, 0, 0.07);
+            padding: 5px 7px;
             border-radius: 4px;
-            border-left: 2px solid rgba(0, 255, 0, 0.5);
+            border-left: 3px solid var(--neon);
         }
+
         .info-label {
-            font-size: 9px;
-            color: #77cc77;
+            font-size: 9.5px;
+            color: #88cc99;
             text-transform: uppercase;
             display: block;
-            margin-bottom: 1px;
         }
+
         .info-val {
-            font-size: 11.5px;
+            font-size: 12px;
             color: #ffffff;
             font-weight: bold;
         }
@@ -308,25 +445,24 @@
         .auto-track-btn {
             width: 100%;
             margin-top: 7px;
-            background: rgba(60, 0, 80, 0.95);
+            background: rgba(75, 0, 95, 0.95);
             border: 1px solid #ff00ff;
             color: #ffffff;
             font-family: monospace;
-            font-size: 11px;
+            font-size: 11.5px;
             font-weight: bold;
-            padding: 6px;
-            border-radius: 4px;
+            padding: 7px;
+            border-radius: 5px;
             cursor: pointer;
             text-align: center;
-            box-shadow: 0 0 8px rgba(255, 0, 255, 0.35);
         }
+
         .auto-track-btn.active {
             background: #ff00ff;
             color: #000;
             box-shadow: 0 0 12px #ff00ff;
         }
 
-        /* Решетка с 21 слота в инфо панела (7 на ред, 3 реда) */
         .mark-targets-row {
             display: grid;
             grid-template-columns: repeat(7, 1fr);
@@ -335,6 +471,7 @@
             padding-top: 5px;
             border-top: 1px solid rgba(0, 255, 0, 0.25);
         }
+
         .mark-btn {
             background: rgba(35, 0, 45, 0.85);
             border: 1px solid #cc00cc;
@@ -345,19 +482,17 @@
             padding: 4px 1px;
             border-radius: 3px;
             cursor: pointer;
-            text-align: center;
-            white-space: nowrap;
-            overflow: hidden;
         }
+
         .mark-btn.occupied {
             background: rgba(75, 15, 90, 0.9);
             border-color: #ff66ff;
             color: #ffffff;
         }
+
         .mark-btn.active {
             background: #ff00ff;
             color: #000;
-            box-shadow: 0 0 10px #ff00ff;
         }
 
         .panel-top-actions {
@@ -366,1347 +501,915 @@
             right: 10px;
             display: flex;
             gap: 5px;
-            z-index: 5;
         }
+
         .action-btn {
             background: rgba(0, 40, 0, 0.85);
             border: 1px solid #0f0;
             color: #0f0;
-            font-size: 11px;
-            font-family: monospace;
+            font-size: 12px;
             font-weight: bold;
-            padding: 4px 7px;
+            padding: 3px 8px;
             border-radius: 4px;
             cursor: pointer;
         }
-        .cycle-btn {
-            background: rgba(0, 60, 80, 0.9);
-            border-color: #00ffff;
-            color: #00ffff;
-        }
-    </style>
-{% endblock %}
 
-{% block body %}
-    <div class="top-hud">
-        <div id="status">
-            <span id="gpsText">📍 БАЗА: с. Радишево</span>
-            <span id="targetsText" style="color: #00ffcc;">Цели: 0/0</span>
+        .leaflet-control-attribution { display: none !important; }
+    </style>
+</head>
+<body class="map-tactical-filter">
+
+<div id="terrainMap"></div>
+<canvas id="radarCanvas"></canvas>
+
+<!-- ГОРЕН ТАКТИЧЕСКИ ПАНЕЛ -->
+<div class="top-hud">
+    <div class="hud-row">
+        <div class="status-header">
+            <span id="modeBadge" class="live-badge">
+                <span class="live-dot"></span>
+                <span id="modeText">LIVE</span>
+            </span>
+            <span id="gpsText" style="color:#00e5ff;">📍 БАЗА: с. Радишево</span>
+            <span>ЦЕЛИ: <strong id="planesCount" style="color:#ffdd00;">0</strong></span>
+            <span>ВОЕННИ: <strong id="milCount" style="color:#ff4444;">0</strong></span>
+            <span id="clockDisplay">--:--:--</span>
         </div>
-        <div class="scale-controls">
-            <button onclick="toggleMilitaryOnly()" id="btn-mil">★ ВОЕННИ</button>
-            <button onclick="toggleGyroCompass()" id="btn-gyro">🧭 СЕВЕР: ИСТИНСКИ (0°)</button>
-            <div class="scale-group">
-                <button onclick="setScale(50)" id="btn-50">50</button>
-                <button onclick="setScale(100)" id="btn-100">100</button>
-                <button onclick="setScale(200)" id="btn-200">200</button>
-                <button onclick="setScale(350)" id="btn-350" class="active">350km</button>
-            </div>
+
+        <div class="loc-bar">
+            <button class="radar-btn loc-btn active" id="locRadishevo" onclick="setBaseLocation(43.3676, 24.6667, 'с. Радишево', 'locRadishevo')">📍 РАДИШЕВО</button>
+            <button class="radar-btn loc-btn" id="locPleven" onclick="setBaseLocation(43.4170, 24.6067, 'гр. Плевен', 'locPleven')">📍 ПЛЕВЕН</button>
+            <button class="radar-btn loc-btn" id="locEmona" onclick="setBaseLocation(42.7136, 27.8986, 'нос ЕМОНА', 'locEmona')">🌊 ЕМОНА</button>
+            <button class="radar-btn loc-btn" id="locGps" onclick="activateRealGps()">📡 АВТО GPS</button>
+            <button class="radar-btn loc-btn" id="locCenter" onclick="setBaseFromMapCenter()" title="Вземи центъра на картата за твоя база">🎯 ЦЕНТЪР КАРТА</button>
+            <button class="radar-btn loc-btn" id="locManual" onclick="promptManualCoords()">✍️ КООРДИНАТИ</button>
         </div>
-        <div class="pinned-header">
-            <span id="trackCounterInfo">🎯 АКТИВНИ: 0/21 | Следваща: #1</span>
-            <div class="pinned-header-actions">
-                <button class="hud-mini-btn" id="toggleSlotsBtn" onclick="toggleExpandSlots()">▼ РАЗГЪНИ (21)</button>
-                <button class="hud-mini-btn reset-tracks-btn" onclick="resetAllTrackedTargets()">🔄 НУЛИРАЙ</button>
-            </div>
-        </div>
-        <div class="pinned-bar" id="pinnedBarContainer">
-            {% for i in 1..21 %}
-                <button class="pin-slot" id="pin-slot-{{ i }}" onclick="selectPinnedTarget({{ i }})">Слот {{ i }}: -</button>
-            {% endfor %}
+
+        <div class="loc-bar">
+            <button class="radar-btn" id="btn-gyro" onclick="toggleGyroCompass()">🧭 СЕВЕР: ИСТИНСКИ (0°)</button>
+            <button class="radar-btn mil-btn" id="btnMilOnly">⚔️ ВОЕННИ</button>
+            <button class="radar-btn amber-btn" id="btnHistory" title="Машина на времето (MySQL / Архив)">⏪ ИСТОРИЯ</button>
+            <button class="radar-btn active" id="btnBorder">🟥 БГ ГРАНИЦА</button>
+            <button class="radar-btn mil-btn active" id="btnSweep">📡 ЧЕРВЕН ЛЪЧ</button>
+            <button class="radar-btn" id="btnMapStyle">🗺️ РЕЛЕФ</button>
         </div>
     </div>
 
-    <canvas id="radarCanvas"></canvas>
-    <div id="infoPanel"></div>
+    <!-- Оперативно водене и маркиране на цели -->
+    <div class="pinned-header">
+        <span id="trackCounterInfo">🎯 МАРКИРАНИ ЦЕЛИ: 0/21 | Следваща: #1</span>
+        <div style="display:flex; gap:5px;">
+            <button class="hud-mini-btn" id="toggleSlotsBtn" onclick="toggleExpandSlots()">▼ РАЗГЪНИ (21)</button>
+            <button class="hud-mini-btn reset-tracks-btn" onclick="resetAllTrackedTargets()">🗑️ РАЗМАРКИРАЙ ВСИЧКИ</button>
+        </div>
+    </div>
 
-    <script>
-        const canvas = document.getElementById('radarCanvas');
-        const ctx = canvas.getContext('2d');
-        const gpsTextSpan = document.getElementById('gpsText');
-        const targetsTextSpan = document.getElementById('targetsText');
+    <div class="pinned-bar" id="pinnedBarContainer">
+        {% for i in 1..21 %}
+            <button class="pin-slot" id="pin-slot-{{ i }}" onclick="selectPinnedTarget({{ i }})">Цел #{{ i }}: -</button>
+        {% endfor %}
+    </div>
+</div>
 
-        const mul = (a, b) => a / (1 / b);
-        const sub = (a, b) => a + (-b);
-        const TWO_PI = 6.283185307179586;
-        const DEG_TO_RAD = 0.017453292519943295;
-        const RAD_TO_DEG = 57.29577951308232;
+<div class="map-side-controls">
+    <button class="circle-btn" id="btnZoomIn">+</button>
+    <button class="circle-btn" id="btnZoomOut">−</button>
+    <button class="circle-btn" id="btnMyLoc">➤</button>
+</div>
 
-        const TOTAL_PIN_SLOTS = 21;
-        const ALL_SLOTS = Array.from({ length: TOTAL_PIN_SLOTS }, (_, i) => i + 1);
+<!-- МАШИНА НА ВРЕМЕТО (ИСТОРИЯ НА ПОЛЕТИТЕ) -->
+<div id="timeMachineDock">
+    <div class="tm-header">
+        <span>⏪ ИСТОРИЯ НА ПОЛЕТИТЕ (АРХИВ)</span>
+        <span id="tmTimestampLabel">НА ЖИВО</span>
+    </div>
+    <div class="tm-slider-wrap">
+        <span style="font-size:11px; color:#ccc;">НАЗАД</span>
+        <input type="range" id="historySlider" min="0" max="0" value="0">
+        <span style="font-size:11px; color:#ccc;">СЕГА</span>
+    </div>
+    <div class="tm-controls">
+        <div style="display:flex; gap:6px;">
+            <button class="radar-btn amber-btn" id="btnPlayHistory">▶ ПУСНИ</button>
+            <button class="radar-btn" id="btnSpeedHistory">1x</button>
+        </div>
+        <span id="tmFramesCount" style="font-size:11px; color:#ccc;">Записи в БД: 0</span>
+        <button class="radar-btn active" id="btnBackToLive">🔴 НА ЖИВО</button>
+    </div>
+</div>
 
-        let planes = [];
-        let selectedPlaneId = null;
-        let overlappingCluster = [];
-        let clusterIndex = 0;
-        let highlightMilitaryOnly = false;
-        let isFetchingPlanes = false;
-        let slotsExpanded = false;
+<div id="infoPanel"></div>
 
-        let sweepAngle = 0;
-        let maxRangeKm = 350;
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+    let myLat = 43.3676;
+    let myLon = 24.6667;
+    let myBaseName = 'с. Радишево';
+    let gpsWatchId = null;
 
-        // СТАЦИОНАРНО ОСЕВЕРЯВАНЕ: Север винаги е горе (12 часа)!
-        let useMagneticNorth = false;
-        const BG_MAGNETIC_DECLINATION = 5.5;
+    // МАГНИТЕН СЕВЕР ЛОГИКА
+    let useMagneticNorth = false;
+    const BG_MAGNETIC_DECLINATION = 5.5;
 
-        window.toggleExpandSlots = function() {
-            slotsExpanded = !slotsExpanded;
-            const bar = document.getElementById('pinnedBarContainer');
-            const btn = document.getElementById('toggleSlotsBtn');
-            if (bar) bar.classList.toggle('expanded', slotsExpanded);
-            if (btn) btn.innerText = slotsExpanded ? '▲ СВИЙ (6)' : '▼ РАЗГЪНИ (21)';
-        };
+    function getAzimuthCorrectionDeg() {
+        return useMagneticNorth ? -BG_MAGNETIC_DECLINATION : 0.0;
+    }
 
-        window.toggleGyroCompass = function() {
-            useMagneticNorth = !useMagneticNorth;
-            const btn = document.getElementById('btn-gyro');
-            if (useMagneticNorth) {
-                if (btn) {
-                    btn.classList.add('active');
-                    btn.innerText = '🧭 СЕВЕР: МАГНИТЕН (-5.5°)';
-                }
-            } else {
-                if (btn) {
-                    btn.classList.remove('active');
-                    btn.innerText = '🧭 СЕВЕР: ИСТИНСКИ (0°)';
-                }
-            }
-            if (selectedPlaneId) {
-                const sel = planes.find(p => p.id === selectedPlaneId);
-                if (sel) updateInfoPanelHTML(sel);
-            }
-        };
-
-        window.updateCompassFromApp = function(magHeadingDeg) {};
-
-        function getActiveRotationDeg() {
-            return 0.0;
+    window.toggleGyroCompass = function() {
+        useMagneticNorth = !useMagneticNorth;
+        const btn = document.getElementById('btn-gyro');
+        if (useMagneticNorth) {
+            btn.classList.add('active');
+            btn.innerText = '🧭 СЕВЕР: МАГНИТЕН (-5.5°)';
+        } else {
+            btn.classList.remove('active');
+            btn.innerText = '🧭 СЕВЕР: ИСТИНСКИ (0°)';
         }
-
-        function getAzimuthCorrectionDeg() {
-            return useMagneticNorth ? -BG_MAGNETIC_DECLINATION : 0.0;
+        if (selectedPlaneId) {
+            const sel = planes.find(p => p.id === selectedPlaneId);
+            if (sel) updateInfoPanelHTML(sel);
         }
+    };
 
-        const planePhotoCache = {};
-        const planeRouteCache = {};
-        const planeTrails = {};
+    const map = L.map('terrainMap', { center: [myLat, myLon], zoom: 8, zoomControl: false, attributionControl: false });
+    const googleTerrainLayer = L.tileLayer('https://{s}.google.com/vt/lyrs=p&x={x}&y={y}&z={z}&hl=bg', { maxZoom: 18, subdomains: ['mt0', 'mt1', 'mt2', 'mt3'] });
+    const googleHybridLayer = L.tileLayer('https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&hl=bg', { maxZoom: 18, subdomains: ['mt0', 'mt1', 'mt2', 'mt3'] });
+    const openTopoLayer = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 17 });
+    googleTerrainLayer.addTo(map);
+    let currentMapMode = 0;
 
-        // ИНТЕЛИГЕНТНА СИСТЕМА ЗА ОПЕРАТИВНО ВОДЕНЕ НА 21 ЦЕЛИ (#1..#21 -> #22..#50+)
-        let pinnedTargets = {};
-        ALL_SLOTS.forEach(s => { pinnedTargets[s] = null; });
-        let highestTrackNumber = 0;
+    const fallbackBgBorder = [
+        [44.21, 22.67], [44.04, 22.94], [43.82, 23.25], [43.78, 23.82], [43.69, 24.47], [43.74, 24.89],
+        [43.63, 25.37], [43.68, 25.63], [43.85, 25.95], [44.05, 26.27], [44.13, 26.65], [44.12, 27.27],
+        [43.83, 27.67], [43.74, 28.05], [43.74, 28.58], [43.54, 28.61], [43.37, 28.08], [43.19, 27.92],
+        [42.85, 27.89], [42.66, 27.72], [42.42, 27.78], [42.09, 27.96], [41.98, 28.02], [41.96, 27.65],
+        [42.01, 27.18], [41.87, 26.95], [41.99, 26.59], [41.71, 26.35], [41.58, 26.15], [41.32, 26.12],
+        [41.29, 25.75], [41.24, 25.29], [41.36, 24.85], [41.45, 24.42], [41.55, 24.06], [41.38, 23.85],
+        [41.34, 23.22], [41.37, 22.95], [41.71, 22.97], [41.99, 22.87], [42.22, 22.52], [42.32, 22.36],
+        [42.56, 22.44], [42.87, 22.66], [43.01, 22.81], [43.19, 22.65], [43.39, 22.56], [43.68, 22.41],
+        [43.81, 22.36], [44.03, 22.65], [44.21, 22.67]
+    ];
 
+    let bgBorderLayer = L.polygon(fallbackBgBorder, {
+        color: '#ff1111', weight: 3.5, opacity: 0.95, fillColor: '#ff0000', fillOpacity: 0.04, className: 'bg-border-glow'
+    }).addTo(map);
+
+    fetch('https://raw.githubusercontent.com/johan/world.geo.json/master/countries/BGR.geo.json')
+        .then(r => r.json())
+        .then(geoData => {
+            if (map.hasLayer(bgBorderLayer)) map.removeLayer(bgBorderLayer);
+            bgBorderLayer = L.geoJSON(geoData, {
+                style: { color: '#ff1111', weight: 3.5, opacity: 0.95, fillColor: '#ff0000', fillOpacity: 0.04, className: 'bg-border-glow' }
+            });
+            if (showBorder) bgBorderLayer.addTo(map);
+        }).catch(() => {});
+
+    let showBorder = true;
+
+    function highlightLocBtn(activeId) {
+        document.querySelectorAll('.loc-btn').forEach(b => b.classList.remove('active'));
+        const el = document.getElementById(activeId);
+        if (el) el.classList.add('active');
+    }
+
+    window.setBaseLocation = function(lat, lon, label, btnId) {
+        if (gpsWatchId !== null && navigator.geolocation) {
+            navigator.geolocation.clearWatch(gpsWatchId);
+            gpsWatchId = null;
+        }
+        myLat = parseFloat(lat);
+        myLon = parseFloat(lon);
+        myBaseName = label;
+        document.getElementById('gpsText').textContent = `📍 БАЗА: ${label} (${myLat.toFixed(2)}, ${myLon.toFixed(2)})`;
+        if (btnId) highlightLocBtn(btnId);
+        map.setView([myLat, myLon], map.getZoom());
+        fetchPlanes(true);
+    };
+
+    window.setBaseFromMapCenter = function() {
+        const c = map.getCenter();
+        window.setBaseLocation(c.lat, c.lng, 'Център карта', 'locCenter');
+    };
+
+    window.promptManualCoords = function() {
+        const input = prompt('Въведи координати (Ширина, Дължина) - напр. 42.7136, 27.8986 за Емона:', `${myLat.toFixed(4)}, ${myLon.toFixed(4)}`);
+        if (!input) return;
+        const parts = input.split(/[ ,;]+/);
+        if (parts.length >= 2) {
+            const lat = parseFloat(parts[0]);
+            const lon = parseFloat(parts[1]);
+            if (!isNaN(lat) && !isNaN(lon)) {
+                window.setBaseLocation(lat, lon, 'Ръчна точка', 'locManual');
+            }
+        }
+    };
+
+    window.activateRealGps = function() {
+        highlightLocBtn('locGps');
+        document.getElementById('gpsText').textContent = '📡 Търсене на GPS...';
+        if (!navigator.geolocation) return alert('Няма GPS поддръжка.');
+        gpsWatchId = navigator.geolocation.watchPosition(
+            (pos) => {
+                myLat = pos.coords.latitude;
+                myLon = pos.coords.longitude;
+                myBaseName = 'АВТО GPS';
+                document.getElementById('gpsText').textContent = `📡 GPS АКТИВЕН (${myLat.toFixed(3)}, ${myLon.toFixed(3)})`;
+                map.panTo([myLat, myLon]);
+                fetchPlanes(true);
+            },
+            (err) => alert('GPS блокиран. Натисни бутона 🌊 ЕМОНА или 🎯 ЦЕНТЪР КАРТА!'),
+            { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
+        );
+    };
+
+    const TOTAL_PIN_SLOTS = 21;
+    const ALL_SLOTS = Array.from({ length: TOTAL_PIN_SLOTS }, (_, i) => i + 1);
+    let pinnedTargets = {};
+    ALL_SLOTS.forEach(s => { pinnedTargets[s] = null; });
+    let highestTrackNumber = 0;
+    let slotsExpanded = false;
+
+    const planePhotoCache = {};
+    const planeRouteCache = {};
+
+    try {
+        const savedPins = localStorage.getItem('radar_pinned_targets_21');
+        const savedCounter = localStorage.getItem('radar_highest_track_num_21');
+        if (savedPins) {
+            const parsed = JSON.parse(savedPins);
+            ALL_SLOTS.forEach(s => { pinnedTargets[s] = parsed[s] || null; });
+        }
+        if (savedCounter) highestTrackNumber = parseInt(savedCounter, 10) || 0;
+    } catch (e) {}
+
+    function savePinState() {
         try {
-            const savedPins = localStorage.getItem('radar_pinned_targets_21');
-            const savedCounter = localStorage.getItem('radar_highest_track_num_21');
-            if (savedPins) {
-                const parsed = JSON.parse(savedPins);
-                ALL_SLOTS.forEach(s => {
-                    pinnedTargets[s] = parsed[s] || null;
-                });
+            localStorage.setItem('radar_pinned_targets_21', JSON.stringify(pinnedTargets));
+            localStorage.setItem('radar_highest_track_num_21', String(highestTrackNumber));
+        } catch (e) {}
+    }
+
+    function checkAutoResetCounter() {
+        const anyActive = ALL_SLOTS.some(s => pinnedTargets[s] !== null);
+        if (!anyActive) highestTrackNumber = 0;
+    }
+
+    function getPinDataForPlane(planeId) {
+        if (!planeId) return null;
+        for (let slot of ALL_SLOTS) {
+            if (pinnedTargets[slot] && pinnedTargets[slot].id === planeId) return { slot: slot, trackNum: pinnedTargets[slot].trackNum };
+        }
+        return null;
+    }
+
+    window.toggleExpandSlots = function() {
+        slotsExpanded = !slotsExpanded;
+        document.getElementById('pinnedBarContainer').classList.toggle('expanded', slotsExpanded);
+        document.getElementById('toggleSlotsBtn').innerText = slotsExpanded ? '▲ СВИЙ (6)' : '▼ РАЗГЪНИ (21)';
+    };
+
+    window.togglePinSlot = function(slot, planeId) {
+        if (pinnedTargets[slot] && pinnedTargets[slot].id === planeId) {
+            pinnedTargets[slot] = null;
+            checkAutoResetCounter();
+        } else {
+            for (let s of ALL_SLOTS) { if (pinnedTargets[s] && pinnedTargets[s].id === planeId) pinnedTargets[s] = null; }
+            checkAutoResetCounter();
+            highestTrackNumber++;
+            pinnedTargets[slot] = { id: planeId, trackNum: highestTrackNumber };
+        }
+        savePinState();
+        updatePinnedBarUI();
+        if (selectedPlaneId) {
+            const sel = planes.find(p => p.id === selectedPlaneId);
+            if (sel) updateInfoPanelHTML(sel);
+        }
+    };
+
+    window.autoAssignNextTrack = function(planeId) {
+        const existing = getPinDataForPlane(planeId);
+        if (existing) {
+            pinnedTargets[existing.slot] = null;
+            checkAutoResetCounter();
+        } else {
+            let targetSlot = ALL_SLOTS.find(s => pinnedTargets[s] === null) || 1;
+            highestTrackNumber++;
+            pinnedTargets[targetSlot] = { id: planeId, trackNum: highestTrackNumber };
+        }
+        savePinState();
+        updatePinnedBarUI();
+        if (selectedPlaneId) {
+            const sel = planes.find(p => p.id === selectedPlaneId);
+            if (sel) updateInfoPanelHTML(sel);
+        }
+    };
+
+    window.resetAllTrackedTargets = function() {
+        ALL_SLOTS.forEach(s => { pinnedTargets[s] = null; });
+        highestTrackNumber = 0;
+        savePinState();
+        updatePinnedBarUI();
+        if (selectedPlaneId) {
+            const sel = planes.find(p => p.id === selectedPlaneId);
+            if (sel) updateInfoPanelHTML(sel);
+        }
+    };
+
+    window.selectPinnedTarget = function(slot) {
+        const slotObj = pinnedTargets[slot];
+        if (!slotObj || !slotObj.id) return;
+        const found = planes.find(p => p.id === slotObj.id);
+        if (found) {
+            selectedPlaneId = found.id;
+            map.panTo([found.lat, found.lon]);
+            updateInfoPanelHTML(found);
+        } else {
+            pinnedTargets[slot] = null;
+            checkAutoResetCounter();
+            savePinState();
+            updatePinnedBarUI();
+        }
+    };
+
+    function updatePinnedBarUI() {
+        checkAutoResetCounter();
+        let activePinnedCount = 0;
+        for (let slot of ALL_SLOTS) {
+            const btn = document.getElementById(`pin-slot-${slot}`);
+            if (!btn) continue;
+            const slotObj = pinnedTargets[slot];
+            const p = (slotObj && slotObj.id) ? planes.find(pl => pl.id === slotObj.id) : null;
+            btn.classList.remove('filled', 'alert');
+            if (p && slotObj) {
+                activePinnedCount++;
+                btn.classList.add('filled');
+                const cleanName = (p.callsign || p.id).replace(' [ВОЕНЕН]', '');
+                const sqk = (p.squawk && p.squawk !== '----') ? p.squawk : cleanName;
+                btn.innerText = `🎯#${slotObj.trackNum}: ${sqk} (${(p.distKm || 0).toFixed(0)}km)`;
+            } else {
+                btn.innerText = `Цел #${slot}: -`;
             }
-            if (savedCounter) {
-                highestTrackNumber = parseInt(savedCounter, 10) || 0;
+        }
+        document.getElementById('trackCounterInfo').innerText = `🎯 МАРКИРАНИ ЦЕЛИ: ${activePinnedCount}/${TOTAL_PIN_SLOTS} | Следваща: #${highestTrackNumber + 1}`;
+    }
+
+    const canvas = document.getElementById('radarCanvas');
+    const ctx = canvas.getContext('2d');
+
+    function resizeCanvas() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    let planes = [];
+    let selectedPlaneId = null;
+    let showSweep = true;
+    let milOnlyFilter = false;
+    let sweepAngle = 0;
+    let isFetchingPlanes = false;
+
+    // МАШИНА НА ВРЕМЕТО ПРОМЕНЛИВИ
+    let isReplayMode = false;
+    let historyTimestamps = [];
+    let replayPlaying = false;
+    let replaySpeed = 1;
+    let replayTimer = null;
+
+    function calcDistanceKm(lat1, lon1, lat2, lon2) {
+        const R = 6371;
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    function calcBearing(lat1, lon1, lat2, lon2) {
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const y = Math.sin(dLon) * Math.cos(lat2 * Math.PI / 180);
+        const x = Math.cos(lat1 * Math.PI / 180) * Math.sin(lat2 * Math.PI / 180) - Math.sin(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.cos(dLon);
+        const trueAzi = Math.round((Math.atan2(y, x) * 180 / Math.PI + 360) % 360);
+        return Math.round((trueAzi + getAzimuthCorrectionDeg() + 360) % 360);
+    }
+
+    function getInterpolatedLatLon(plane, nowMs) {
+        if (isReplayMode || !plane.lastUpdateMs || !plane.speed || plane.speed < 25) return { lat: plane.lat, lon: plane.lon };
+        const dtSec = Math.min((nowMs - plane.lastUpdateMs) / 1000, 25.0);
+        const distKm = (plane.speed / 3600) * dtSec;
+        const rad = (plane.track || 0) * Math.PI / 180;
+        const dLat = (distKm * Math.cos(rad)) / 111.32;
+        const dLon = (distKm * Math.sin(rad)) / (111.32 * Math.cos(plane.lat * Math.PI / 180));
+        return { lat: plane.lat + dLat, lon: plane.lon + dLon };
+    }
+
+    function drawRealisticPlane(x, y, trackDeg, isMil, isSelected, pinData) {
+        ctx.save();
+        ctx.translate(x, y);
+        const visualTrack = ((trackDeg || 0) + getAzimuthCorrectionDeg() + 360) % 360;
+        ctx.rotate(visualTrack * Math.PI / 180);
+
+        const fillColor = isMil ? '#ff2222' : (pinData ? '#ff55ff' : (isSelected ? '#ffffff' : '#ffdd00'));
+        ctx.fillStyle = fillColor;
+        ctx.strokeStyle = '#111111';
+        ctx.lineWidth = 1.6;
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
+        ctx.shadowBlur = 5;
+
+        ctx.beginPath();
+        if (isMil) {
+            ctx.moveTo(0, -14); ctx.lineTo(3.5, -4); ctx.lineTo(12, 4); ctx.lineTo(12, 7);
+            ctx.lineTo(3.5, 5); ctx.lineTo(5, 12); ctx.lineTo(0, 9.5); ctx.lineTo(-5, 12);
+            ctx.lineTo(-3.5, 5); ctx.lineTo(-12, 7); ctx.lineTo(-12, 4); ctx.lineTo(-3.5, -4);
+        } else {
+            ctx.moveTo(0, -13); ctx.lineTo(2.4, -8); ctx.lineTo(2.4, -2); ctx.lineTo(13, 3);
+            ctx.lineTo(13, 5.5); ctx.lineTo(2.2, 2.5); ctx.lineTo(1.8, 9); ctx.lineTo(6, 11.5);
+            ctx.lineTo(6, 13); ctx.lineTo(0, 11.5); ctx.lineTo(-6, 13); ctx.lineTo(-6, 11.5);
+            ctx.lineTo(-1.8, 9); ctx.lineTo(-2.2, 2.5); ctx.lineTo(-13, 5.5); ctx.lineTo(-13, 3);
+            ctx.lineTo(-2.4, -2); ctx.lineTo(-2.4, -8);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+
+        if (isSelected || pinData) {
+            ctx.save();
+            ctx.strokeStyle = pinData ? '#ff00ff' : '#00ffff';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(x, y, 16, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+        }
+    }
+
+    // ЧЕРВЕНИКАВА КОМПАСНА РЕШЕТКА С МАГНИТЕН/ИСТИНСКИ СЕВЕР
+    function drawRadarGrid(cx, cy) {
+        const radius = Math.min(canvas.width, canvas.height) * 0.42;
+        ctx.save();
+        ctx.translate(cx, cy);
+
+        // Външен червен пръстен
+        ctx.beginPath();
+        ctx.arc(0, 0, radius, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255, 45, 45, 0.75)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // Вътрешен помощен пръстен
+        ctx.beginPath();
+        ctx.arc(0, 0, radius * 0.5, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255, 45, 45, 0.35)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        for (let i = 0; i < 360; i += 10) {
+            const isMajor = (i % 30 === 0);
+            const angleRad = (i - 90) * Math.PI / 180;
+            const startR = isMajor ? radius - 13 : radius - 6;
+
+            ctx.beginPath();
+            ctx.moveTo(Math.cos(angleRad) * startR, Math.sin(angleRad) * startR);
+            ctx.lineTo(Math.cos(angleRad) * radius, Math.sin(angleRad) * radius);
+            ctx.strokeStyle = (i === 0) ? '#00e5ff' : (isMajor ? 'rgba(255, 60, 60, 0.9)' : 'rgba(255, 60, 60, 0.45)');
+            ctx.lineWidth = isMajor ? 2.2 : 1.2;
+            ctx.stroke();
+
+            if (isMajor) {
+                let labelNum = (i + getAzimuthCorrectionDeg() + 360) % 360;
+                let labelText = (i === 0) ? (useMagneticNorth ? '0°М' : '0°С') : `${Math.round(labelNum)}°`;
+
+                ctx.fillStyle = (i === 0) ? '#00e5ff' : '#ff4444';
+                ctx.font = 'bold 11.5px monospace';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.shadowColor = '#000';
+                ctx.shadowBlur = 4;
+                ctx.fillText(labelText, Math.cos(angleRad) * (radius + 17), Math.sin(angleRad) * (radius + 17));
+            }
+        }
+
+        ctx.beginPath();
+        ctx.moveTo(-radius, 0); ctx.lineTo(radius, 0);
+        ctx.moveTo(0, -radius); ctx.lineTo(0, radius);
+        ctx.strokeStyle = 'rgba(255, 50, 50, 0.25)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        ctx.restore();
+    }
+
+    function renderLoop() {
+        const nowMs = Date.now();
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        const myScreenPt = map.latLngToContainerPoint([myLat, myLon]);
+
+        drawRadarGrid(myScreenPt.x, myScreenPt.y);
+
+        ctx.save();
+        ctx.fillStyle = '#00e5ff';
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(myScreenPt.x, myScreenPt.y, 7, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.font = 'bold 11px Segoe UI, sans-serif';
+        ctx.fillStyle = '#00e5ff';
+        ctx.fillText(`📍 ${myBaseName}`, myScreenPt.x + 10, myScreenPt.y + 4);
+        ctx.restore();
+
+        // УСИЛЕН ЯРКО ЧЕРВЕНИКАВ РАДАРЕН ЛЪЧ
+        if (showSweep) {
+            const sweepRadius = Math.min(canvas.width, canvas.height) * 0.42;
+            sweepAngle = (sweepAngle + 0.032) % (Math.PI * 2);
+
+            ctx.save();
+            ctx.translate(myScreenPt.x, myScreenPt.y);
+            ctx.rotate(sweepAngle);
+
+            const grad = ctx.createConicGradient(-0.55, 0, 0);
+            grad.addColorStop(0, 'rgba(255, 20, 20, 0)');
+            grad.addColorStop(0.08, 'rgba(255, 30, 30, 0.32)');
+            grad.addColorStop(0.14, 'rgba(255, 45, 20, 0.72)'); // Наситено червеникаво тяло
+            grad.addColorStop(0.16, 'rgba(255, 90, 50, 0.96)'); // Светещ водещ ръб
+            grad.addColorStop(0.165, 'rgba(255, 20, 20, 0)');
+
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.arc(0, 0, sweepRadius, -0.55, 0);
+            ctx.lineTo(0, 0);
+            ctx.fill();
+
+            // Ярка водеща червена лазерна линия на лъча
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(sweepRadius, 0);
+            ctx.strokeStyle = '#ff3322';
+            ctx.shadowColor = '#ff0000';
+            ctx.shadowBlur = 12;
+            ctx.lineWidth = 3;
+            ctx.stroke();
+
+            ctx.restore();
+        }
+
+        let totalCount = 0;
+        let milCount = 0;
+
+        planes.forEach(plane => {
+            const isMil = plane.callsign && plane.callsign.includes('[ВОЕНЕН]');
+            const pinData = getPinDataForPlane(plane.id);
+            if (milOnlyFilter && !isMil && !pinData) return;
+
+            totalCount++;
+            if (isMil) milCount++;
+
+            const interp = getInterpolatedLatLon(plane, nowMs);
+            const screenPt = map.latLngToContainerPoint([interp.lat, interp.lon]);
+
+            plane.distKm = calcDistanceKm(myLat, myLon, interp.lat, interp.lon);
+            plane.bearing = calcBearing(myLat, myLon, interp.lat, interp.lon);
+            plane.screenX = screenPt.x;
+            plane.screenY = screenPt.y;
+
+            const isSelected = (plane.id === selectedPlaneId);
+
+            if (isSelected || pinData) {
+                ctx.save();
+                ctx.beginPath();
+                ctx.setLineDash([5, 4]);
+                ctx.moveTo(myScreenPt.x, myScreenPt.y);
+                ctx.lineTo(screenPt.x, screenPt.y);
+                ctx.strokeStyle = pinData ? '#ff00ff' : '#00ff66';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            drawRealisticPlane(screenPt.x, screenPt.y, plane.track, isMil, isSelected, pinData);
+
+            const cleanCs = (plane.callsign || plane.id).replace(' [ВОЕНЕН]', '');
+            const hasSqk = plane.squawk && plane.squawk !== '----';
+            const pinPrefix = pinData ? `[#${pinData.trackNum}] ` : '';
+
+            const sqkText = hasSqk ? `SQK:${plane.squawk}` : cleanCs;
+            const line1 = isMil ? `${pinPrefix}⚔️ ${sqkText} (${cleanCs})` : `${pinPrefix}${cleanCs} ${hasSqk ? '[' + plane.squawk + ']' : ''}`;
+            const line2 = `AZ: ${plane.bearing}° | ${plane.distKm.toFixed(1)}km | ${plane.altitude}m`;
+
+            ctx.save();
+            ctx.font = 'bold 11px Segoe UI, sans-serif';
+            const w1 = ctx.measureText(line1).width;
+            const w2 = ctx.measureText(line2).width;
+            const boxW = Math.max(w1, w2) + 10;
+
+            ctx.fillStyle = 'rgba(0, 10, 4, 0.85)';
+            ctx.strokeStyle = isMil ? '#ff2222' : (pinData ? '#ff00ff' : 'rgba(0, 255, 102, 0.65)');
+            ctx.lineWidth = 1.2;
+            ctx.fillRect(screenPt.x + 14, screenPt.y - 12, boxW, 32);
+            ctx.strokeRect(screenPt.x + 14, screenPt.y - 12, boxW, 32);
+
+            ctx.fillStyle = isMil ? '#ff5555' : (pinData ? '#ff88ff' : '#ffdd00');
+            ctx.fillText(line1, screenPt.x + 19, screenPt.y + 1);
+
+            ctx.fillStyle = '#00ff66';
+            ctx.fillText(line2, screenPt.x + 19, screenPt.y + 15);
+            ctx.restore();
+        });
+
+        document.getElementById('planesCount').textContent = totalCount;
+        document.getElementById('milCount').textContent = milCount;
+
+        requestAnimationFrame(renderLoop);
+    }
+
+    map.on('click', function(e) {
+        const clickX = e.containerPoint.x;
+        const clickY = e.containerPoint.y;
+        let closest = null, minDist = 28;
+
+        planes.forEach(p => {
+            const isMil = p.callsign && p.callsign.includes('[ВОЕНЕН]');
+            const pinData = getPinDataForPlane(p.id);
+            if (milOnlyFilter && !isMil && !pinData) return;
+            const d = Math.hypot((p.screenX || 0) - clickX, (p.screenY || 0) - clickY);
+            if (d < minDist) { minDist = d; closest = p; }
+        });
+
+        if (closest) {
+            selectedPlaneId = closest.id;
+            updateInfoPanelHTML(closest);
+        } else {
+            closeInfoPanel();
+        }
+    });
+
+    async function fetchRealPlanePhoto(planeId) {
+        if (!planeId) return;
+        if (planePhotoCache[planeId] !== undefined) { applyPhotoToBox(planePhotoCache[planeId]); return; }
+        try {
+            const res = await fetch(`https://api.planespotters.net/pub/photos/hex/${planeId.toLowerCase()}`);
+            const data = await res.json();
+            if (data && data.photos && data.photos.length > 0) {
+                const imgUrl = data.photos[0].thumbnail_large ? data.photos[0].thumbnail_large.src : data.photos[0].thumbnail.src;
+                planePhotoCache[planeId] = imgUrl;
+                if (selectedPlaneId === planeId) applyPhotoToBox(imgUrl);
+            } else planePhotoCache[planeId] = null;
+        } catch (err) { planePhotoCache[planeId] = null; }
+    }
+
+    function applyPhotoToBox(imgUrl) {
+        const imgEl = document.getElementById('realPlaneImg');
+        const svgEl = document.getElementById('fallbackPlaneSvg');
+        if (imgEl && imgUrl) { imgEl.src = imgUrl; imgEl.style.display = 'block'; if (svgEl) svgEl.style.display = 'none'; }
+    }
+
+    async function fetchFlightRoute(plane) {
+        if (!plane || !plane.callsign) return;
+        const cleanCs = plane.callsign.replace(' [ВОЕНЕН]', '').trim();
+        const isMil = plane.callsign.includes('[ВОЕНЕН]');
+        if (planeRouteCache[plane.id] !== undefined) {
+            const routeEl = document.getElementById('planeRouteText');
+            if (routeEl) routeEl.innerText = planeRouteCache[plane.id]; return;
+        }
+        try {
+            const res = await fetch(`https://api.adsbdb.com/v0/callsign/${encodeURIComponent(cleanCs)}`);
+            if (res.ok) {
+                const d = await res.json();
+                const fr = d?.response?.flightroute;
+                if (fr && fr.origin && fr.destination) planeRouteCache[plane.id] = `🛫 ${fr.origin.iata_code || fr.origin.municipality} ➔ 🛬 ${fr.destination.iata_code || fr.destination.municipality}`;
+                else planeRouteCache[plane.id] = isMil ? '🔒 Военен / Тактически полет' : 'Маршрутът не е публикуван';
+            } else planeRouteCache[plane.id] = isMil ? '🔒 Военен / Тактически полет' : 'Маршрутът не е публикуван';
+        } catch (e) { planeRouteCache[plane.id] = 'Няма данни за маршрута'; }
+        const routeEl = document.getElementById('planeRouteText');
+        if (routeEl && selectedPlaneId === plane.id) routeEl.innerText = planeRouteCache[plane.id];
+    }
+
+    function updateInfoPanelHTML(p) {
+        const panel = document.getElementById('infoPanel');
+        const isMilitary = p.callsign && p.callsign.includes('[ВОЕНЕН]');
+        panel.style.display = 'block';
+        panel.classList.toggle('mil-panel', isMilitary);
+
+        const color = isMilitary ? '#ff3333' : '#ffcc00';
+        const badgeText = isMilitary ? 'ВОЕНЕН ОБЕКТ' : 'ГРАЖДАНСКИ ПОЛЕТ';
+        const trackDeg = Math.round(p.track || 0);
+
+        const cachedPhoto = planePhotoCache[p.id];
+        const showImg = cachedPhoto ? 'display:block;' : 'display:none;';
+        const showSvg = cachedPhoto ? 'display:none;' : 'display:block;';
+
+        const pinData = getPinDataForPlane(p.id);
+        const currentPinSlot = pinData ? pinData.slot : null;
+        const nextAutoNum = highestTrackNumber + 1;
+
+        const autoBtnText = pinData
+            ? `🎯 МАРКИРАН КАТО ЦЕЛ #${pinData.trackNum} (СЛОТ ${pinData.slot}) — [РАЗМАРКИРАЙ]`
+            : `📌 МАРКИРАЙ КАТО ЦЕЛ #${nextAutoNum}`;
+
+        let slotButtonsHtml = '';
+        for (let s of ALL_SLOTS) {
+            const slotObj = pinnedTargets[s];
+            const isThisPlane = (currentPinSlot === s);
+            let btnLabel = `С${s}`;
+            let extraClass = '';
+            if (isThisPlane && slotObj) { btnLabel = `✓#${slotObj.trackNum}`; extraClass = 'active'; }
+            else if (slotObj) { btnLabel = `${s}:#${slotObj.trackNum}`; extraClass = 'occupied'; }
+            slotButtonsHtml += `<button class="mark-btn ${extraClass}" onclick="togglePinSlot(${s}, '${p.id}')">${btnLabel}</button>`;
+        }
+
+        const currentRoute = planeRouteCache[p.id] || 'Проверка на маршрут...';
+
+        panel.innerHTML = `
+            <div class="panel-top-actions">
+                <button class="action-btn" onclick="closeInfoPanel()">✕</button>
+            </div>
+            <div class="plane-card-header">
+                <div class="plane-photo-box">
+                    <img id="realPlaneImg" src="${cachedPhoto || ''}" style="${showImg}" alt="Снимка" />
+                    <svg id="fallbackPlaneSvg" viewBox="0 0 64 64" width="42" height="42" style="${showSvg} transform: rotate(${trackDeg}deg);">
+                        <path fill="${color}" d="M32 4 L36 18 L58 30 L58 35 L36 31 L35 48 L45 55 L45 59 L32 56 L19 59 L19 55 L29 48 L28 31 L6 35 L6 30 L28 18 Z"/>
+                    </svg>
+                </div>
+                <div>
+                    <div style="font-size: 10px; color: ${color}; font-weight: bold;">● ${badgeText} ${pinData ? `| 🎯 ЦЕЛ #${pinData.trackNum}` : ''}</div>
+                    <div style="font-weight: bold; font-size: 14px; color: #fff; margin: 2px 0;">
+                        📡 ТРАНСПОНДЕР SQK: <span style="color:#00ffff;">${p.squawk || '----'}</span> | ✈ ${p.callsign}
+                    </div>
+                    <div style="font-size: 10.5px; color: #00ffcc; font-weight: bold;">HEX: ${p.id.toUpperCase()} | Модел: ${p.type || 'Няма данни'}</div>
+                    <div style="font-size: 10px; color: #88ff88;">${p.operator || 'Неизвестен оператор'}</div>
+                </div>
+            </div>
+            <div class="route-banner"><span id="planeRouteText">${currentRoute}</span></div>
+            <div class="info-grid">
+                <div class="info-item">
+                    <span class="info-label">АЗИМУТ (${useMagneticNorth ? 'МАГНИТЕН' : 'ИСТИНСКИ'}) / РАЗСТ.</span>
+                    <span class="info-val" style="color:#00ff66; font-size:13.5px;">AZ: ${p.bearing}° / ${(p.distKm || 0).toFixed(1)} км</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">КУРС / ВИСОЧИНА / СКОРОСТ</span>
+                    <span class="info-val">${trackDeg}° | ${p.altitude || 0} м | ${p.speed || 0} км/ч</span>
+                </div>
+            </div>
+            <button class="auto-track-btn ${pinData ? 'active' : ''}" onclick="autoAssignNextTrack('${p.id}')">${autoBtnText}</button>
+            <div class="mark-targets-row">${slotButtonsHtml}</div>
+        `;
+
+        if (cachedPhoto === undefined) fetchRealPlanePhoto(p.id);
+        if (planeRouteCache[p.id] === undefined) fetchFlightRoute(p);
+    }
+
+    window.closeInfoPanel = function() { selectedPlaneId = null; document.getElementById('infoPanel').style.display = 'none'; };
+
+    function ingestPlanesData(data) {
+        const now = Date.now();
+        planes = data.map(item => {
+            const distKm = calcDistanceKm(myLat, myLon, item.lat, item.lon);
+            const bearing = calcBearing(myLat, myLon, item.lat, item.lon);
+            return { ...item, distKm, bearing, lastUpdateMs: now };
+        });
+        updatePinnedBarUI();
+        if (selectedPlaneId) {
+            const sel = planes.find(p => p.id === selectedPlaneId);
+            if (sel) updateInfoPanelHTML(sel);
+        }
+    }
+
+    async function fetchPlanes(force = false) {
+        if (isReplayMode || (isFetchingPlanes && !force)) return;
+        isFetchingPlanes = true;
+        try {
+            const res = await fetch(`/api/planes?lat=${myLat.toFixed(4)}&lon=${myLon.toFixed(4)}${force ? '&force=1' : ''}`);
+            if (res.ok) {
+                const data = await res.json();
+                if (Array.isArray(data)) {
+                    ingestPlanesData(data);
+                }
+            }
+        } catch (e) {} finally { isFetchingPlanes = false; }
+    }
+
+    // МАШИНА НА ВРЕМЕТО (ИСТОРИЯ ФУНКЦИИ)
+    async function syncHistoryMeta() {
+        try {
+            const res = await fetch('/api/history');
+            if (!res.ok) return;
+            const data = await res.json();
+            if (Array.isArray(data.timestamps) && data.timestamps.length > 0) {
+                historyTimestamps = data.timestamps;
+                const slider = document.getElementById('historySlider');
+                const atEnd = Number(slider.value) >= Number(slider.max) - 1;
+                slider.max = historyTimestamps.length - 1;
+                if (!isReplayMode || atEnd) slider.value = slider.max;
+                document.getElementById('tmFramesCount').textContent = `Записи в БД: ${historyTimestamps.length}`;
             }
         } catch (e) {}
+    }
 
-        function savePinState() {
-            try {
-                localStorage.setItem('radar_pinned_targets_21', JSON.stringify(pinnedTargets));
-                localStorage.setItem('radar_highest_track_num_21', String(highestTrackNumber));
-            } catch (e) {}
+    async function loadHistoryFrame(idx) {
+        try {
+            const res = await fetch(`/api/history?index=${idx}`);
+            if (!res.ok) return;
+            const frame = await res.json();
+            if (frame && Array.isArray(frame.planes)) {
+                isReplayMode = true;
+                document.getElementById('modeBadge').classList.add('replay');
+                document.getElementById('modeText').textContent = '⏪ REPLAY';
+                const dt = new Date(frame.timestamp * 1000);
+                document.getElementById('tmTimestampLabel').textContent = dt.toLocaleTimeString('bg-BG');
+                ingestPlanesData(frame.planes);
+            }
+        } catch (e) {}
+    }
+
+    function stopReplay() {
+        replayPlaying = false;
+        document.getElementById('btnPlayHistory').textContent = '▶ ПУСНИ';
+        if (replayTimer) {
+            clearInterval(replayTimer);
+            replayTimer = null;
         }
+    }
 
-        function checkAutoResetCounter() {
-            const anyActive = ALL_SLOTS.some(s => pinnedTargets[s] !== null);
-            if (!anyActive) {
-                highestTrackNumber = 0; // Когато всички 21 са размаркирани, почваме пак от #1 до #21!
-            }
+    document.getElementById('btnHistory').onclick = function() {
+        const dock = document.getElementById('timeMachineDock');
+        const isOpen = dock.style.display === 'block';
+        dock.style.display = isOpen ? 'none' : 'block';
+        this.classList.toggle('active', !isOpen);
+        if (!isOpen) syncHistoryMeta();
+    };
+
+    document.getElementById('historySlider').oninput = function() {
+        stopReplay();
+        loadHistoryFrame(Number(this.value));
+    };
+
+    document.getElementById('btnPlayHistory').onclick = function() {
+        if (historyTimestamps.length === 0) return;
+        if (replayPlaying) {
+            stopReplay();
+            return;
         }
-
-        function getPinDataForPlane(planeId) {
-            if (!planeId) return null;
-            for (let slot of ALL_SLOTS) {
-                if (pinnedTargets[slot] && pinnedTargets[slot].id === planeId) {
-                    return { slot: slot, trackNum: pinnedTargets[slot].trackNum };
-                }
-            }
-            return null;
-        }
-
-        function getNextTrackNumberForSlot(slot) {
-            if (highestTrackNumber < TOTAL_PIN_SLOTS) {
-                const usedNums = ALL_SLOTS.map(s => pinnedTargets[s] ? pinnedTargets[s].trackNum : 0);
-                if (!usedNums.includes(slot)) {
-                    highestTrackNumber = Math.max(highestTrackNumber, slot);
-                    return slot;
-                }
-            }
-            highestTrackNumber = highestTrackNumber + 1;
-            return highestTrackNumber;
-        }
-
-        window.togglePinSlot = function(slot, planeId) {
-            if (pinnedTargets[slot] && pinnedTargets[slot].id === planeId) {
-                pinnedTargets[slot] = null;
-                checkAutoResetCounter();
-            } else {
-                for (let s of ALL_SLOTS) {
-                    if (pinnedTargets[s] && pinnedTargets[s].id === planeId) {
-                        pinnedTargets[s] = null;
-                    }
-                }
-                checkAutoResetCounter();
-                const assignedTrackNum = getNextTrackNumberForSlot(slot);
-                pinnedTargets[slot] = {
-                    id: planeId,
-                    trackNum: assignedTrackNum
-                };
-            }
-
-            savePinState();
-            updatePinnedBarUI();
-            if (selectedPlaneId) {
-                const sel = planes.find(p => p.id === selectedPlaneId);
-                if (sel) updateInfoPanelHTML(sel);
-            }
-        };
-
-        // Умен бутон: Автоматично слага самолета в първия свободен слот (от 1 до 21) със следващия пореден номер
-        window.autoAssignNextTrack = function(planeId) {
-            const existing = getPinDataForPlane(planeId);
-            if (existing) {
-                pinnedTargets[existing.slot] = null;
-                checkAutoResetCounter();
-            } else {
-                let targetSlot = ALL_SLOTS.find(s => pinnedTargets[s] === null);
-                if (!targetSlot) {
-                    let oldestSlot = 1;
-                    let minTrack = 999999;
-                    for (let s of ALL_SLOTS) {
-                        if (pinnedTargets[s] && pinnedTargets[s].trackNum < minTrack) {
-                            minTrack = pinnedTargets[s].trackNum;
-                            oldestSlot = s;
-                        }
-                    }
-                    targetSlot = oldestSlot;
-                }
-                highestTrackNumber = highestTrackNumber + 1;
-                pinnedTargets[targetSlot] = {
-                    id: planeId,
-                    trackNum: highestTrackNumber
-                };
-            }
-
-            savePinState();
-            updatePinnedBarUI();
-            if (selectedPlaneId) {
-                const sel = planes.find(p => p.id === selectedPlaneId);
-                if (sel) updateInfoPanelHTML(sel);
-            }
-        };
-
-        window.resetAllTrackedTargets = function() {
-            ALL_SLOTS.forEach(s => { pinnedTargets[s] = null; });
-            highestTrackNumber = 0;
-            savePinState();
-            updatePinnedBarUI();
-            if (selectedPlaneId) {
-                const sel = planes.find(p => p.id === selectedPlaneId);
-                if (sel) updateInfoPanelHTML(sel);
-            }
-        };
-
-        window.selectPinnedTarget = function(slot) {
-            const slotObj = pinnedTargets[slot];
-            if (!slotObj || !slotObj.id) return;
-
-            const found = planes.find(p => p.id === slotObj.id);
-            if (found) {
-                selectedPlaneId = found.id;
-                overlappingCluster = [found];
-                clusterIndex = 0;
-                const panel = document.getElementById('infoPanel');
-                panel.style.display = 'block';
-                updateInfoPanelHTML(found);
-            } else {
-                pinnedTargets[slot] = null;
-                checkAutoResetCounter();
-                savePinState();
-                updatePinnedBarUI();
-            }
-        };
-
-        function updatePinnedBarUI() {
-            checkAutoResetCounter();
-            let activePinnedCount = 0;
-
-            for (let slot of ALL_SLOTS) {
-                const btn = document.getElementById(`pin-slot-${slot}`);
-                if (!btn) continue;
-
-                const slotObj = pinnedTargets[slot];
-                const p = (slotObj && slotObj.id) ? planes.find(pl => pl.id === slotObj.id) : null;
-
-                btn.classList.remove('filled', 'alert');
-
-                if (p && slotObj) {
-                    activePinnedCount++;
-                    btn.classList.add('filled');
-                    const isMil = p.callsign && p.callsign.includes('[ВОЕНЕН]');
-                    const sqkStatus = analyzeSquawkCode(p.squawk, isMil);
-                    if (sqkStatus && sqkStatus.level === 'emergency') {
-                        btn.classList.add('alert');
-                    }
-                    const cleanName = p.callsign.replace(' [ВОЕНЕН]', '');
-                    const labelSqk = (p.squawk && p.squawk !== '----') ? p.squawk : cleanName;
-                    btn.innerText = `🎯#${slotObj.trackNum}: ${labelSqk}`;
-                } else {
-                    btn.innerText = `Слот ${slot}: -`;
-                }
-            }
-
-            const nextNum = highestTrackNumber + 1;
-            const counterSpan = document.getElementById('trackCounterInfo');
-            if (counterSpan) {
-                counterSpan.innerText = `🎯 ВОДЕНИ: ${activePinnedCount}/${TOTAL_PIN_SLOTS} | Следв: #${nextNum}`;
-            }
-        }
-
-        const RADISHEVO_LAT = 43.36763806288808;
-        const RADISHEVO_LON = 24.66672222828328;
-
-        let myLat = RADISHEVO_LAT;
-        let myLon = RADISHEVO_LON;
-        let isRealGps = false;
-        let gpsStatusText = "📍 БАЗА: с. Радишево";
-
-        const PLANE_KEEP_TIME = 180000;
-
-        const bgBorderCoords = [
-            [44.21, 22.67], [44.04, 22.94], [43.82, 23.25], [43.78, 23.82], [43.69, 24.47],
-            [43.74, 24.89], [43.63, 25.37], [43.68, 25.63], [43.85, 25.95], [44.05, 26.27],
-            [44.13, 26.65], [44.12, 27.27], [43.83, 27.67], [43.74, 28.05], [43.74, 28.58],
-            [43.54, 28.61], [43.37, 28.08], [43.19, 27.92], [42.85, 27.89], [42.66, 27.72],
-            [42.42, 27.78], [42.09, 27.96], [41.98, 28.02], [41.96, 27.65], [42.01, 27.18],
-            [41.87, 26.95], [41.99, 26.59], [41.71, 26.35], [41.58, 26.15], [41.32, 26.12],
-            [41.29, 25.75], [41.24, 25.29], [41.36, 24.85], [41.45, 24.42], [41.55, 24.06],
-            [41.38, 23.85], [41.34, 23.22], [41.37, 22.95], [41.71, 22.97], [41.99, 22.87],
-            [42.22, 22.52], [42.32, 22.36], [42.56, 22.44], [42.87, 22.66], [43.01, 22.81],
-            [43.19, 22.65], [43.39, 22.56], [43.68, 22.41], [43.81, 22.36], [44.03, 22.65],
-            [44.21, 22.67]
-        ];
-
-        const bgCities = [
-            { name: "Плевен", lat: 43.4170, lon: 24.6067 },
-            { name: "София", lat: 42.6977, lon: 23.3219 },
-            { name: "Пловдив", lat: 42.1354, lon: 24.7453 },
-            { name: "Варна", lat: 43.2141, lon: 27.9147 },
-            { name: "Бургас", lat: 42.5048, lon: 27.4626 },
-            { name: "Русе", lat: 43.8356, lon: 25.9657 },
-            { name: "В.Търново", lat: 43.0757, lon: 25.6172 }
-        ];
-
-        let hdBgPolygons = null;
-        fetch('https://raw.githubusercontent.com/johan/world.geo.json/master/countries/BGR.geo.json')
-            .then(r => r.json())
-            .then(data => {
-                if (data && data.features && data.features[0]) {
-                    hdBgPolygons = data.features[0].geometry.coordinates;
-                }
-            })
-            .catch(() => {});
-
-        let scale = 1.0;
-        let panX = 0;
-        let panY = 0;
-        let isDragging = false;
-        let dragMoved = false;
-        let startX, startY;
-        let initialDist = null;
-
-        function analyzeSquawkCode(sqk, isMilitary) {
-            if (!sqk || sqk === '----') return null;
-            const s = String(sqk).trim();
-
-            if (s === '7700') return { level: 'emergency', short: 'MAYDAY 7700', desc: '🚨 АВАРИЯ НА БОРДА (Код 7700)' };
-            if (s === '7600') return { level: 'emergency', short: 'NORDO 7600', desc: '🚨 ЗАГУБА НА РАДИОВРЪЗКА (Код 7600)' };
-            if (s === '7500') return { level: 'emergency', short: 'HIJACK 7500', desc: '🚨 ОТВЛИЧАНЕ (Код 7500)' };
-            if (s === '7777') return { level: 'emergency', short: 'ПВО ПРЕХВАТ', desc: '⚔️ АКТИВЕН ВОЕНЕН ПРЕХВАТ (Код 7777)' };
-            if (s.startsWith('44')) return { level: 'tactical', short: 'НАТО МИСИЯ', desc: '⚔️ НАТО Тактическа мисия (44xx)' };
-            if (s.startsWith('74')) return { level: 'tactical', short: 'БПЛА / ВВС', desc: '⚔️ Военно разузнаване / Дрон (74xx)' };
-            if (s === '0020' || s === '0033') return { level: 'tactical', short: 'СПЕШЕН/ДЕСАНТ', desc: '🚁 Спешна медицинска мисия или Десант' };
-
-            return null;
-        }
-
-        function setScale(km) {
-            maxRangeKm = km;
-            document.querySelectorAll('.scale-group button').forEach(b => b.classList.remove('active'));
-            document.getElementById(`btn-${km}`).classList.add('active');
-        }
-
-        function toggleMilitaryOnly() {
-            highlightMilitaryOnly = !highlightMilitaryOnly;
-            document.getElementById('btn-mil').classList.toggle('active', highlightMilitaryOnly);
-        }
-
-        let screenWidth = window.innerWidth;
-        let screenHeight = window.innerHeight;
-
-        function resize() {
-            const dpr = window.devicePixelRatio || 1;
-            screenWidth = window.innerWidth;
-            screenHeight = window.innerHeight;
-            canvas.width = mul(screenWidth, dpr);
-            canvas.height = mul(screenHeight, dpr);
-            canvas.style.width = screenWidth + 'px';
-            canvas.style.height = screenHeight + 'px';
-            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        }
-        window.addEventListener('resize', resize);
-        resize();
-
-        canvas.addEventListener('touchstart', (e) => {
-            if (e.touches.length === 1) {
-                isDragging = true;
-                dragMoved = false;
-                startX = sub(e.touches[0].clientX, panX);
-                startY = sub(e.touches[0].clientY, panY);
-            } else if (e.touches.length === 2) {
-                isDragging = false;
-                initialDist = Math.hypot(
-                    sub(e.touches[0].clientX, e.touches[1].clientX),
-                    sub(e.touches[0].clientY, e.touches[1].clientY)
-                );
-            }
-        });
-
-        canvas.addEventListener('touchmove', (e) => {
-            if (isDragging && e.touches.length === 1) {
-                const newPanX = sub(e.touches[0].clientX, startX);
-                const newPanY = sub(e.touches[0].clientY, startY);
-                if (Math.hypot(sub(newPanX, panX), sub(newPanY, panY)) > 4) {
-                    dragMoved = true;
-                }
-                panX = newPanX;
-                panY = newPanY;
-            } else if (e.touches.length === 2 && initialDist !== null) {
-                const currentDist = Math.hypot(
-                    sub(e.touches[0].clientX, e.touches[1].clientX),
-                    sub(e.touches[0].clientY, e.touches[1].clientY)
-                );
-                const zoomFactor = currentDist / initialDist;
-                scale = Math.max(1.0, Math.min(mul(scale, zoomFactor), 6.0));
-                initialDist = currentDist;
-            }
-        });
-
-        canvas.addEventListener('touchend', (e) => {
-            if (e.touches.length < 2) initialDist = null;
-            if (e.touches.length === 0) isDragging = false;
-        });
-
-        canvas.addEventListener('mousedown', (e) => {
-            isDragging = true;
-            dragMoved = false;
-            startX = sub(e.clientX, panX);
-            startY = sub(e.clientY, panY);
-        });
-        window.addEventListener('mousemove', (e) => {
-            if (!isDragging) return;
-            const newPanX = sub(e.clientX, startX);
-            const newPanY = sub(e.clientY, startY);
-            if (Math.hypot(sub(newPanX, panX), sub(newPanY, panY)) > 4) {
-                dragMoved = true;
-            }
-            panX = newPanX;
-            panY = newPanY;
-        });
-        window.addEventListener('mouseup', () => { isDragging = false; });
-        canvas.addEventListener('wheel', (e) => {
-            e.preventDefault();
-            const zoomIntensity = 0.12;
-            if (e.deltaY < 0) scale = mul(scale, (1 + zoomIntensity));
-            else scale = scale / (1 + zoomIntensity);
-            scale = Math.max(1.0, Math.min(scale, 6.0));
-        }, { passive: false });
-
-        function calculateDistance(lat1, lon1, lat2, lon2) {
-            lat1 = parseFloat(lat1); lon1 = parseFloat(lon1);
-            lat2 = parseFloat(lat2); lon2 = parseFloat(lon2);
-            const dLat = mul(sub(lat2, lat1), DEG_TO_RAD);
-            const dLon = mul(sub(lon2, lon1), DEG_TO_RAD);
-            const lat1Rad = mul(lat1, DEG_TO_RAD);
-            const lat2Rad = mul(lat2, DEG_TO_RAD);
-
-            const sinDLat = Math.sin(dLat / 2);
-            const sinDLon = Math.sin(dLon / 2);
-            const a = mul(sinDLat, sinDLat) + mul(mul(Math.cos(lat1Rad), Math.cos(lat2Rad)), mul(sinDLon, sinDLon));
-            const c = mul(2, Math.atan2(Math.sqrt(a), Math.sqrt(sub(1, a))));
-            return mul(6371, c);
-        }
-
-        function calculateAzimuth(lat1, lon1, lat2, lon2) {
-            lat1 = parseFloat(lat1); lon1 = parseFloat(lon1);
-            lat2 = parseFloat(lat2); lon2 = parseFloat(lon2);
-            const dLon = mul(sub(lon2, lon1), DEG_TO_RAD);
-            const lat1Rad = mul(lat1, DEG_TO_RAD);
-            const lat2Rad = mul(lat2, DEG_TO_RAD);
-
-            const y = mul(Math.sin(dLon), Math.cos(lat2Rad));
-            const x = sub(mul(Math.cos(lat1Rad), Math.sin(lat2Rad)), mul(mul(Math.sin(lat1Rad), Math.cos(lat2Rad)), Math.cos(dLon)));
-            const trueAzi = (mul(Math.atan2(y, x), RAD_TO_DEG) + 360) % 360;
-            return (trueAzi + getAzimuthCorrectionDeg() + 360) % 360;
-        }
-
-        function latLonToRadarXY(lat, lon, cx, cy, radius) {
-            const dist = calculateDistance(myLat, myLon, lat, lon);
-            const azi = calculateAzimuth(myLat, myLon, lat, lon);
-            const angleRad = mul(sub(azi, 90), DEG_TO_RAD);
-            const distPx = mul((dist / maxRangeKm), radius);
-            return {
-                x: cx + mul(Math.cos(angleRad), distPx),
-                y: cy + mul(Math.sin(angleRad), distPx),
-                dist: dist
-            };
-        }
-
-        function isDirectMilitary(ac, isMilFeed) {
-            if (isMilFeed) return true;
-            if (ac.dbFlags && (ac.dbFlags & 1) === 1) return true;
-            const hex = String(ac.hex || '').toLowerCase().trim();
-            const cs = String(ac.flight || '').toUpperCase().trim();
-            const sqk = String(ac.squawk || '').trim();
-            const type = String(ac.t || '').toUpperCase().trim();
-
-            if (hex.startsWith('45f4') || hex.startsWith('ae') || hex.startsWith('af') || hex.startsWith('43c') || hex.startsWith('3f')) return true;
-            if (sqk === '7777' || sqk.startsWith('44') || sqk.startsWith('74')) return true;
-
-            const milCallsigns = ['BAF', 'BULAF', 'BGF', 'NATO', 'FORTE', 'LAGR', 'NCHO', 'JAKE', 'RCH', 'RRR', 'ASCOT', 'DUKE', 'VIPER', 'COBRA', 'HAWK', 'GAF', 'FAF', 'IAM', 'TUAF', 'HAF', 'ROAF', 'PLF', 'SAM', 'SPAR'];
-            for (let pref of milCallsigns) {
-                if (cs.startsWith(pref)) return true;
-            }
-
-            const milTypes = ['F16', 'C27J', 'C130', 'C30J', 'PC9', 'PC12', 'L39', 'MIG', 'SU25', 'AS32', 'UH60', 'CH47', 'MI8', 'MI17', 'MI24', 'KC135', 'K35R', 'E3TF', 'E3CF', 'B52', 'RQ4', 'MQ9', 'P8', 'C17', 'A400'];
-            for (let mt of milTypes) {
-                if (type.includes(mt)) return true;
-            }
-            return false;
-        }
-
-        async function fetchDirectFromBrowser() {
-            const urls = [
-                { url: `https://api.adsb.lol/v2/point/${myLat}/${myLon}/250`, mil: false },
-                { url: `https://api.adsb.lol/v2/mil`, mil: true },
-                { url: `https://opendata.adsb.fi/api/v2/lat/${myLat}/lon/${myLon}/dist/250`, mil: false }
-            ];
-
-            const results = await Promise.allSettled(
-                urls.map(u => fetch(u.url).then(r => r.ok ? r.json() : null).then(d => ({ data: d, mil: u.mil })))
-            );
-
-            const directMap = new Map();
-
-            results.forEach(res => {
-                if (res.status !== 'fulfilled' || !res.value || !res.value.data) return;
-                const list = res.value.data.ac || res.value.data.aircraft || [];
-                const isMilFeed = res.value.mil;
-
-                list.forEach(ac => {
-                    const lat = ac.lat ?? ac.latitude ?? null;
-                    const lon = ac.lon ?? ac.longitude ?? null;
-                    if (lat === null || lon === null) return;
-
-                    if (Math.abs(sub(lat, myLat)) > 4.5 || Math.abs(sub(lon, myLon)) > 6.0) return;
-
-                    const id = String(ac.hex || '').toLowerCase().trim();
-                    if (!id) return;
-
-                    const isMil = isDirectMilitary(ac, isMilFeed);
-                    let rawCs = String(ac.flight || '').trim();
-                    if (!rawCs) rawCs = id.toUpperCase();
-                    const callsign = isMil ? `${rawCs} [ВОЕНЕН]` : rawCs;
-
-                    const altFeet = ac.alt_baro ?? ac.alt_geom ?? 0;
-                    const altMeters = (typeof altFeet === 'number') ? Math.round(mul(altFeet, 0.3048)) : 0;
-                    const speedKnots = ac.gs ?? 0;
-                    const speedKmh = (typeof speedKnots === 'number') ? Math.round(mul(speedKnots, 1.852)) : 0;
-
-                    directMap.set(id, {
-                        id: id,
-                        callsign: callsign,
-                        lat: parseFloat(lat),
-                        lon: parseFloat(lon),
-                        track: parseFloat(ac.track ?? ac.true_heading ?? 0),
-                        altitude: altMeters,
-                        speed: speedKmh,
-                        squawk: String(ac.squawk || '----'),
-                        type: String(ac.t || ac.desc || 'Няма данни'),
-                        operator: String(ac.ownOp || (isMil ? 'Военновъздушни сили (ВВС)' : 'Граждански полет')),
-                        age: parseFloat(ac.seen_pos ?? ac.seen ?? 0.5)
-                    });
-                });
-            });
-
-            return Array.from(directMap.values());
-        }
-
-        async function fetchPlanes() {
-            if (isFetchingPlanes) return;
-            isFetchingPlanes = true;
-
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 9000);
-
-            try {
-                const response = await fetch(`/api/planes?lat=${myLat}&lon=${myLon}`, {
-                    signal: controller.signal
-                });
-                clearTimeout(timeoutId);
-
-                if (!response.ok) {
-                    isFetchingPlanes = false;
-                    return;
-                }
-
-                const data = await response.json();
-                const now = Date.now();
-
-                if (Array.isArray(data) && data.length > 0) {
-                    const planeMap = new Map();
-                    planes.forEach(p => planeMap.set(p.id, p));
-
-                    data.forEach(p => {
-                        const ageMs = mul(parseFloat(p.age || 0.8), 1000);
-                        const realFixTimestamp = sub(now, ageMs);
-
-                        if (!planeTrails[p.id]) {
-                            planeTrails[p.id] = [];
-                        }
-                        const trail = planeTrails[p.id];
-                        const lastPt = trail.length > 0 ? trail[sub(trail.length, 1)] : null;
-                        if (!lastPt || calculateDistance(lastPt.lat, lastPt.lon, p.lat, p.lon) > 0.35) {
-                            trail.push({ lat: p.lat, lon: p.lon });
-                            if (trail.length > 18) trail.shift();
-                        }
-
-                        planeMap.set(p.id, {
-                            ...planeMap.get(p.id),
-                            ...p,
-                            lastSeen: now,
-                            lastUpdate: realFixTimestamp
-                        });
-                    });
-
-                    planes = Array.from(planeMap.values()).filter(p => {
-                        if (!p.lastSeen) p.lastSeen = now;
-                        return sub(now, p.lastSeen) < PLANE_KEEP_TIME;
-                    });
-
-                    updatePinnedBarUI();
-
-                    if (selectedPlaneId) {
-                        const sel = planes.find(p => p.id === selectedPlaneId);
-                        if (sel) updateInfoPanelHTML(sel);
-                    }
-                }
-            } catch (e) {
-                console.warn("Пропусната заявка, запазваме текущите цели на екрана.");
-            } finally {
-                clearTimeout(timeoutId);
-                isFetchingPlanes = false;
-            }
-        }
-
-        async function fetchFlightRoute(plane) {
-            if (!plane || !plane.callsign) return;
-            const cleanCs = plane.callsign.replace(' [ВОЕНЕН]', '').trim();
-            const isMil = plane.callsign.includes('[ВОЕНЕН]');
-
-            if (!cleanCs || cleanCs === 'Няма позивна' || cleanCs.toLowerCase() === plane.id.toLowerCase()) {
-                planeRouteCache[plane.id] = isMil ? 'Секретен военен маршрут' : 'Неизвестен маршрут';
-                applyRouteToDOM(plane.id);
+        replayPlaying = true;
+        this.textContent = '⏸ ПАУЗА';
+        const slider = document.getElementById('historySlider');
+        if (Number(slider.value) >= Number(slider.max)) slider.value = 0;
+
+        replayTimer = setInterval(() => {
+            let next = Number(slider.value) + 1;
+            if (next > Number(slider.max)) {
+                stopReplay();
                 return;
             }
-
-            if (planeRouteCache[plane.id] !== undefined) {
-                applyRouteToDOM(plane.id);
-                return;
-            }
-
-            planeRouteCache[plane.id] = 'Търсене на маршрут...';
-            applyRouteToDOM(plane.id);
-
-            try {
-                const res = await fetch('https://api.adsb.lol/api/0/routeset', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        planes: [{ callsign: cleanCs, lat: plane.lat, lng: plane.lon }]
-                    })
-                });
-                const data = await res.json();
-
-                if (Array.isArray(data) && data.length > 0 && data[0]._airports && data[0]._airports.length >= 2) {
-                    const airports = data[0]._airports;
-                    const orig = airports[0];
-                    const dest = airports[sub(airports.length, 1)];
-                    const origCode = orig.iata || orig.icao || '';
-                    const destCode = dest.iata || dest.icao || '';
-                    const origCity = orig.location || orig.name || '';
-                    const destCity = dest.location || dest.name || '';
-
-                    planeRouteCache[plane.id] = `🛫 ${origCode} (${origCity}) ➔ 🛬 ${destCode} (${destCity})`;
-                } else {
-                    planeRouteCache[plane.id] = isMil ? '🔒 Военен / Тактически полет' : 'Маршрутът не е публикуван';
-                }
-            } catch (err) {
-                planeRouteCache[plane.id] = isMil ? '🔒 Военен / Тактически полет' : 'Няма данни за маршрута';
-            }
-
-            if (selectedPlaneId === plane.id) {
-                applyRouteToDOM(plane.id);
-            }
-        }
-
-        function applyRouteToDOM(planeId) {
-            const routeEl = document.getElementById('planeRouteText');
-            if (routeEl && planeRouteCache[planeId]) {
-                routeEl.innerText = planeRouteCache[planeId];
-            }
-        }
-
-        function drawBulgariaMap(cx, cy, radius) {
-            ctx.save();
-
-            ctx.strokeStyle = 'rgba(0, 255, 100, 0.55)';
-            ctx.fillStyle = 'rgba(0, 255, 80, 0.05)';
-            ctx.lineWidth = 1.8 / scale;
-
-            if (hdBgPolygons && hdBgPolygons.length > 0) {
-                const ring = hdBgPolygons[0];
-                ctx.beginPath();
-                ring.forEach((coord, idx) => {
-                    const pt = latLonToRadarXY(coord[1], coord[0], cx, cy, radius);
-                    if (idx === 0) ctx.moveTo(pt.x, pt.y);
-                    else ctx.lineTo(pt.x, pt.y);
-                });
-                ctx.closePath();
-                ctx.fill();
-                ctx.stroke();
-            } else {
-                ctx.beginPath();
-                bgBorderCoords.forEach((coord, idx) => {
-                    const pt = latLonToRadarXY(coord[0], coord[1], cx, cy, radius);
-                    if (idx === 0) ctx.moveTo(pt.x, pt.y);
-                    else ctx.lineTo(pt.x, pt.y);
-                });
-                ctx.closePath();
-                ctx.fill();
-                ctx.stroke();
-            }
-
-            ctx.fillStyle = 'rgba(0, 255, 120, 0.65)';
-            ctx.font = `${Math.max(6, 9 / Math.sqrt(scale))}px monospace`;
-            bgCities.forEach(city => {
-                const pt = latLonToRadarXY(city.lat, city.lon, cx, cy, radius);
-                if (city.name === "Плевен" && calculateDistance(myLat, myLon, city.lat, city.lon) < 12 && maxRangeKm >= 200) {
-                    return;
-                }
-                ctx.beginPath();
-                ctx.arc(pt.x, pt.y, 2.2 / scale, 0, TWO_PI);
-                ctx.fill();
-                ctx.fillText(city.name, pt.x + 4 / scale, pt.y + 3 / scale);
-            });
-
-            const distToRadishevo = calculateDistance(myLat, myLon, RADISHEVO_LAT, RADISHEVO_LON);
-            if (distToRadishevo > 10) {
-                const rPt = latLonToRadarXY(RADISHEVO_LAT, RADISHEVO_LON, cx, cy, radius);
-                ctx.strokeStyle = '#00ffcc';
-                ctx.strokeRect(sub(rPt.x, 3 / scale), sub(rPt.y, 3 / scale), 6 / scale, 6 / scale);
-                ctx.fillStyle = '#00ffcc';
-                ctx.fillText("с.Радишево", rPt.x + 6 / scale, rPt.y + 3 / scale);
-            }
-
-            ctx.restore();
-        }
-
-        function drawRadarGrid(cx, cy, radius) {
-            let ringStep = 70;
-            if (maxRangeKm <= 50) ringStep = 10;
-            else if (maxRangeKm <= 100) ringStep = 20;
-            else if (maxRangeKm <= 200) ringStep = 40;
-
-            const ringsCount = Math.floor(maxRangeKm / ringStep);
-
-            ctx.strokeStyle = 'rgba(0, 255, 0, 0.22)';
-            ctx.fillStyle = 'rgba(0, 255, 0, 0.5)';
-            ctx.font = `${Math.max(6, 9 / Math.sqrt(scale))}px monospace`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.lineWidth = 1 / scale;
-
-            for (let i = 1; i <= ringsCount; i++) {
-                const stepKm = mul(ringStep, i);
-                const r = mul((stepKm / maxRangeKm), radius);
-                ctx.beginPath();
-                ctx.arc(cx, cy, r, 0, TWO_PI);
-                ctx.stroke();
-                ctx.fillText(`${stepKm}km`, sub(cx + r, 15 / Math.sqrt(scale)), sub(cy, 7 / Math.sqrt(scale)));
-            }
-
-            ctx.beginPath();
-            ctx.arc(cx, cy, radius, 0, TWO_PI);
-            ctx.strokeStyle = 'rgba(0, 255, 0, 0.65)';
-            ctx.stroke();
-
-            ctx.strokeStyle = 'rgba(0, 255, 0, 0.12)';
-            ctx.beginPath();
-            ctx.moveTo(sub(cx, radius), cy); ctx.lineTo(cx + radius, cy);
-            ctx.moveTo(cx, sub(cy, radius)); ctx.lineTo(cx, cy + radius);
-            ctx.stroke();
-
-            for (let i = 0; i < 360; i += 10) {
-                const angleRad = mul(sub(i, 90), DEG_TO_RAD);
-                const isMajor = (i % 30 === 0);
-                const startR = sub(radius, (isMajor ? 6 : 3));
-                const endR = radius + (isMajor ? 6 : 3);
-
-                ctx.beginPath();
-                ctx.moveTo(cx + mul(Math.cos(angleRad), startR), cy + mul(Math.sin(angleRad), startR));
-                ctx.lineTo(cx + mul(Math.cos(angleRad), endR), cy + mul(Math.sin(angleRad), endR));
-                ctx.strokeStyle = (i === 0) ? '#00ffff' : (isMajor ? 'rgba(0, 255, 0, 0.65)' : 'rgba(0, 255, 0, 0.3)');
-                ctx.stroke();
-
-                if (isMajor) {
-                    const textR = radius + 15;
-                    ctx.fillStyle = (i === 0) ? '#00ffff' : '#0f0';
-                    ctx.font = `bold ${Math.max(6, 9 / Math.sqrt(scale))}px monospace`;
-                    const label = (i === 0) ? (useMagneticNorth ? '0°М' : '0°С') : `${i}°`;
-                    ctx.fillText(label, cx + mul(Math.cos(angleRad), textR), cy + mul(Math.sin(angleRad), textR));
-                }
-            }
-        }
-
-        function draw() {
-            ctx.clearRect(0, 0, screenWidth, screenHeight);
-            ctx.fillStyle = '#020802';
-            ctx.fillRect(0, 0, screenWidth, screenHeight);
-
-            const cx = screenWidth / 2;
-            const cy = mul(screenHeight, 0.53);
-            const radius = Math.min(mul(screenWidth, 0.43), mul(screenHeight, 0.31));
-
-            const now = Date.now();
-
-            ctx.save();
-            ctx.translate(cx + panX, cy + panY);
-            ctx.scale(scale, scale);
-            ctx.translate(-cx, -cy);
-
-            drawBulgariaMap(cx, cy, radius);
-            drawRadarGrid(cx, cy, radius);
-
-            const pulseRadius = (4 + mul((Math.sin(now / 250) + 1), 4)) / scale;
-            ctx.beginPath();
-            ctx.arc(cx, cy, pulseRadius, 0, TWO_PI);
-            ctx.fillStyle = isRealGps ? 'rgba(0, 255, 255, 0.25)' : 'rgba(0, 255, 0, 0.25)';
-            ctx.fill();
-
-            ctx.beginPath();
-            ctx.arc(cx, cy, 3.5 / scale, 0, TWO_PI);
-            ctx.fillStyle = isRealGps ? '#00ffff' : '#00ff00';
-            ctx.fill();
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = 1 / scale;
-            ctx.stroke();
-
-            const distToRad = calculateDistance(myLat, myLon, RADISHEVO_LAT, RADISHEVO_LON);
-            const centerLabel = (isRealGps && distToRad > 10) ? "ТИ (GPS)" : "РАДИШЕВО";
-
-            ctx.fillStyle = isRealGps ? '#00ffff' : '#00ff66';
-            ctx.font = `bold ${Math.max(6, 9 / Math.sqrt(scale))}px monospace`;
-            ctx.textAlign = 'left';
-            ctx.fillText(centerLabel, cx + 6 / scale, sub(cy, 5 / scale));
-
-            let visibleCount = 0;
-
-            const sortedPlanes = [...planes].sort((a, b) => {
-                const aSel = (a.id === selectedPlaneId) ? 3 : 0;
-                const bSel = (b.id === selectedPlaneId) ? 3 : 0;
-                if (aSel !== bSel) return sub(aSel, bSel);
-
-                const aPin = getPinDataForPlane(a.id) ? 2 : 0;
-                const bPin = getPinDataForPlane(b.id) ? 2 : 0;
-                if (aPin !== bPin) return sub(aPin, bPin);
-
-                const aMil = (a.callsign && a.callsign.includes('[ВОЕНЕН]')) ? 1 : 0;
-                const bMil = (b.callsign && b.callsign.includes('[ВОЕНЕН]')) ? 1 : 0;
-                return sub(aMil, bMil);
-            });
-
-            const iconScale = 1 / Math.pow(scale, 0.65);
-
-            sortedPlanes.forEach(plane => {
-                let currentLat = plane.lat;
-                let currentLon = plane.lon;
-
-                if (plane.lastUpdate && plane.speed > 0) {
-                    const deltaSec = sub(now, plane.lastUpdate) / 1000;
-                    if (deltaSec > 0 && deltaSec < 25) {
-                        const newPos = extrapolatePosition(plane.lat, plane.lon, plane.speed, plane.track || 0, deltaSec);
-                        currentLat = newPos.lat;
-                        currentLon = newPos.lon;
-                    }
-                }
-
-                plane.dist = calculateDistance(myLat, myLon, currentLat, currentLon);
-                plane.azi = calculateAzimuth(myLat, myLon, currentLat, currentLon);
-
-                if (plane.dist > maxRangeKm) return;
-
-                const isMilitary = plane.callsign && plane.callsign.includes('[ВОЕНЕН]');
-                const isSelected = (plane.id === selectedPlaneId);
-                const pinData = getPinDataForPlane(plane.id);
-                const sqkAlert = analyzeSquawkCode(plane.squawk, isMilitary);
-
-                visibleCount++;
-
-                const angleRad = mul(sub(plane.azi, 90), DEG_TO_RAD);
-                const distPx = mul((plane.dist / maxRangeKm), radius);
-                const px = cx + mul(Math.cos(angleRad), distPx);
-                const py = cy + mul(Math.sin(angleRad), distPx);
-
-                plane.renderX = px;
-                plane.renderY = py;
-
-                const isDimmed = highlightMilitaryOnly && !isMilitary && !isSelected && !pinData;
-
-                if ((isSelected || pinData) && planeTrails[plane.id] && planeTrails[plane.id].length > 1) {
-                    ctx.save();
-                    ctx.beginPath();
-                    planeTrails[plane.id].forEach((pt, idx) => {
-                        const tXY = latLonToRadarXY(pt.lat, pt.lon, cx, cy, radius);
-                        if (idx === 0) ctx.moveTo(tXY.x, tXY.y);
-                        else ctx.lineTo(tXY.x, tXY.y);
-                    });
-                    ctx.lineTo(px, py);
-                    ctx.strokeStyle = pinData ? 'rgba(255, 0, 255, 0.7)' : 'rgba(0, 255, 255, 0.7)';
-                    ctx.lineWidth = 1.5 / scale;
-                    ctx.stroke();
-                    ctx.restore();
-                }
-
-                ctx.save();
-                ctx.translate(px, py);
-
-                if (sqkAlert && sqkAlert.level === 'emergency') {
-                    const alertR = mul((10 + mul((Math.sin(now / 150) + 1), 6)), iconScale);
-                    ctx.beginPath();
-                    ctx.arc(0, 0, alertR, 0, TWO_PI);
-                    ctx.strokeStyle = '#ff0000';
-                    ctx.lineWidth = 2 / scale;
-                    ctx.stroke();
-                }
-
-                if (pinData) {
-                    const dSize = mul(13, iconScale);
-                    ctx.beginPath();
-                    ctx.moveTo(0, -dSize);
-                    ctx.lineTo(dSize, 0);
-                    ctx.lineTo(0, dSize);
-                    ctx.lineTo(-dSize, 0);
-                    ctx.closePath();
-                    ctx.strokeStyle = '#ff00ff';
-                    ctx.lineWidth = 1.8 / scale;
-                    ctx.stroke();
-                }
-
-                if (isSelected) {
-                    const boxSize = mul(12, iconScale);
-                    const doubleBox = mul(boxSize, 2);
-                    ctx.strokeStyle = '#00ffff';
-                    ctx.lineWidth = 1.6 / scale;
-                    ctx.strokeRect(-boxSize, -boxSize, doubleBox, doubleBox);
-
-                    ctx.restore();
-                    ctx.save();
-                    ctx.beginPath();
-                    ctx.setLineDash([3 / scale, 3 / scale]);
-                    ctx.moveTo(cx, cy);
-                    ctx.lineTo(px, py);
-                    ctx.strokeStyle = 'rgba(0, 255, 255, 0.55)';
-                    ctx.lineWidth = 1.2 / scale;
-                    ctx.stroke();
-                    ctx.setLineDash([]);
-                    ctx.restore();
-                    ctx.save();
-                    ctx.translate(px, py);
-                }
-
-                const effectiveTrack = ((plane.track || 0) + getAzimuthCorrectionDeg() + 360) % 360;
-                ctx.scale(iconScale, iconScale);
-                ctx.rotate(mul(effectiveTrack, DEG_TO_RAD));
-
-                if (isDimmed) {
-                    ctx.fillStyle = 'rgba(255, 204, 0, 0.18)';
-                } else if (pinData && !isMilitary) {
-                    ctx.fillStyle = '#ff66ff';
-                } else {
-                    ctx.fillStyle = isMilitary ? '#ff2222' : '#ffcc00';
-                }
-
-                ctx.beginPath();
-                ctx.moveTo(0, -8);
-                ctx.lineTo(2, -2);
-                ctx.lineTo(8, 1);
-                ctx.lineTo(2, 3);
-                ctx.lineTo(1, 6);
-                ctx.lineTo(4, 8);
-                ctx.lineTo(-4, 8);
-                ctx.lineTo(-1, 6);
-                ctx.lineTo(-2, 3);
-                ctx.lineTo(-8, 1);
-                ctx.lineTo(-2, -2);
-                ctx.closePath();
-                ctx.fill();
-
-                ctx.rotate(mul(-effectiveTrack, DEG_TO_RAD));
-
-                if (!isDimmed) {
-                    ctx.fillStyle = pinData ? '#ff77ff' : (isMilitary ? '#ff4444' : 'rgba(255, 215, 0, 0.9)');
-                    ctx.font = (isMilitary || pinData) ? 'bold 9.5px monospace' : 'bold 8.5px monospace';
-                    ctx.textAlign = 'left';
-
-                    const pinPrefix = pinData ? `[#${pinData.trackNum}] ` : '';
-                    const hasSquawk = plane.squawk && plane.squawk !== '----';
-                    const milSuffix = isMilitary ? ' [ВОЕНЕН]' : '';
-                    const alertSuffix = (sqkAlert && sqkAlert.level === 'emergency') ? ` ⚠️${sqkAlert.short}` : '';
-
-                    const baseCode = hasSquawk ? `${plane.squawk}${milSuffix}` : plane.callsign;
-                    const radarLabel = `${pinPrefix}${baseCode}${alertSuffix}`;
-
-                    ctx.fillText(radarLabel, 10, -3);
-                }
-
-                ctx.restore();
-            });
-
-            sweepAngle = (sweepAngle + 0.45) % 360;
-            const sweepRad = mul(sub(sweepAngle, 90), DEG_TO_RAD);
-
-            const gradient = ctx.createLinearGradient(cx, cy, cx + mul(Math.cos(sweepRad), radius), cy + mul(Math.sin(sweepRad), radius));
-            gradient.addColorStop(0, "rgba(0, 255, 0, 0.85)");
-            gradient.addColorStop(1, "rgba(0, 255, 0, 0.05)");
-
-            ctx.beginPath();
-            ctx.moveTo(cx, cy);
-            ctx.lineTo(cx + mul(Math.cos(sweepRad), radius), cy + mul(Math.sin(sweepRad), radius));
-            ctx.strokeStyle = gradient;
-            ctx.lineWidth = 2 / scale;
-            ctx.stroke();
-
-            ctx.restore();
-
-            gpsTextSpan.innerText = gpsStatusText;
-            targetsTextSpan.innerText = `Цели: ${visibleCount}/${planes.length}`;
-
-            requestAnimationFrame(draw);
-        }
-
-        async function fetchRealPlanePhoto(planeId) {
-            if (!planeId) return;
-            if (planePhotoCache[planeId] !== undefined) {
-                applyPhotoToBox(planePhotoCache[planeId]);
-                return;
-            }
-
-            try {
-                const res = await fetch(`https://api.planespotters.net/pub/photos/hex/${planeId.toLowerCase()}`);
-                const data = await res.json();
-                if (data && data.photos && data.photos.length > 0) {
-                    const imgUrl = data.photos[0].thumbnail_large ? data.photos[0].thumbnail_large.src : data.photos[0].thumbnail.src;
-                    planePhotoCache[planeId] = imgUrl;
-                    if (selectedPlaneId === planeId) {
-                        applyPhotoToBox(imgUrl);
-                    }
-                } else {
-                    planePhotoCache[planeId] = null;
-                }
-            } catch (err) {
-                planePhotoCache[planeId] = null;
-            }
-        }
-
-        function applyPhotoToBox(imgUrl) {
-            const imgEl = document.getElementById('realPlaneImg');
-            const svgEl = document.getElementById('fallbackPlaneSvg');
-            if (imgEl && imgUrl) {
-                imgEl.src = imgUrl;
-                imgEl.style.display = 'block';
-                if (svgEl) svgEl.style.display = 'none';
-            }
-        }
-
-        window.cycleNextTarget = function() {
-            if (overlappingCluster.length <= 1) return;
-            clusterIndex = (clusterIndex + 1) % overlappingCluster.length;
-            const nextPlane = overlappingCluster[clusterIndex];
-            selectedPlaneId = nextPlane.id;
-            updateInfoPanelHTML(nextPlane);
-        };
-
-        function updateInfoPanelHTML(p) {
-            const panel = document.getElementById('infoPanel');
-            const isMilitary = p.callsign && p.callsign.includes('[ВОЕНЕН]');
-            const color = isMilitary ? '#ff3333' : '#ffcc00';
-            const badgeText = isMilitary ? 'ВОЕНЕН ОБЕКТ' : 'ГРАЖДАНСКИ ПОЛЕТ';
-            const trackDeg = Math.round(p.track || 0);
-            const azimuthDeg = (p.azi || 0).toFixed(1);
-
-            const cachedPhoto = planePhotoCache[p.id];
-            const showImg = cachedPhoto ? 'display:block;' : 'display:none;';
-            const showSvg = cachedPhoto ? 'display:none;' : 'display:block;';
-
-            const planeSvg = `
-                <svg id="fallbackPlaneSvg" viewBox="0 0 64 64" width="42" height="42" style="${showSvg} transform: rotate(${trackDeg}deg); filter: drop-shadow(0 0 4px ${color});">
-                    <path fill="${color}" d="M32 4 L36 18 L58 30 L58 35 L36 31 L35 48 L45 55 L45 59 L32 56 L19 59 L19 55 L29 48 L28 31 L6 35 L6 30 L28 18 Z"/>
-                </svg>
-            `;
-
-            const cycleButtonHtml = overlappingCluster.length > 1
-                ? `<button class="action-btn cycle-btn" onclick="cycleNextTarget()">СЛЕДВАЩ (${clusterIndex + 1}/${overlappingCluster.length}) ➔</button>`
-                : '';
-
-            const sqkStatus = analyzeSquawkCode(p.squawk, isMilitary);
-            let squawkAlertHtml = '';
-            if (sqkStatus && (sqkStatus.level === 'emergency' || sqkStatus.level === 'tactical')) {
-                const cls = sqkStatus.level === 'emergency' ? 'squawk-emergency' : 'squawk-tactical';
-                squawkAlertHtml = `<div class="squawk-alert-box ${cls}">${sqkStatus.desc}</div>`;
-            }
-
-            const currentRoute = planeRouteCache[p.id] || 'Търсене на маршрут...';
-            const pinData = getPinDataForPlane(p.id);
-            const currentPinSlot = pinData ? pinData.slot : null;
-            const nextAutoNum = highestTrackNumber + 1;
-
-            const autoBtnText = pinData
-                ? `🎯 ВОДИ СЕ КАТО ЦЕЛ #${pinData.trackNum} (В СЛОТ ${pinData.slot}) — [СПРИ ВОДЕНЕ]`
-                : `➕ ВОДИ КАТО ЦЕЛ #${nextAutoNum} (АВТО-СЛОТ 1-21)`;
-
-            let slotButtonsHtml = '';
-            for (let s of ALL_SLOTS) {
-                const slotObj = pinnedTargets[s];
-                const isThisPlane = (currentPinSlot === s);
-                let btnLabel = `С${s}`;
-                let extraClass = '';
-                if (isThisPlane && slotObj) {
-                    btnLabel = `✓#${slotObj.trackNum}`;
-                    extraClass = 'active';
-                } else if (slotObj) {
-                    btnLabel = `${s}:#${slotObj.trackNum}`;
-                    extraClass = 'occupied';
-                }
-                slotButtonsHtml += `<button class="mark-btn ${extraClass}" onclick="togglePinSlot(${s}, '${p.id}')">${btnLabel}</button>`;
-            }
-
-            panel.innerHTML = `
-                <div class="panel-top-actions">
-                    ${cycleButtonHtml}
-                    <button class="action-btn" onclick="closeInfoPanel()">✕</button>
-                </div>
-                <div class="plane-card-header">
-                    <div class="plane-photo-box" title="Снимка / Курс: ${trackDeg}°">
-                        <img id="realPlaneImg" src="${cachedPhoto || ''}" style="${showImg}" alt="Снимка на самолета" />
-                        ${planeSvg}
-                    </div>
-                    <div>
-                        <div style="font-size: 9.5px; color: ${color}; letter-spacing: 1px; font-weight: bold;">● ${badgeText} ${pinData ? `| 🎯 ЦЕЛ #${pinData.trackNum}` : ''}</div>
-                        <div style="font-weight: bold; font-size: 14px; color: #fff; margin: 2px 0;">
-                            📡 SQK: <span style="color:#00ffff;">${p.squawk || '----'}</span> &nbsp;|&nbsp; ✈ ${p.callsign}
-                        </div>
-                        <div style="font-size: 10.5px; color: #00ffcc; font-weight: bold;">
-                            HEX транспондер: ${p.id.toUpperCase()}
-                        </div>
-                        <div style="font-size: 10px; color: #88ff88;">${p.operator || 'Неизвестен оператор'}</div>
-                    </div>
-                </div>
-
-                ${squawkAlertHtml}
-
-                <div class="route-banner">
-                    <span id="planeRouteText">${currentRoute}</span>
-                </div>
-
-                <div class="info-grid">
-                    <div class="info-item">
-                        <span class="info-label">Азимут (${useMagneticNorth ? 'Магнитен' : 'Истински'}) / Разст.</span>
-                        <span class="info-val" style="color:#00ffff;">${azimuthDeg}° / ${p.dist.toFixed(1)} км</span>
-                    </div>
-                    <div class="info-item">
-                        <span class="info-label">Модел / Тип</span>
-                        <span class="info-val">${p.type || 'Няма данни'}</span>
-                    </div>
-                    <div class="info-item">
-                        <span class="info-label">Курс / Височина</span>
-                        <span class="info-val">${trackDeg}° / ${p.altitude || 0} м</span>
-                    </div>
-                    <div class="info-item">
-                        <span class="info-label">Скорост</span>
-                        <span class="info-val">${p.speed || 0} км/ч</span>
-                    </div>
-                </div>
-
-                <button class="auto-track-btn ${pinData ? 'active' : ''}" onclick="autoAssignNextTrack('${p.id}')">
-                    ${autoBtnText}
-                </button>
-
-                <div class="mark-targets-row">
-                    ${slotButtonsHtml}
-                </div>
-            `;
-
-            if (cachedPhoto === undefined) {
-                fetchRealPlanePhoto(p.id);
-            }
-            if (planeRouteCache[p.id] === undefined) {
-                fetchFlightRoute(p);
-            }
-        }
-
-        window.closeInfoPanel = function() {
-            selectedPlaneId = null;
-            overlappingCluster = [];
-            document.getElementById('infoPanel').style.display = 'none';
-        };
-
-        canvas.addEventListener('pointerup', (e) => {
-            if (dragMoved) return;
-
-            const rect = canvas.getBoundingClientRect();
-            const cx = screenWidth / 2;
-            const cy = mul(screenHeight, 0.53);
-
-            const clickX = sub(sub(sub(e.clientX, rect.left), cx), panX) / scale + cx;
-            const clickY = sub(sub(sub(e.clientY, rect.top), cy), panY) / scale + cy;
-
-            const hitRadius = 26 / scale;
-            let candidates = [];
-
-            for (let p of planes) {
-                if (p.dist > maxRangeKm || !p.renderX || !p.renderY) continue;
-                const isMilitary = p.callsign && p.callsign.includes('[ВОЕНЕН]');
-                const isPinned = getPinDataForPlane(p.id) !== null;
-                if (highlightMilitaryOnly && !isMilitary && !isPinned) continue;
-
-                const d = Math.hypot(sub(p.renderX, clickX), sub(p.renderY, clickY));
-                if (d < hitRadius) {
-                    candidates.push({ plane: p, clickDist: d, isMil: isMilitary ? 1 : 0 });
-                }
-            }
-
-            if (candidates.length > 0) {
-                candidates.sort((a, b) => {
-                    if (b.isMil !== a.isMil) return sub(b.isMil, a.isMil);
-                    return sub(a.clickDist, b.clickDist);
-                });
-
-                const newCluster = candidates.map(c => c.plane);
-
-                const currentInClusterIdx = newCluster.findIndex(p => p.id === selectedPlaneId);
-                if (currentInClusterIdx !== -1 && newCluster.length > 1) {
-                    clusterIndex = (currentInClusterIdx + 1) % newCluster.length;
-                } else {
-                    clusterIndex = 0;
-                }
-
-                overlappingCluster = newCluster;
-                const chosen = overlappingCluster[clusterIndex];
-                selectedPlaneId = chosen.id;
-
-                const panel = document.getElementById('infoPanel');
-                panel.style.display = 'block';
-                updateInfoPanelHTML(chosen);
-            } else {
-                closeInfoPanel();
-            }
-        });
-
-        function extrapolatePosition(lat, lon, speedKmH, trackDeg, timeDeltaSeconds) {
-            if (!speedKmH || speedKmH <= 0) return { lat, lon };
-            const distanceKm = mul(speedKmH, timeDeltaSeconds) / 3600;
-            const R = 6371;
-            const brng = mul(trackDeg, DEG_TO_RAD);
-            const lat1 = mul(lat, DEG_TO_RAD);
-            const lon1 = mul(lon, DEG_TO_RAD);
-
-            const lat2 = Math.asin(mul(Math.sin(lat1), Math.cos(distanceKm / R)) + mul(mul(Math.cos(lat1), Math.sin(distanceKm / R)), Math.cos(brng)));
-            const lon2 = lon1 + Math.atan2(mul(mul(Math.sin(brng), Math.sin(distanceKm / R)), Math.cos(lat1)), sub(Math.cos(distanceKm / R), mul(Math.sin(lat1), Math.sin(lat2))));
-
-            return {
-                lat: mul(lat2, RAD_TO_DEG),
-                lon: mul(lon2, RAD_TO_DEG)
-            };
-        }
-
-        function applyNewGpsCoordinates(newLat, newLon) {
-            newLat = parseFloat(newLat);
-            newLon = parseFloat(newLon);
-            if (isNaN(newLat) || isNaN(newLon)) return;
-
-            const movedKm = calculateDistance(myLat, myLon, newLat, newLon);
-
-            // Ако вече сме взели реален GPS и сме мръднали с по-малко от 200 метра (0.2 км),
-            // НЕ пускаме излишна заявка към сървъра!
-            if (isRealGps && movedKm < 0.2) {
-                return;
-            }
-
-            if (movedKm > 20) {
-                planes = [];
-            }
-
-            myLat = newLat;
-            myLon = newLon;
-            isRealGps = true;
-
-            const distFromRadishevo = calculateDistance(RADISHEVO_LAT, RADISHEVO_LON, myLat, myLon);
-            if (distFromRadishevo <= 10.0) {
-                gpsStatusText = `📡 GPS: с. Радишево (${distFromRadishevo.toFixed(1)}км)`;
-            } else {
-                gpsStatusText = `📡 GPS: Активен (${distFromRadishevo.toFixed(0)}км от Радишево)`;
-            }
-
-            fetchPlanes();
-        }
-
-        if (navigator.geolocation) {
-            navigator.geolocation.watchPosition(
-                (position) => {
-                    applyNewGpsCoordinates(position.coords.latitude, position.coords.longitude);
-                },
-                (error) => {
-                    if (!isRealGps) {
-                        gpsStatusText = "📍 БАЗА: с. Радишево";
-                    }
-                },
-                {
-                    enableHighAccuracy: true,
-                    timeout: 10000,
-                    maximumAge: 5000
-                }
-            );
-        }
-
-        window.updateLocationFromApp = function(lat, lon) {
-            applyNewGpsCoordinates(lat, lon);
-        };
-
-        updatePinnedBarUI();
-        fetchPlanes();
-        setInterval(fetchPlanes, 5000);
-        requestAnimationFrame(draw);
-    </script>
-{% endblock %}
+            slider.value = next;
+            loadHistoryFrame(next);
+        }, Math.round(1000 / replaySpeed));
+    };
+
+    document.getElementById('btnSpeedHistory').onclick = function() {
+        const speeds = [1, 2, 5];
+        replaySpeed = speeds[(speeds.indexOf(replaySpeed) + 1) % speeds.length];
+        this.textContent = `${replaySpeed}x`;
+    };
+
+    document.getElementById('btnBackToLive').onclick = () => {
+        stopReplay();
+        isReplayMode = false;
+        document.getElementById('modeBadge').classList.remove('replay');
+        document.getElementById('modeText').textContent = 'LIVE';
+        document.getElementById('tmTimestampLabel').textContent = 'НА ЖИВО';
+        const slider = document.getElementById('historySlider');
+        slider.value = slider.max;
+        fetchPlanes(true);
+    };
+
+    document.getElementById('btnZoomIn').onclick = () => map.zoomIn();
+    document.getElementById('btnZoomOut').onclick = () => map.zoomOut();
+    document.getElementById('btnMyLoc').onclick = () => map.setView([myLat, myLon], 9);
+    document.getElementById('btnMilOnly').onclick = function() { milOnlyFilter = !milOnlyFilter; this.classList.toggle('active', milOnlyFilter); };
+    document.getElementById('btnBorder').onclick = function() { showBorder = !showBorder; if (showBorder) bgBorderLayer.addTo(map); else map.removeLayer(bgBorderLayer); this.classList.toggle('active', showBorder); };
+    document.getElementById('btnSweep').onclick = function() { showSweep = !showSweep; this.classList.toggle('active', showSweep); };
+    document.getElementById('btnMapStyle').onclick = function() {
+        currentMapMode = (currentMapMode + 1) % 3;
+        map.removeLayer(googleTerrainLayer); map.removeLayer(googleHybridLayer); map.removeLayer(openTopoLayer);
+        if (currentMapMode === 0) { googleTerrainLayer.addTo(map); this.textContent = '🗺️ РЕЛЕФ'; }
+        else if (currentMapMode === 1) { googleHybridLayer.addTo(map); this.textContent = '🛰️ САТЕЛИТ'; }
+        else { openTopoLayer.addTo(map); this.textContent = '⛰️ ТОПО'; }
+    };
+
+    setInterval(() => {
+        document.getElementById('clockDisplay').textContent = new Date().toLocaleTimeString('bg-BG');
+    }, 1000);
+
+    updatePinnedBarUI();
+    requestAnimationFrame(renderLoop);
+    fetchPlanes(true);
+    syncHistoryMeta();
+    setInterval(() => fetchPlanes(false), 5000);
+    setInterval(syncHistoryMeta, 15000);
+</script>
+</body>
+</html>
