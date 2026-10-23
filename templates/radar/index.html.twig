@@ -1002,128 +1002,413 @@
 
     function renderLoop() {
         const nowMs = Date.now();
+
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
         const myScreenPt = map.latLngToContainerPoint([myLat, myLon]);
 
+        // =========================================================
+        // РАДАРНА РЕШЕТКА
+        // =========================================================
         drawRadarGrid(myScreenPt.x, myScreenPt.y);
 
+        // =========================================================
+        // МОЯТА ПОЗИЦИЯ
+        // =========================================================
         ctx.save();
+
         ctx.fillStyle = '#00e5ff';
         ctx.strokeStyle = '#ffffff';
         ctx.lineWidth = 2;
+
         ctx.beginPath();
-        ctx.arc(myScreenPt.x, myScreenPt.y, 7, 0, Math.PI * 2);
+        ctx.arc(
+            myScreenPt.x,
+            myScreenPt.y,
+            7,
+            0,
+            Math.PI * 2
+        );
+
         ctx.fill();
         ctx.stroke();
 
         ctx.font = 'bold 11px Segoe UI, sans-serif';
         ctx.fillStyle = '#00e5ff';
-        ctx.fillText(`📍 ${myBaseName}`, myScreenPt.x + 10, myScreenPt.y + 4);
+
+        ctx.fillText(
+            `📍 ${myBaseName}`,
+            myScreenPt.x + 10,
+            myScreenPt.y + 4
+        );
+
         ctx.restore();
 
-        // УСИЛЕН ЯРКО ЧЕРВЕНИКАВ РАДАРЕН ЛЪЧ
+
+        // =========================================================
+        // ЧЕРВЕН РАДАРЕН ЛЪЧ
+        // =========================================================
         if (showSweep) {
-            const sweepRadius = Math.min(canvas.width, canvas.height) * 0.42;
-            sweepAngle = (sweepAngle + 0.032) % (Math.PI * 2);
+
+            const sweepRadius =
+                Math.min(canvas.width, canvas.height) * 0.42;
+
+            sweepAngle =
+                (sweepAngle + 0.032) % (Math.PI * 2);
 
             ctx.save();
-            ctx.translate(myScreenPt.x, myScreenPt.y);
+
+            ctx.translate(
+                myScreenPt.x,
+                myScreenPt.y
+            );
+
             ctx.rotate(sweepAngle);
 
-            const grad = ctx.createConicGradient(-0.55, 0, 0);
-            grad.addColorStop(0, 'rgba(255, 20, 20, 0)');
-            grad.addColorStop(0.08, 'rgba(255, 30, 30, 0.32)');
-            grad.addColorStop(0.14, 'rgba(255, 45, 20, 0.72)'); // Наситено червеникаво тяло
-            grad.addColorStop(0.16, 'rgba(255, 90, 50, 0.96)'); // Светещ водещ ръб
-            grad.addColorStop(0.165, 'rgba(255, 20, 20, 0)');
+            const grad =
+                ctx.createConicGradient(
+                    -0.55,
+                    0,
+                    0
+                );
+
+            grad.addColorStop(
+                0,
+                'rgba(255, 20, 20, 0)'
+            );
+
+            grad.addColorStop(
+                0.08,
+                'rgba(255, 30, 30, 0.32)'
+            );
+
+            grad.addColorStop(
+                0.14,
+                'rgba(255, 45, 20, 0.72)'
+            );
+
+            grad.addColorStop(
+                0.16,
+                'rgba(255, 90, 50, 0.96)'
+            );
+
+            grad.addColorStop(
+                0.165,
+                'rgba(255, 20, 20, 0)'
+            );
 
             ctx.fillStyle = grad;
+
             ctx.beginPath();
-            ctx.arc(0, 0, sweepRadius, -0.55, 0);
+
+            ctx.arc(
+                0,
+                0,
+                sweepRadius,
+                -0.55,
+                0
+            );
+
             ctx.lineTo(0, 0);
             ctx.fill();
 
-            // Ярка водеща червена лазерна линия на лъча
+
+            // Ярка водеща линия
             ctx.beginPath();
+
             ctx.moveTo(0, 0);
             ctx.lineTo(sweepRadius, 0);
+
             ctx.strokeStyle = '#ff3322';
             ctx.shadowColor = '#ff0000';
             ctx.shadowBlur = 12;
             ctx.lineWidth = 3;
+
             ctx.stroke();
 
             ctx.restore();
         }
 
+
+        // =========================================================
+        // САМОЛЕТИ
+        // =========================================================
+
         let totalCount = 0;
         let milCount = 0;
 
         planes.forEach(plane => {
-            const isMil = plane.callsign && plane.callsign.includes('[ВОЕНЕН]');
-            const pinData = getPinDataForPlane(plane.id);
-            if (milOnlyFilter && !isMil && !pinData) return;
+
+            const isMil =
+                plane.callsign &&
+                plane.callsign.includes('[ВОЕНЕН]');
+
+            const pinData =
+                getPinDataForPlane(plane.id);
+
+
+            // Ако е включен режим САМО ВОЕННИ
+            if (
+                milOnlyFilter &&
+                !isMil &&
+                !pinData
+            ) {
+                return;
+            }
+
 
             totalCount++;
-            if (isMil) milCount++;
 
-            const interp = getInterpolatedLatLon(plane, nowMs);
-            const screenPt = map.latLngToContainerPoint([interp.lat, interp.lon]);
+            if (isMil) {
+                milCount++;
+            }
 
-            plane.distKm = calcDistanceKm(myLat, myLon, interp.lat, interp.lon);
-            plane.bearing = calcBearing(myLat, myLon, interp.lat, interp.lon);
-            plane.screenX = screenPt.x;
-            plane.screenY = screenPt.y;
 
-            const isSelected = (plane.id === selectedPlaneId);
+            // =====================================================
+            // ИНТЕРПОЛИРАНА ПОЗИЦИЯ
+            // =====================================================
 
-            if (isSelected || pinData) {
+            const interp =
+                getInterpolatedLatLon(
+                    plane,
+                    nowMs
+                );
+
+            const screenPt =
+                map.latLngToContainerPoint([
+                    interp.lat,
+                    interp.lon
+                ]);
+
+
+            // =====================================================
+            // ДИСТАНЦИЯ И АЗИМУТ
+            // =====================================================
+
+            plane.distKm =
+                calcDistanceKm(
+                    myLat,
+                    myLon,
+                    interp.lat,
+                    interp.lon
+                );
+
+            plane.bearing =
+                calcBearing(
+                    myLat,
+                    myLon,
+                    interp.lat,
+                    interp.lon
+                );
+
+
+            // ВАЖНО:
+            // НЕ режем самолетите над 250 km.
+            // Всички получени цели остават налични.
+
+
+            plane.screenX =
+                screenPt.x;
+
+            plane.screenY =
+                screenPt.y;
+
+
+            const isSelected =
+                plane.id === selectedPlaneId;
+
+
+            // =====================================================
+            // ЛИНИЯ ДО ИЗБРАНА / МАРКИРАНА ЦЕЛ
+            // =====================================================
+
+            if (
+                isSelected ||
+                pinData
+            ) {
+
                 ctx.save();
+
                 ctx.beginPath();
-                ctx.setLineDash([5, 4]);
-                ctx.moveTo(myScreenPt.x, myScreenPt.y);
-                ctx.lineTo(screenPt.x, screenPt.y);
-                ctx.strokeStyle = pinData ? '#ff00ff' : '#00ff66';
+
+                ctx.setLineDash([
+                    5,
+                    4
+                ]);
+
+                ctx.moveTo(
+                    myScreenPt.x,
+                    myScreenPt.y
+                );
+
+                ctx.lineTo(
+                    screenPt.x,
+                    screenPt.y
+                );
+
+                ctx.strokeStyle =
+                    pinData
+                        ? '#ff00ff'
+                        : '#00ff66';
+
                 ctx.lineWidth = 2;
+
                 ctx.stroke();
+
                 ctx.restore();
             }
 
-            drawRealisticPlane(screenPt.x, screenPt.y, plane.track, isMil, isSelected, pinData);
 
-            const cleanCs = (plane.callsign || plane.id).replace(' [ВОЕНЕН]', '');
-            const hasSqk = plane.squawk && plane.squawk !== '----';
-            const pinPrefix = pinData ? `[#${pinData.trackNum}] ` : '';
+            // =====================================================
+            // РИСУВАМЕ САМОЛЕТА
+            // =====================================================
 
-            const sqkText = hasSqk ? `SQK:${plane.squawk}` : cleanCs;
-            const line1 = isMil ? `${pinPrefix}⚔️ ${sqkText} (${cleanCs})` : `${pinPrefix}${cleanCs} ${hasSqk ? '[' + plane.squawk + ']' : ''}`;
-            const line2 = `AZ: ${plane.bearing}° | ${plane.distKm.toFixed(1)}km | ${plane.altitude}m`;
+            drawRealisticPlane(
+                screenPt.x,
+                screenPt.y,
+                plane.track,
+                isMil,
+                isSelected,
+                pinData
+            );
+
+
+            // =====================================================
+            // ЕТИКЕТ - САМО SQK
+            // =====================================================
+
+            const hasSqk =
+                plane.squawk &&
+                plane.squawk !== '----' &&
+                String(plane.squawk).trim() !== '';
+
+
+            // Ако има SQK -> показваме само него.
+            // Ако няма -> показваме ----
+            const sqkText =
+                hasSqk
+                    ? String(plane.squawk)
+                    : '----';
+
 
             ctx.save();
-            ctx.font = 'bold 11px Segoe UI, sans-serif';
-            const w1 = ctx.measureText(line1).width;
-            const w2 = ctx.measureText(line2).width;
-            const boxW = Math.max(w1, w2) + 10;
 
-            ctx.fillStyle = 'rgba(0, 10, 4, 0.85)';
-            ctx.strokeStyle = isMil ? '#ff2222' : (pinData ? '#ff00ff' : 'rgba(0, 255, 102, 0.65)');
-            ctx.lineWidth = 1.2;
-            ctx.fillRect(screenPt.x + 14, screenPt.y - 12, boxW, 32);
-            ctx.strokeRect(screenPt.x + 14, screenPt.y - 12, boxW, 32);
+            // Малък шрифт, за да не претрупва картата
+            ctx.font =
+                'bold 11px Segoe UI, sans-serif';
 
-            ctx.fillStyle = isMil ? '#ff5555' : (pinData ? '#ff88ff' : '#ffdd00');
-            ctx.fillText(line1, screenPt.x + 19, screenPt.y + 1);
 
-            ctx.fillStyle = '#00ff66';
-            ctx.fillText(line2, screenPt.x + 19, screenPt.y + 15);
+            const textWidth =
+                ctx.measureText(sqkText).width;
+
+            const boxW =
+                textWidth + 8;
+
+            const boxH = 18;
+
+
+            // =====================================================
+            // МАЛКА КУТИЯ ДО САМОЛЕТА
+            // =====================================================
+
+            ctx.fillStyle =
+                'rgba(0, 10, 4, 0.82)';
+
+
+            // Цвят на рамката
+            if (isMil) {
+
+                ctx.strokeStyle =
+                    '#ff2222';
+
+            } else if (pinData) {
+
+                ctx.strokeStyle =
+                    '#ff00ff';
+
+            } else {
+
+                ctx.strokeStyle =
+                    'rgba(0, 255, 102, 0.75)';
+            }
+
+
+            ctx.lineWidth = 1;
+
+
+            ctx.fillRect(
+                screenPt.x + 14,
+                screenPt.y - 10,
+                boxW,
+                boxH
+            );
+
+
+            ctx.strokeRect(
+                screenPt.x + 14,
+                screenPt.y - 10,
+                boxW,
+                boxH
+            );
+
+
+            // =====================================================
+            // SQK ТЕКСТ
+            // =====================================================
+
+            if (isMil) {
+
+                // Военен
+                ctx.fillStyle =
+                    '#ff5555';
+
+            } else if (pinData) {
+
+                // Маркирана цел
+                ctx.fillStyle =
+                    '#ff88ff';
+
+            } else {
+
+                // Граждански
+                ctx.fillStyle =
+                    '#ffdd00';
+            }
+
+
+            ctx.fillText(
+                sqkText,
+                screenPt.x + 18,
+                screenPt.y + 3
+            );
+
+
             ctx.restore();
         });
 
-        document.getElementById('planesCount').textContent = totalCount;
-        document.getElementById('milCount').textContent = milCount;
 
-        requestAnimationFrame(renderLoop);
+        // =========================================================
+        // БРОЯЧИ
+        // =========================================================
+
+        document
+            .getElementById('planesCount')
+            .textContent =
+            totalCount;
+
+        document
+            .getElementById('milCount')
+            .textContent =
+            milCount;
+
+
+        // =========================================================
+        // СЛЕДВАЩ КАДЪР
+        // =========================================================
+
+        requestAnimationFrame(
+            renderLoop
+        );
     }
 
     map.on('click', function(e) {
