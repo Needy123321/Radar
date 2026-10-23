@@ -309,7 +309,7 @@
         /* МАШИНА НА ВРЕМЕТО (ИСТОРИЯ ПАНЕЛ) */
         #timeMachineDock {
             position: fixed;
-            bottom: 70px;   /* беше 14px */
+            bottom: 70px;
             right: 14px;
             width: 420px;
             max-width: calc(100vw - 28px);
@@ -548,7 +548,7 @@
         <div class="loc-bar">
             <button class="radar-btn" id="btn-gyro" onclick="toggleGyroCompass()">🧭 СЕВЕР: ИСТИНСКИ (0°)</button>
             <button class="radar-btn mil-btn" id="btnMilOnly">⚔️ ВОЕННИ</button>
-            <button class="radar-btn amber-btn" id="btnHistory" title="Машина на времето (MySQL / Архив)">⏪ ИСТОРИЯ</button>
+            <button class="radar-btn amber-btn" id="btnHistory" title="Машина на времето (Архив)">⏪ ИСТОРИЯ</button>
             <button class="radar-btn active" id="btnBorder">🟥 БГ ГРАНИЦА</button>
             <button class="radar-btn mil-btn active" id="btnSweep">📡 ЧЕРВЕН ЛЪЧ</button>
             <button class="radar-btn" id="btnMapStyle">🗺️ РЕЛЕФ</button>
@@ -593,7 +593,7 @@
             <button class="radar-btn amber-btn" id="btnPlayHistory">▶ ПУСНИ</button>
             <button class="radar-btn" id="btnSpeedHistory">1x</button>
         </div>
-        <span id="tmFramesCount" style="font-size:11px; color:#ccc;">Записи в БД: 0</span>
+        <span id="tmFramesCount" style="font-size:11px; color:#ccc;">Записи в буфера: 0</span>
         <button class="radar-btn active" id="btnBackToLive">🔴 НА ЖИВО</button>
     </div>
 </div>
@@ -843,7 +843,7 @@
             if (p && slotObj) {
                 activePinnedCount++;
                 btn.classList.add('filled');
-                const cleanName = (p.callsign || p.id).replace(' [ВОЕНЕН]', '');
+                const cleanName = cleanCallsign(p.callsign, p.id);
                 const sqk = (p.squawk && p.squawk !== '----') ? p.squawk : cleanName;
                 btn.innerText = `🎯#${slotObj.trackNum}: ${sqk} (${(p.distKm || 0).toFixed(0)}km)`;
             } else {
@@ -869,6 +869,18 @@
     let milOnlyFilter = false;
     let sweepAngle = 0;
     let isFetchingPlanes = false;
+
+    function isMilitaryPlane(plane) {
+        if (!plane) return false;
+        if (typeof plane.isMilitary === 'boolean') return plane.isMilitary;
+        if (typeof plane.is_military === 'boolean') return plane.is_military;
+        if (typeof plane.military === 'boolean') return plane.military;
+        return /\[ВОЕНЕН\]/i.test(String(plane.callsign || ''));
+    }
+
+    function cleanCallsign(callsign, fallback = '') {
+        return String(callsign || fallback).replace(/\s*\[ВОЕНЕН\]/ig, '').trim();
+    }
 
     // МАШИНА НА ВРЕМЕТО ПРОМЕНЛИВИ
     let isReplayMode = false;
@@ -950,14 +962,12 @@
         ctx.save();
         ctx.translate(cx, cy);
 
-        // Външен червен пръстен
         ctx.beginPath();
         ctx.arc(0, 0, radius, 0, Math.PI * 2);
         ctx.strokeStyle = 'rgba(255, 45, 45, 0.75)';
         ctx.lineWidth = 2;
         ctx.stroke();
 
-        // Вътрешен помощен пръстен
         ctx.beginPath();
         ctx.arc(0, 0, radius * 0.5, 0, Math.PI * 2);
         ctx.strokeStyle = 'rgba(255, 45, 45, 0.35)';
@@ -1002,413 +1012,143 @@
 
     function renderLoop() {
         const nowMs = Date.now();
-
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
         const myScreenPt = map.latLngToContainerPoint([myLat, myLon]);
 
-        // =========================================================
-        // РАДАРНА РЕШЕТКА
-        // =========================================================
         drawRadarGrid(myScreenPt.x, myScreenPt.y);
 
-        // =========================================================
         // МОЯТА ПОЗИЦИЯ
-        // =========================================================
         ctx.save();
-
         ctx.fillStyle = '#00e5ff';
         ctx.strokeStyle = '#ffffff';
         ctx.lineWidth = 2;
-
         ctx.beginPath();
-        ctx.arc(
-            myScreenPt.x,
-            myScreenPt.y,
-            7,
-            0,
-            Math.PI * 2
-        );
-
+        ctx.arc(myScreenPt.x, myScreenPt.y, 7, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
 
         ctx.font = 'bold 11px Segoe UI, sans-serif';
         ctx.fillStyle = '#00e5ff';
-
-        ctx.fillText(
-            `📍 ${myBaseName}`,
-            myScreenPt.x + 10,
-            myScreenPt.y + 4
-        );
-
+        ctx.fillText(`📍 ${myBaseName}`, myScreenPt.x + 10, myScreenPt.y + 4);
         ctx.restore();
 
-
-        // =========================================================
         // ЧЕРВЕН РАДАРЕН ЛЪЧ
-        // =========================================================
         if (showSweep) {
-
-            const sweepRadius =
-                Math.min(canvas.width, canvas.height) * 0.42;
-
-            sweepAngle =
-                (sweepAngle + 0.032) % (Math.PI * 2);
+            const sweepRadius = Math.min(canvas.width, canvas.height) * 0.42;
+            sweepAngle = (sweepAngle + 0.032) % (Math.PI * 2);
 
             ctx.save();
-
-            ctx.translate(
-                myScreenPt.x,
-                myScreenPt.y
-            );
-
+            ctx.translate(myScreenPt.x, myScreenPt.y);
             ctx.rotate(sweepAngle);
 
-            const grad =
-                ctx.createConicGradient(
-                    -0.55,
-                    0,
-                    0
-                );
-
-            grad.addColorStop(
-                0,
-                'rgba(255, 20, 20, 0)'
-            );
-
-            grad.addColorStop(
-                0.08,
-                'rgba(255, 30, 30, 0.32)'
-            );
-
-            grad.addColorStop(
-                0.14,
-                'rgba(255, 45, 20, 0.72)'
-            );
-
-            grad.addColorStop(
-                0.16,
-                'rgba(255, 90, 50, 0.96)'
-            );
-
-            grad.addColorStop(
-                0.165,
-                'rgba(255, 20, 20, 0)'
-            );
+            const grad = ctx.createConicGradient(-0.55, 0, 0);
+            grad.addColorStop(0, 'rgba(255, 20, 20, 0)');
+            grad.addColorStop(0.08, 'rgba(255, 30, 30, 0.32)');
+            grad.addColorStop(0.14, 'rgba(255, 45, 20, 0.72)');
+            grad.addColorStop(0.16, 'rgba(255, 90, 50, 0.96)');
+            grad.addColorStop(0.165, 'rgba(255, 20, 20, 0)');
 
             ctx.fillStyle = grad;
-
             ctx.beginPath();
-
-            ctx.arc(
-                0,
-                0,
-                sweepRadius,
-                -0.55,
-                0
-            );
-
+            ctx.arc(0, 0, sweepRadius, -0.55, 0);
             ctx.lineTo(0, 0);
             ctx.fill();
 
-
-            // Ярка водеща линия
             ctx.beginPath();
-
             ctx.moveTo(0, 0);
             ctx.lineTo(sweepRadius, 0);
-
             ctx.strokeStyle = '#ff3322';
             ctx.shadowColor = '#ff0000';
             ctx.shadowBlur = 12;
             ctx.lineWidth = 3;
-
             ctx.stroke();
 
             ctx.restore();
         }
 
-
-        // =========================================================
         // САМОЛЕТИ
-        // =========================================================
-
         let totalCount = 0;
         let milCount = 0;
 
         planes.forEach(plane => {
+            const isMil = isMilitaryPlane(plane);
+            const pinData = getPinDataForPlane(plane.id);
 
-            const isMil =
-                plane.callsign &&
-                plane.callsign.includes('[ВОЕНЕН]');
-
-            const pinData =
-                getPinDataForPlane(plane.id);
-
-
-            // Ако е включен режим САМО ВОЕННИ
-            if (
-                milOnlyFilter &&
-                !isMil &&
-                !pinData
-            ) {
+            if (milOnlyFilter && !isMil && !pinData) {
                 return;
             }
 
-
             totalCount++;
-
             if (isMil) {
                 milCount++;
             }
 
+            const interp = getInterpolatedLatLon(plane, nowMs);
+            const screenPt = map.latLngToContainerPoint([interp.lat, interp.lon]);
 
-            // =====================================================
-            // ИНТЕРПОЛИРАНА ПОЗИЦИЯ
-            // =====================================================
+            plane.distKm = calcDistanceKm(myLat, myLon, interp.lat, interp.lon);
+            plane.bearing = calcBearing(myLat, myLon, interp.lat, interp.lon);
 
-            const interp =
-                getInterpolatedLatLon(
-                    plane,
-                    nowMs
-                );
+            plane.screenX = screenPt.x;
+            plane.screenY = screenPt.y;
 
-            const screenPt =
-                map.latLngToContainerPoint([
-                    interp.lat,
-                    interp.lon
-                ]);
+            const isSelected = plane.id === selectedPlaneId;
 
-
-            // =====================================================
-            // ДИСТАНЦИЯ И АЗИМУТ
-            // =====================================================
-
-            plane.distKm =
-                calcDistanceKm(
-                    myLat,
-                    myLon,
-                    interp.lat,
-                    interp.lon
-                );
-
-            plane.bearing =
-                calcBearing(
-                    myLat,
-                    myLon,
-                    interp.lat,
-                    interp.lon
-                );
-
-
-            // ВАЖНО:
-            // НЕ режем самолетите над 250 km.
-            // Всички получени цели остават налични.
-
-
-            plane.screenX =
-                screenPt.x;
-
-            plane.screenY =
-                screenPt.y;
-
-
-            const isSelected =
-                plane.id === selectedPlaneId;
-
-
-            // =====================================================
-            // ЛИНИЯ ДО ИЗБРАНА / МАРКИРАНА ЦЕЛ
-            // =====================================================
-
-            if (
-                isSelected ||
-                pinData
-            ) {
-
+            if (isSelected || pinData) {
                 ctx.save();
-
                 ctx.beginPath();
-
-                ctx.setLineDash([
-                    5,
-                    4
-                ]);
-
-                ctx.moveTo(
-                    myScreenPt.x,
-                    myScreenPt.y
-                );
-
-                ctx.lineTo(
-                    screenPt.x,
-                    screenPt.y
-                );
-
-                ctx.strokeStyle =
-                    pinData
-                        ? '#ff00ff'
-                        : '#00ff66';
-
+                ctx.setLineDash([5, 4]);
+                ctx.moveTo(myScreenPt.x, myScreenPt.y);
+                ctx.lineTo(screenPt.x, screenPt.y);
+                ctx.strokeStyle = pinData ? '#ff00ff' : '#00ff66';
                 ctx.lineWidth = 2;
-
                 ctx.stroke();
-
                 ctx.restore();
             }
 
+            drawRealisticPlane(screenPt.x, screenPt.y, plane.track, isMil, isSelected, pinData);
 
-            // =====================================================
-            // РИСУВАМЕ САМОЛЕТА
-            // =====================================================
-
-            drawRealisticPlane(
-                screenPt.x,
-                screenPt.y,
-                plane.track,
-                isMil,
-                isSelected,
-                pinData
-            );
-
-
-            // =====================================================
-            // ЕТИКЕТ - САМО SQK
-            // =====================================================
-
-            const hasSqk =
-                plane.squawk &&
-                plane.squawk !== '----' &&
-                String(plane.squawk).trim() !== '';
-
-
-            // Ако има SQK -> показваме само него.
-            // Ако няма -> показваме ----
-            const sqkText =
-                hasSqk
-                    ? String(plane.squawk)
-                    : '----';
-
+            const hasSqk = plane.squawk && plane.squawk !== '----' && String(plane.squawk).trim() !== '';
+            const sqkText = hasSqk ? String(plane.squawk) : '----';
 
             ctx.save();
+            ctx.font = 'bold 11px Segoe UI, sans-serif';
 
-            // Малък шрифт, за да не претрупва картата
-            ctx.font =
-                'bold 11px Segoe UI, sans-serif';
-
-
-            const textWidth =
-                ctx.measureText(sqkText).width;
-
-            const boxW =
-                textWidth + 8;
-
+            const textWidth = ctx.measureText(sqkText).width;
+            const boxW = textWidth + 8;
             const boxH = 18;
 
+            ctx.fillStyle = 'rgba(0, 10, 4, 0.82)';
 
-            // =====================================================
-            // МАЛКА КУТИЯ ДО САМОЛЕТА
-            // =====================================================
-
-            ctx.fillStyle =
-                'rgba(0, 10, 4, 0.82)';
-
-
-            // Цвят на рамката
             if (isMil) {
-
-                ctx.strokeStyle =
-                    '#ff2222';
-
+                ctx.strokeStyle = '#ff2222';
             } else if (pinData) {
-
-                ctx.strokeStyle =
-                    '#ff00ff';
-
+                ctx.strokeStyle = '#ff00ff';
             } else {
-
-                ctx.strokeStyle =
-                    'rgba(0, 255, 102, 0.75)';
+                ctx.strokeStyle = 'rgba(0, 255, 102, 0.75)';
             }
-
 
             ctx.lineWidth = 1;
-
-
-            ctx.fillRect(
-                screenPt.x + 14,
-                screenPt.y - 10,
-                boxW,
-                boxH
-            );
-
-
-            ctx.strokeRect(
-                screenPt.x + 14,
-                screenPt.y - 10,
-                boxW,
-                boxH
-            );
-
-
-            // =====================================================
-            // SQK ТЕКСТ
-            // =====================================================
+            ctx.fillRect(screenPt.x + 14, screenPt.y - 10, boxW, boxH);
+            ctx.strokeRect(screenPt.x + 14, screenPt.y - 10, boxW, boxH);
 
             if (isMil) {
-
-                // Военен
-                ctx.fillStyle =
-                    '#ff5555';
-
+                ctx.fillStyle = '#ff5555';
             } else if (pinData) {
-
-                // Маркирана цел
-                ctx.fillStyle =
-                    '#ff88ff';
-
+                ctx.fillStyle = '#ff88ff';
             } else {
-
-                // Граждански
-                ctx.fillStyle =
-                    '#ffdd00';
+                ctx.fillStyle = '#ffdd00';
             }
 
-
-            ctx.fillText(
-                sqkText,
-                screenPt.x + 18,
-                screenPt.y + 3
-            );
-
-
+            ctx.fillText(sqkText, screenPt.x + 18, screenPt.y + 3);
             ctx.restore();
         });
 
+        document.getElementById('planesCount').textContent = totalCount;
+        document.getElementById('milCount').textContent = milCount;
 
-        // =========================================================
-        // БРОЯЧИ
-        // =========================================================
-
-        document
-            .getElementById('planesCount')
-            .textContent =
-            totalCount;
-
-        document
-            .getElementById('milCount')
-            .textContent =
-            milCount;
-
-
-        // =========================================================
-        // СЛЕДВАЩ КАДЪР
-        // =========================================================
-
-        requestAnimationFrame(
-            renderLoop
-        );
+        requestAnimationFrame(renderLoop);
     }
 
     map.on('click', function(e) {
@@ -1417,7 +1157,7 @@
         let closest = null, minDist = 28;
 
         planes.forEach(p => {
-            const isMil = p.callsign && p.callsign.includes('[ВОЕНЕН]');
+            const isMil = isMilitaryPlane(p);
             const pinData = getPinDataForPlane(p.id);
             if (milOnlyFilter && !isMil && !pinData) return;
             const d = Math.hypot((p.screenX || 0) - clickX, (p.screenY || 0) - clickY);
@@ -1433,7 +1173,10 @@
     });
 
     async function fetchRealPlanePhoto(planeId) {
-        if (!planeId) return;
+        if (!planeId || String(planeId).startsWith('fr_')) {
+            planePhotoCache[planeId] = null;
+            return;
+        }
         if (planePhotoCache[planeId] !== undefined) { applyPhotoToBox(planePhotoCache[planeId]); return; }
         try {
             const res = await fetch(`https://api.planespotters.net/pub/photos/hex/${planeId.toLowerCase()}`);
@@ -1453,9 +1196,9 @@
     }
 
     async function fetchFlightRoute(plane) {
-        if (!plane || !plane.callsign) return;
-        const cleanCs = plane.callsign.replace(' [ВОЕНЕН]', '').trim();
-        const isMil = plane.callsign.includes('[ВОЕНЕН]');
+        if (!plane || !cleanCallsign(plane.callsign)) return;
+        const cleanCs = cleanCallsign(plane.callsign);
+        const isMil = isMilitaryPlane(plane);
         if (planeRouteCache[plane.id] !== undefined) {
             const routeEl = document.getElementById('planeRouteText');
             if (routeEl) routeEl.innerText = planeRouteCache[plane.id]; return;
@@ -1475,7 +1218,7 @@
 
     function updateInfoPanelHTML(p) {
         const panel = document.getElementById('infoPanel');
-        const isMilitary = p.callsign && p.callsign.includes('[ВОЕНЕН]');
+        const isMilitary = isMilitaryPlane(p);
         panel.style.display = 'block';
         panel.classList.toggle('mil-panel', isMilitary);
 
@@ -1551,11 +1294,18 @@
 
     function ingestPlanesData(data) {
         const now = Date.now();
-        planes = data.map(item => {
-            const distKm = calcDistanceKm(myLat, myLon, item.lat, item.lon);
-            const bearing = calcBearing(myLat, myLon, item.lat, item.lon);
-            return { ...item, distKm, bearing, lastUpdateMs: now };
-        });
+        planes = data
+            .filter(item => item && Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lon)))
+            .map(item => {
+                const normalized = { ...item };
+                normalized.isMilitary = isMilitaryPlane(item);
+                if (normalized.isMilitary && !/\[ВОЕНЕН\]/i.test(String(normalized.callsign || ''))) {
+                    normalized.callsign = `${normalized.callsign || normalized.id || ''} [ВОЕНЕН]`.trim();
+                }
+                const distKm = calcDistanceKm(myLat, myLon, Number(item.lat), Number(item.lon));
+                const bearing = calcBearing(myLat, myLon, Number(item.lat), Number(item.lon));
+                return { ...normalized, lat: Number(item.lat), lon: Number(item.lon), distKm, bearing, lastUpdateMs: now };
+            });
         updatePinnedBarUI();
         if (selectedPlaneId) {
             const sel = planes.find(p => p.id === selectedPlaneId);
@@ -1567,6 +1317,7 @@
         if (isReplayMode || (isFetchingPlanes && !force)) return;
         isFetchingPlanes = true;
         try {
+            // Винаги питаме спрямо избраната БАЗА (myLat, myLon), за да пазим сървърния кеш!
             const res = await fetch(`/api/planes?lat=${myLat.toFixed(4)}&lon=${myLon.toFixed(4)}${force ? '&force=1' : ''}`);
             if (res.ok) {
                 const data = await res.json();
@@ -1589,7 +1340,7 @@
                 const atEnd = Number(slider.value) >= Number(slider.max) - 1;
                 slider.max = historyTimestamps.length - 1;
                 if (!isReplayMode || atEnd) slider.value = slider.max;
-                document.getElementById('tmFramesCount').textContent = `Записи в БД: ${historyTimestamps.length}`;
+                document.getElementById('tmFramesCount').textContent = `Записи в буфера: ${historyTimestamps.length}`;
             }
         } catch (e) {}
     }
