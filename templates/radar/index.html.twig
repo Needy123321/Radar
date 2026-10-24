@@ -59,22 +59,22 @@
             pointer-events: none;
         }
 
-        /* Оптимизиран горен панел за Android (избягва статус бара/камерата) */
         .top-hud {
             position: fixed;
-            top: max(6px, env(safe-area-inset-top, 24px));
+            top: 12px;
             left: 6px;
             right: 6px;
             display: flex;
             flex-direction: column;
-            gap: 4px;
+            gap: 5px;
             z-index: 100;
             pointer-events: none;
         }
 
-        @media (max-width: 600px) {
+        /* На телефон застава точно под камерата и статус бара */
+        @media (max-width: 768px) {
             .top-hud {
-                top: 28px;
+                top: 34px;
             }
         }
 
@@ -146,13 +146,14 @@
             background: rgba(12, 32, 18, 0.92);
             color: #dfffee;
             border: 1px solid rgba(0, 255, 102, 0.5);
-            padding: 3px 6px;
-            font-size: 10px;
+            padding: 5px 8px;
+            font-size: 10.5px;
             font-weight: bold;
             border-radius: 4px;
             cursor: pointer;
             transition: all 0.15s ease;
             white-space: nowrap;
+            touch-action: manipulation;
         }
 
         .radar-btn:hover { background: rgba(0, 255, 102, 0.25); }
@@ -209,7 +210,6 @@
             box-shadow: 0 0 10px #00ffff;
         }
 
-        /* Компактна лента за маркирани цели */
         .pinned-header {
             display: flex;
             justify-content: space-between;
@@ -241,7 +241,6 @@
             color: #ffffff;
         }
 
-        /* Слотовете са скрити по подразбиране, за да не закриват картата! */
         .pinned-bar {
             display: none;
             grid-template-columns: repeat(3, 1fr);
@@ -308,7 +307,6 @@
             box-shadow: 0 2px 8px rgba(0,0,0,0.6);
         }
 
-        /* МАШИНА НА ВРЕМЕТО (ИСТОРИЯ ПАНЕЛ) */
         #timeMachineDock {
             position: fixed;
             bottom: 50px;
@@ -356,7 +354,6 @@
             gap: 5px;
         }
 
-        /* КОМПАКТЕН ДОЛЕН ПАНЕЛ ЗА САМОЛЕТА (пази бутоните на Андроид) */
         #infoPanel {
             position: fixed;
             bottom: max(42px, env(safe-area-inset-bottom, 42px));
@@ -564,21 +561,20 @@
             </div>
         </div>
 
-        <!-- Всички бутони събрани компактно (без Център карта, БГ Граница и Червен лъч) -->
         <div class="controls-compact-bar">
-            <button class="radar-btn loc-btn active" id="locRadishevo" onclick="setBaseLocation(43.3676, 24.6667, 'с. Радишево', 'locRadishevo')">📍 РАДИШЕВО</button>
+            <button class="radar-btn loc-btn active" id="locRadishevo" onclick="setBaseLocation(43.36764916688548, 24.666731248063613, 'с. Радишево', 'locRadishevo')">📍 РАДИШЕВО</button>
             <button class="radar-btn loc-btn" id="locPleven" onclick="setBaseLocation(43.4170, 24.6067, 'гр. Плевен', 'locPleven')">📍 ПЛЕВЕН</button>
-            <button class="radar-btn loc-btn" id="locEmona" onclick="setBaseLocation(42.7136, 27.8986, 'нос ЕМОНА', 'locEmona')">🌊 ЕМОНА</button>
+            <button class="radar-btn loc-btn" id="locEmona" onclick="setBaseLocation(42.70260944933075, 27.89720568192577, 'нос ЕМОНА', 'locEmona')">🌊 ЕМОНА</button>
             <button class="radar-btn loc-btn" id="locGps" onclick="activateRealGps()">📡 GPS</button>
             <button class="radar-btn loc-btn" id="locManual" onclick="promptManualCoords()">✍️ КООРД.</button>
             <button class="radar-btn" id="btn-gyro" onclick="toggleGyroCompass()">🧭 0° ИСТ.</button>
             <button class="radar-btn mil-btn" id="btnMilOnly">⚔️ ВОЕННИ</button>
+            <button class="radar-btn active" id="btnTrails" title="Покажи/скрий следите на полетите">〰️ СЛЕДИ</button>
             <button class="radar-btn amber-btn" id="btnHistory">⏪ ИСТОРИЯ</button>
             <button class="radar-btn" id="btnMapStyle">🗺️ РЕЛЕФ</button>
         </div>
     </div>
 
-    <!-- Оперативно водене (слотовете са скрити по подразбиране за чист екран) -->
     <div class="pinned-header">
         <span id="trackCounterInfo">🎯 МАРКИРАНИ: 0/21 | Следв: #1</span>
         <div style="display:flex; gap:4px;">
@@ -600,7 +596,7 @@
     <button class="circle-btn" id="btnMyLoc">➤</button>
 </div>
 
-<!-- МАШИНА НА ВРЕМЕТО (ИСТОРИЯ НА ПОЛЕТИТЕ) -->
+<!-- МАШИНА НА ВРЕМЕТО -->
 <div id="timeMachineDock">
     <div class="tm-header">
         <span>⏪ ИСТОРИЯ НА ПОЛЕТИТЕ</span>
@@ -630,7 +626,6 @@
     let myBaseName = 'с. Радишево';
     let gpsWatchId = null;
 
-    // МАГНИТЕН СЕВЕР ЛОГИКА
     let useMagneticNorth = false;
     const BG_MAGNETIC_DECLINATION = 5.5;
 
@@ -744,11 +739,16 @@
     let highestTrackNumber = 0;
     let slotsExpanded = false;
     let cardSlotsOpen = false;
+    let showTrails = true;
 
     const planePhotoCache = {};
     const planeRouteCache = {};
-    // Локална памет за последния валиден транспондер (предотвратява премигването на ----)
     const knownSquawkMemory = {};
+
+    // ЛОКАЛЕН БУФЕР ЗА ТРЕЙСЪРА (СЛЕДИТЕ НА САМОЛЕТИТЕ)
+    // Структура: { [planeId]: { pts: [{lat, lon}, ...], lastSeen: timestamp } }
+    const planeTrails = {};
+    const MAX_TRAIL_POINTS = 80;
 
     try {
         const savedPins = localStorage.getItem('radar_pinned_targets_21');
@@ -951,6 +951,54 @@
         return { lat: plane.lat + dLat, lon: plane.lon + dLon };
     }
 
+    // РИСУВАНЕ НА ТРЕЙСЪР (СЛЕДА ОТКЪДЕ Е МИНАЛА ЦЕЛТА)
+    function drawPlaneTrail(planeId, currentScreenPt, isMil, isSelected, pinData) {
+        if (!showTrails) return;
+        // Рисуваме следата за избрания самолет, маркираните цели (1-21) и военните обекти
+        if (!isSelected && !pinData && !isMil) return;
+
+        const trailObj = planeTrails[planeId];
+        if (!trailObj || trailObj.pts.length === 0) return;
+
+        const pts = trailObj.pts;
+        const strokeColor = isSelected
+            ? '#00ffff'
+            : (pinData ? '#ff00ff' : (isMil ? '#ff3333' : '#00ff66'));
+
+        ctx.save();
+        ctx.beginPath();
+
+        for (let i = 0; i < pts.length; i++) {
+            const pScreen = map.latLngToContainerPoint([pts[i].lat, pts[i].lon]);
+            if (i === 0) {
+                ctx.moveTo(pScreen.x, pScreen.y);
+            } else {
+                ctx.lineTo(pScreen.x, pScreen.y);
+            }
+        }
+        ctx.lineTo(currentScreenPt.x, currentScreenPt.y);
+
+        ctx.strokeStyle = strokeColor;
+        ctx.lineWidth = isSelected ? 2.6 : 1.9;
+        ctx.globalAlpha = isSelected ? 0.92 : 0.75;
+        ctx.shadowColor = strokeColor;
+        ctx.shadowBlur = isSelected ? 8 : 4;
+        ctx.stroke();
+
+        // Точки по възлите на траекторията за избрана или маркирана цел
+        if (isSelected || pinData) {
+            ctx.fillStyle = strokeColor;
+            for (let i = 0; i < pts.length; i += 2) {
+                const pScreen = map.latLngToContainerPoint([pts[i].lat, pts[i].lon]);
+                ctx.beginPath();
+                ctx.arc(pScreen.x, pScreen.y, 2.2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        ctx.restore();
+    }
+
     function drawRealisticPlane(x, y, trackDeg, isMil, isSelected, pinData) {
         ctx.save();
         ctx.translate(x, y);
@@ -1127,6 +1175,10 @@
 
             const isSelected = plane.id === selectedPlaneId;
 
+            // 1. Първо рисуваме ТРЕЙСЪРА (следата откъде е минала целта)
+            drawPlaneTrail(plane.id, screenPt, isMil, isSelected, pinData);
+
+            // 2. Пунктирана линия за пеленг от Базата до избрана/маркирана цел
             if (isSelected || pinData) {
                 ctx.save();
                 ctx.beginPath();
@@ -1134,14 +1186,15 @@
                 ctx.moveTo(myScreenPt.x, myScreenPt.y);
                 ctx.lineTo(screenPt.x, screenPt.y);
                 ctx.strokeStyle = pinData ? '#ff00ff' : '#00ff66';
-                ctx.lineWidth = 2;
+                ctx.lineWidth = 1.6;
                 ctx.stroke();
                 ctx.restore();
             }
 
+            // 3. Рисуваме самия самолет
             drawRealisticPlane(screenPt.x, screenPt.y, plane.track, isMil, isSelected, pinData);
 
-            // Показваме Squawk, а ако липсва (----), показваме Позивен или Модел вместо тирета!
+            // 4. Етикет с транспондер / позивна
             const labelText = getBestPlaneLabel(plane);
 
             ctx.save();
@@ -1328,15 +1381,48 @@
 
     window.closeInfoPanel = function() { selectedPlaneId = null; document.getElementById('infoPanel').style.display = 'none'; };
 
+    function recordPlaneTrailPoint(id, lat, lon, now) {
+        if (!planeTrails[id]) {
+            planeTrails[id] = { pts: [{ lat, lon }], lastSeen: now };
+            return;
+        }
+        const entry = planeTrails[id];
+        entry.lastSeen = now;
+        const lastPt = entry.pts[entry.pts.length - 1];
+        if (!lastPt) {
+            entry.pts.push({ lat, lon });
+            return;
+        }
+        const movedKm = calcDistanceKm(lastPt.lat, lastPt.lon, lat, lon);
+        // Записваме нова точка само при реално преместване (> 150m) и < 80km (защита от телепортиране)
+        if (movedKm >= 0.15 && movedKm < 80) {
+            entry.pts.push({ lat, lon });
+            if (entry.pts.length > MAX_TRAIL_POINTS) {
+                entry.pts.shift();
+            }
+        }
+    }
+
+    // Почистване на стари следи на самолети, които вече са напуснали обхвата (> 10 мин)
+    function cleanupOldTrails(now) {
+        for (const id in planeTrails) {
+            if (now - planeTrails[id].lastSeen > 600000) {
+                delete planeTrails[id];
+            }
+        }
+    }
+
     function ingestPlanesData(data) {
         const now = Date.now();
         planes = data
             .filter(item => item && Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lon)))
             .map(item => {
                 const normalized = { ...item };
+                const latNum = Number(item.lat);
+                const lonNum = Number(item.lon);
+
                 normalized.isMilitary = isMilitaryPlane(item);
 
-                // Запазваме последния известен Squawk код, ако текущият пакет временно върне '----'
                 const incomingSqk = String(normalized.squawk || '').trim();
                 if (incomingSqk !== '' && incomingSqk !== '----' && incomingSqk !== '0000') {
                     knownSquawkMemory[normalized.id] = incomingSqk;
@@ -1347,10 +1433,16 @@
                 if (normalized.isMilitary && !/\[ВОЕНЕН\]/i.test(String(normalized.callsign || ''))) {
                     normalized.callsign = `${normalized.callsign || normalized.id || ''} [ВОЕНЕН]`.trim();
                 }
-                const distKm = calcDistanceKm(myLat, myLon, Number(item.lat), Number(item.lon));
-                const bearing = calcBearing(myLat, myLon, Number(item.lat), Number(item.lon));
-                return { ...normalized, lat: Number(item.lat), lon: Number(item.lon), distKm, bearing, lastUpdateMs: now };
+
+                // Добавяме точка в трейсъра
+                recordPlaneTrailPoint(normalized.id, latNum, lonNum, now);
+
+                const distKm = calcDistanceKm(myLat, myLon, latNum, lonNum);
+                const bearing = calcBearing(myLat, myLon, latNum, lonNum);
+                return { ...normalized, lat: latNum, lon: lonNum, distKm, bearing, lastUpdateMs: now };
             });
+
+        cleanupOldTrails(now);
         updatePinnedBarUI();
         if (selectedPlaneId) {
             const sel = planes.find(p => p.id === selectedPlaneId);
@@ -1469,6 +1561,7 @@
     document.getElementById('btnZoomOut').onclick = () => map.zoomOut();
     document.getElementById('btnMyLoc').onclick = () => map.setView([myLat, myLon], 9);
     document.getElementById('btnMilOnly').onclick = function() { milOnlyFilter = !milOnlyFilter; this.classList.toggle('active', milOnlyFilter); };
+    document.getElementById('btnTrails').onclick = function() { showTrails = !showTrails; this.classList.toggle('active', showTrails); };
     document.getElementById('btnMapStyle').onclick = function() {
         currentMapMode = (currentMapMode + 1) % 3;
         map.removeLayer(googleTerrainLayer); map.removeLayer(googleHybridLayer); map.removeLayer(openTopoLayer);

@@ -39,8 +39,8 @@ class RadarController extends AbstractController
     #[Route('/api/planes', name: 'api_planes')]
     public function getPlanes(Request $request): JsonResponse
     {
-        $centerLat = (float) $request->query->get('lat', 43.3676);
-        $centerLon = (float) $request->query->get('lon', 24.6667);
+        $centerLat = (float) $request->query->get('lat', 43.36764916688548);
+        $centerLon = (float) $request->query->get('lon', 24.666731248063613);
 
         if (
             !is_finite($centerLat) ||
