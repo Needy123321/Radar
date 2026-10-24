@@ -600,7 +600,10 @@
 <div id="timeMachineDock">
     <div class="tm-header">
         <span>⏪ ИСТОРИЯ НА ПОЛЕТИТЕ</span>
-        <span id="tmTimestampLabel">НА ЖИВО</span>
+        <div style="display:flex; align-items:center; gap:8px;">
+            <span id="tmTimestampLabel">НА ЖИВО</span>
+            <button class="action-btn" onclick="closeTimeMachine()" style="border-color:var(--warn-amber); color:var(--warn-amber); padding:1px 6px;">✕</button>
+        </div>
     </div>
     <div class="tm-slider-wrap">
         <span style="font-size:10px; color:#ccc;">НАЗАД</span>
@@ -1236,7 +1239,18 @@
         requestAnimationFrame(renderLoop);
     }
 
+    window.closeTimeMachine = function() {
+        const dock = document.getElementById('timeMachineDock');
+        if (dock && dock.style.display === 'block') {
+            dock.style.display = 'none';
+            document.getElementById('btnHistory').classList.remove('active');
+        }
+    };
+
     map.on('click', function(e) {
+        // Ако прозорецът за История е отворен и цъкнем отстрани по картата -> скриваме го!
+        closeTimeMachine();
+
         const clickX = e.containerPoint.x;
         const clickY = e.containerPoint.y;
         let closest = null, minDist = 28;
@@ -1513,11 +1527,19 @@
         if (!isOpen) syncHistoryMeta();
     };
 
+    let sliderDebounceTimer = null;
     document.getElementById('historySlider').oninput = function() {
         stopReplay();
-        loadHistoryFrame(Number(this.value));
+        const idx = Number(this.value);
+        if (historyTimestamps[idx]) {
+            const dt = new Date(historyTimestamps[idx] * 1000);
+            document.getElementById('tmTimestampLabel').textContent = dt.toLocaleTimeString('bg-BG');
+        }
+        clearTimeout(sliderDebounceTimer);
+        sliderDebounceTimer = setTimeout(() => {
+            loadHistoryFrame(idx);
+        }, 80);
     };
-
     document.getElementById('btnPlayHistory').onclick = function() {
         if (historyTimestamps.length === 0) return;
         if (replayPlaying) {

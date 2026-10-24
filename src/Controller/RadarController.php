@@ -12,10 +12,10 @@ class RadarController extends AbstractController
 {
     private const CACHE_TTL = 12;
     private const PROVIDER_COOLDOWN = 300;
-    private const MAX_HISTORY_FRAMES = 240;
+    private const MAX_HISTORY_FRAMES = 120;
     private const SEARCH_RADIUS_NM = 250;
 
-    // Максимална възраст на позицията в секунди (реже фантоми като 0547)
+    // Максимална възраст на позицията в секунди (реже фантоми)
     private const MAX_POS_AGE_SEC = 60.0;
 
     #[Route('/', name: 'app_home')]
@@ -39,8 +39,8 @@ class RadarController extends AbstractController
     #[Route('/api/planes', name: 'api_planes')]
     public function getPlanes(Request $request): JsonResponse
     {
-        $centerLat = (float) $request->query->get('lat', 43.36764916688548);
-        $centerLon = (float) $request->query->get('lon', 24.666731248063613);
+        $centerLat = (float) $request->query->get('lat', 43.36764433890423);
+        $centerLon = (float) $request->query->get('lon', 24.666729786478978);
 
         if (
             !is_finite($centerLat) ||
@@ -54,7 +54,6 @@ class RadarController extends AbstractController
         $locKey = round($centerLat, 2) . '_' . round($centerLon, 2);
         $cacheDir = sys_get_temp_dir();
         $cacheFile = $cacheDir . '/radar_live_buffer_' . $locKey . '.json';
-        $historyFile = $cacheDir . '/radar_history_ring.json';
         $lockFile = $cacheDir . '/radar_live_' . $locKey . '.lock';
         $now = time();
 
@@ -187,8 +186,7 @@ class RadarController extends AbstractController
                 }
             }
 
-            // 3. OpenSky САМО като авариен резерв (ако всички горни върнат 0 самолета),
-            // за да не вкарва замръзнали фантоми със стари координати!
+            // 3. OpenSky САМО като авариен резерв
             if ($planesMap === []) {
                 $openSkyUrl = $this->buildOpenSkyUrl($centerLat, $centerLon, self::SEARCH_RADIUS_NM);
                 $openSky = $this->curlFetch($openSkyUrl);
@@ -204,7 +202,6 @@ class RadarController extends AbstractController
                 }
             }
 
-            // Изчистваме вътрешните служебни полета ЧАК СЛЕД като всички потоци са обединени
             foreach ($planesMap as &$plane) {
                 unset($plane['_source']);
             }
@@ -234,7 +231,7 @@ class RadarController extends AbstractController
                 @file_put_contents($cacheFile, $jsonPayload, LOCK_EX);
             }
 
-            $this->appendHistorySnapshot($historyFile, $now, $finalPlanes);
+            $this->appendHistorySnapshot($cacheDir, $now, $finalPlanes);
 
             error_log(sprintf(
                 '[RADAR] FINAL AIRCRAFT=%d SOURCES=%s',
@@ -254,67 +251,125 @@ class RadarController extends AbstractController
     #[Route('/api/history', name: 'api_history')]
     public function getHistory(Request $request): JsonResponse
     {
-        $historyFile = sys_get_temp_dir() . '/radar_history_ring.json';
+        $cacheDir = sys_get_temp_dir();
+        $indexFile = $cacheDir . '/radar_history_index.json';
 
-        if (!is_file($historyFile)) {
+        // Миграция/изчистване на стария огромен 22MB файл, ако все още стои в /tmp
+        $legacyHugeFile = $cacheDir . '/radar_history_ring.json';
+        if (is_file($legacyHugeFile)) {
+            @unlink($legacyHugeFile);
+        }
+
+        if (!is_file($indexFile)) {
             return new JsonResponse(['timestamps' => [], 'planes' => [], 'total' => 0]);
         }
 
-        $raw = @file_get_contents($historyFile);
-        $history = is_string($raw) ? json_decode($raw, true) : [];
+        $rawIndex = @file_get_contents($indexFile);
+        $indexData = is_string($rawIndex) ? json_decode($rawIndex, true) : [];
 
-        if (!is_array($history) || $history === []) {
+        if (!is_array($indexData) || $indexData === []) {
             return new JsonResponse(['timestamps' => [], 'planes' => [], 'total' => 0]);
         }
 
         $frameIndex = $request->query->get('index');
 
+        // Ако потребителят иска конкретен кадър от плъзгача, четем САМО малкия файл за този слот (~60 KB)!
         if ($frameIndex !== null) {
             $idx = (int) $frameIndex;
-            if (isset($history[$idx])) {
+            if (isset($indexData[$idx])) {
+                $slotNum = (int) ($indexData[$idx]['slot'] ?? -1);
+                $ts = (int) ($indexData[$idx]['ts'] ?? 0);
+                $slotFile = $cacheDir . '/radar_hist_slot_' . $slotNum . '.json';
+
+                $planes = [];
+                if ($slotNum >= 0 && is_file($slotFile)) {
+                    $rawSlot = @file_get_contents($slotFile);
+                    $decodedSlot = is_string($rawSlot) ? json_decode($rawSlot, true) : [];
+                    if (is_array($decodedSlot)) {
+                        $planes = $decodedSlot;
+                    }
+                }
+
                 return new JsonResponse([
-                    'timestamp' => $history[$idx]['ts'] ?? null,
-                    'planes'    => $history[$idx]['planes'] ?? [],
-                    'total'     => count($history),
+                    'timestamp' => $ts,
+                    'planes'    => $planes,
+                    'total'     => count($indexData),
                 ]);
             }
+
+            return new JsonResponse(['timestamp' => null, 'planes' => [], 'total' => count($indexData)]);
         }
 
         return new JsonResponse([
-            'timestamps' => array_map(static fn($item) => $item['ts'] ?? null, $history),
-            'total'      => count($history),
+            'timestamps' => array_map(static fn($item) => $item['ts'] ?? null, $indexData),
+            'total'      => count($indexData),
         ]);
     }
 
-    private function appendHistorySnapshot(string $historyFile, int $timestamp, array $planes): void
+    /**
+     * Записва историята в лек Ring Buffer от отделни слот файлове (~60KB всеки),
+     * така че PHP никога да не превишава RAM лимита и да не връща 502 Bad Gateway.
+     */
+    private function appendHistorySnapshot(string $cacheDir, int $timestamp, array $planes): void
     {
-        $history = [];
+        $indexFile = $cacheDir . '/radar_history_index.json';
+        $indexData = [];
 
-        if (is_file($historyFile)) {
-            $raw = @file_get_contents($historyFile);
+        if (is_file($indexFile)) {
+            $raw = @file_get_contents($indexFile);
             $decoded = is_string($raw) ? json_decode($raw, true) : [];
-
             if (is_array($decoded)) {
-                $history = $decoded;
+                $indexData = $decoded;
             }
         }
 
-        $last = end($history);
+        $last = end($indexData);
         if (is_array($last) && isset($last['ts']) && ($timestamp - (int) $last['ts']) < 15) {
             return;
         }
 
-        $history[] = ['ts' => $timestamp, 'planes' => $planes];
+        // Определяме следващия свободен слот в кръговия буфер (0 .. MAX_HISTORY_FRAMES - 1)
+        $nextSlot = is_array($last) && isset($last['slot'])
+            ? (((int) $last['slot'] + 1) % self::MAX_HISTORY_FRAMES)
+            : 0;
 
-        if (count($history) > self::MAX_HISTORY_FRAMES) {
-            $history = array_slice($history, -self::MAX_HISTORY_FRAMES);
+        // Олекотяваме обектите за историята (закръгляме координатите до 4 знака), за да е още по-бързо
+        $compactPlanes = [];
+        foreach ($planes as $p) {
+            $compactPlanes[] = [
+                'id'         => $p['id'] ?? '',
+                'callsign'   => $p['callsign'] ?? '',
+                'lat'        => round((float) ($p['lat'] ?? 0), 4),
+                'lon'        => round((float) ($p['lon'] ?? 0), 4),
+                'track'      => (int) round((float) ($p['track'] ?? 0)),
+                'altitude'   => (int) ($p['altitude'] ?? 0),
+                'speed'      => (int) ($p['speed'] ?? 0),
+                'squawk'     => $p['squawk'] ?? '----',
+                'type'       => $p['type'] ?? '',
+                'operator'   => $p['operator'] ?? '',
+                'isMilitary' => !empty($p['isMilitary']),
+            ];
         }
 
-        $tmp = $historyFile . '.tmp.' . getmypid();
-        $json = json_encode($history, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+        $slotFile = $cacheDir . '/radar_hist_slot_' . $nextSlot . '.json';
+        $slotJson = json_encode($compactPlanes, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 
-        if (is_string($json) && @file_put_contents($tmp, $json, LOCK_EX) !== false) {
-            @rename($tmp, $historyFile);
+        if (!is_string($slotJson) || @file_put_contents($slotFile, $slotJson, LOCK_EX) === false) {
+            return;
+        }
+
+        $indexData[] = [
+            'ts'   => $timestamp,
+            'slot' => $nextSlot,
+        ];
+
+        if (count($indexData) > self::MAX_HISTORY_FRAMES) {
+            $indexData = array_slice($indexData, -self::MAX_HISTORY_FRAMES);
+        }
+
+        $indexJson = json_encode($indexData, JSON_UNESCAPED_UNICODE);
+        if (is_string($indexJson)) {
+            @file_put_contents($indexFile, $indexJson, LOCK_EX);
         }
     }
 
@@ -448,7 +503,6 @@ class RadarController extends AbstractController
         $west  = max(-180.0, round($lon - 6.5, 2));
         $east  = min(180.0, round($lon + 6.5, 2));
 
-        // bounds формат за FR24: north,south,west,east
         return "https://data-cloud.flightradar24.com/zones/fcgi/feed.js?bounds={$north},{$south},{$west},{$east}&faa=1&satellite=1&mlat=1&flarm=1&adsb=1&gnd=0&air=1&vehicles=0&estimated=0&maxage=60&gliders=1&stats=0";
     }
 
@@ -507,13 +561,11 @@ class RadarController extends AbstractController
                 continue;
             }
 
-            // 1. Игнорираме кацнали самолети / наземни обекти
             $altRaw = $ac['alt_baro'] ?? $ac['alt_geom'] ?? $ac['alt'] ?? 0;
             if ($altRaw === 'ground' || !empty($ac['ground'])) {
                 continue;
             }
 
-            // 2. Филтър срещу ФАНТОМИ: игнорираме позиции, по-стари от 60 секунди!
             $seenPos = (float) ($ac['seen_pos'] ?? $ac['seen'] ?? 0.5);
             if ($seenPos > self::MAX_POS_AGE_SEC) {
                 continue;
@@ -529,14 +581,12 @@ class RadarController extends AbstractController
             $lat = (float) $lat;
             $lon = (float) $lon;
 
-            // 3. Географска рамка около центъра (задължително за глобалния /v2/mil поток!)
             if (abs($lat - $centerLat) > 5.5 || abs($lon - $centerLon) > 7.5) {
                 continue;
             }
 
             $id = strtolower(trim((string) ($ac['hex'] ?? $ac['icao24'] ?? '')));
             if ($id === '' || str_starts_with($id, '~')) {
-                // '~' в ADS-B фийдовете са невалидни/синтетични TIS-B/наземни маркери
                 continue;
             }
 
@@ -555,18 +605,15 @@ class RadarController extends AbstractController
             $speedKnots = (float) ($ac['gs'] ?? $ac['spd'] ?? 0);
             $speedKmh = (int) round($speedKnots * 1.852);
 
-            // Ако обектът е на 0 метра височина и под 40 км/ч, значи рулира на земята -> пропускаме го
             if ($altitudeMeters <= 0 && $speedKmh < 40) {
                 continue;
             }
 
             $existing = $planesMap[$id] ?? null;
             if (is_array($existing)) {
-                // Запазваме военния статус, ако вече е бил засечен от друг поток
                 if (!empty($existing['isMilitary'])) {
                     $isMil = true;
                 }
-                // Ако съществуващият запис е по-пресен и не добавяме военен флаг, пропускаме
                 if (($existing['age'] ?? 99.0) < $seenPos && (!empty($existing['isMilitary']) || !$isMil)) {
                     continue;
                 }
@@ -597,9 +644,6 @@ class RadarController extends AbstractController
         }
     }
 
-    /**
-     * Парсва директния фийд на Flightradar24 (включително MLAT самолети като PC-9M без пълен HEX в другите мрежи)
-     */
     private function parseFr24Data(
         array $frData,
         array &$planesMap,
@@ -638,7 +682,6 @@ class RadarController extends AbstractController
             }
 
             $hex = strtolower(trim((string) ($val[0] ?? '')));
-            // При MLAT полети във FR24 понякога HEX полето е празно — ползваме уникалния FR24 ключ
             $id = $hex !== '' ? $hex : 'fr_' . strtolower(trim((string) $key));
 
             $track        = (float) ($val[3] ?? 0);
@@ -661,7 +704,6 @@ class RadarController extends AbstractController
 
             $existing = $planesMap[$id] ?? null;
             if (is_array($existing)) {
-                // Ако вече го имаме от ADS-B v2, обогатяваме само ако FR24 знае модела (напр. PC9) или военния статус
                 if ($isMil && empty($existing['isMilitary'])) {
                     $existing['isMilitary'] = true;
                     if (!str_contains($existing['callsign'], '[ВОЕНЕН]')) {
@@ -717,12 +759,10 @@ class RadarController extends AbstractController
                 continue;
             }
 
-            // Игнорираме обекти на земята (индекс 8 е on_ground)
             if (!empty($st[8])) {
                 continue;
             }
 
-            // Игнорираме стари позиции (индекс 3 е time_position, индекс 4 е last_contact)
             $posTime = (int) ($st[3] ?? $st[4] ?? 0);
             if ($posTime > 0 && ($now - $posTime) > self::MAX_POS_AGE_SEC) {
                 continue;
@@ -789,7 +829,7 @@ class RadarController extends AbstractController
             'THY', 'WZZ', 'WMT', 'RYR', 'RYS', 'DLH', 'LZB', 'AUA', 'BAW',
             'AFR', 'KLM', 'SWR', 'EZY', 'EJU', 'TAR', 'ROT', 'ASL', 'AEE',
             'PGT', 'SXS', 'CAI', 'LOT', 'TVS', 'BTI', 'ELAL', 'ELY', 'QTR',
-            'UAE', 'ETD', 'FDB', 'tuk', 'BGH', 'VBB', 'LAZ',
+            'UAE', 'ETD', 'FDB', 'TUK', 'BGH', 'VBB', 'LAZ',
         ];
         foreach ($civilCallsigns as $civ) {
             if ($cs !== '' && str_starts_with($cs, $civ)) {
@@ -797,11 +837,7 @@ class RadarController extends AbstractController
             }
         }
 
-        // 1. Точни военни ICAO HEX диапазони:
-        // 45f4xx = Български ВВС
-        // ae / af = САЩ (USAF / US Navy / US Army)
-        // 43cxxx = Великобритания (RAF)
-        // 3f4..3fb = Германия (Luftwaffe)
+        // 1. Точни военни ICAO HEX диапазони
         if ($hex !== '') {
             if (
                 str_starts_with($hex, '45f4') ||
@@ -814,15 +850,12 @@ class RadarController extends AbstractController
             }
         }
 
-        // 2. Строго военен Squawk (махнати са 44xx и 74xx, защото в Европа са за граждански трафик!)
-        if ($squawk === '7777' || $squawk === '0000') {
-            // 0000 зачитаме само ако е комбиниран с военен тип или регистрация по-долу
-            if ($squawk === '7777') {
-                return true;
-            }
+        // 2. Строго военен Squawk
+        if ($squawk === '7777') {
+            return true;
         }
 
-        // 3. Бордни номера на Българските ВВС (напр. 664 за PC-9M, 071/072/073 за C-27J Spartan)
+        // 3. Бордни номера на Българските ВВС
         if ($regClean !== '' && preg_match('/^(66\d|07[123]|11\d|20\d)$/', $regClean)) {
             return true;
         }
@@ -841,7 +874,7 @@ class RadarController extends AbstractController
             }
         }
 
-        // 5. Военни типове самолети (вкл. PC-9M, L-39, Spartan, Cougar)
+        // 5. Военни типове самолети
         $milTypes = [
             'F16', 'C27J', 'C130', 'C30J', 'PC9', 'PC7', 'L39', 'MIG29',
             'SU25', 'UH60', 'CH47', 'MI8', 'MI17', 'MI24', 'AS32', 'AS532',
