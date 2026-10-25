@@ -652,7 +652,36 @@
         }
     };
 
-    const map = L.map('terrainMap', { center: [myLat, myLon], zoom: 8, zoomControl: false, attributionControl: false });
+    const map = L.map('terrainMap', {
+        center: [myLat, myLon],
+        zoom: 8,
+        zoomSnap: 0.01,
+        zoomDelta: 0.25,
+        zoomControl: false,
+        attributionControl: false
+    });
+
+    // Фиксирани тактически обхвати на радара в километри (последните са през 50 км)
+    const TACTICAL_RANGES_KM = [20, 40, 60, 80, 100, 150, 200, 250, 300];
+    let currentRangeIdx = 3; // Стартираме на 80 km (индекс 3)
+
+    function setRadarRangeKm(targetKm) {
+        const radiusPx = Math.min(window.innerWidth, window.innerHeight) * 0.42;
+        if (radiusPx <= 10) return;
+
+        // Изчисляваме какъв точно zoom ни трябва, за да може radiusPx да отговаря точно на targetKm
+        const currentZoom = map.getZoom();
+        const centerPt = [window.innerWidth / 2, window.innerHeight / 2];
+        const cLatLng = map.containerPointToLatLng(centerPt);
+        const eLatLng = map.containerPointToLatLng([centerPt[0] + radiusPx, centerPt[1]]);
+        const currentKm = map.distance(cLatLng, eLatLng) / 1000;
+
+        if (currentKm > 0) {
+            const zoomDiff = Math.log2(currentKm / targetKm);
+            const exactZoom = Math.max(5.5, Math.min(14, currentZoom + zoomDiff));
+            map.setZoom(exactZoom, { animate: false });
+        }
+    }
     const googleTerrainLayer = L.tileLayer('https://{s}.google.com/vt/lyrs=p&x={x}&y={y}&z={z}&hl=bg', { maxZoom: 18, subdomains: ['mt0', 'mt1', 'mt2', 'mt3'] });
     const googleHybridLayer = L.tileLayer('https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&hl=bg', { maxZoom: 18, subdomains: ['mt0', 'mt1', 'mt2', 'mt3'] });
     const openTopoLayer = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 17 });
@@ -1005,33 +1034,14 @@
     function drawRealisticPlane(x, y, trackDeg, isMil, isSelected, pinData) {
 
         // =====================================================
-        // РАЗМЕР НА САМОЛЕТА СПОРЕД ZOOM-А
-        // Далечен zoom -> по-малък
-        // Близък zoom -> нормален размер
+        // ПЛАВЕН РАЗМЕР НА САМОЛЕТА СПОРЕД ZOOM-А (работи и с дробен zoom!)
+        // Далечен zoom (300 км / zoom ~6) -> малки (0.45 - 0.50)
+        // Близък zoom (20 км / zoom ~12) -> големи (1.30 - 1.35)
         // =====================================================
         const zoom = map.getZoom();
 
-        let planeScale = 1.0;
-
-        if (zoom <= 6) {
-            planeScale = 0.50;   // много далеч -> малки
-        } else if (zoom === 7) {
-            planeScale = 0.60;
-        } else if (zoom === 8) {
-            planeScale = 0.70;
-        } else if (zoom === 9) {
-            planeScale = 0.80;
-        } else if (zoom === 10) {
-            planeScale = 0.90;
-        } else if (zoom === 11) {
-            planeScale = 1.00;
-        } else if (zoom === 12) {
-            planeScale = 1.10;
-        } else if (zoom === 13) {
-            planeScale = 1.20;
-        } else {
-            planeScale = 1.30;   // много близо -> големи
-        }
+        let planeScale = 0.50 + (zoom - 6.0) * 0.12;
+        planeScale = Math.max(0.45, Math.min(1.35, planeScale));
 
         ctx.save();
 
@@ -1126,8 +1136,7 @@
 
         // =====================================================
         // КРЪГ ОКОЛО SELECTED / PINNED
-        // Оставяме оригиналната логика
-        // Само радиусът следва размера на самолета
+        // Радиусът следва размера на самолета
         // =====================================================
         if (isSelected || pinData) {
 
@@ -1155,183 +1164,112 @@
             ctx.restore();
         }
     }
-
-
     function drawRadarGrid(cx, cy) {
         ctx.save();
         ctx.translate(cx, cy);
 
-        // =====================================================
-        // РАЗМЕР НА РАДАРА
-        // =====================================================
         const radius = Math.min(canvas.width, canvas.height) * 0.42;
 
-        // =====================================================
-        // РЕАЛЕН РАДИУС НА РАДАРА В KM
-        // =====================================================
         const centerLatLng = map.containerPointToLatLng([cx, cy]);
         const edgeLatLng = map.containerPointToLatLng([cx + radius, cy]);
+        const rawRadiusKm = map.distance(centerLatLng, edgeLatLng) / 1000;
 
-        const radarRadiusKm =
-            map.distance(centerLatLng, edgeLatLng) / 1000;
-
-        // =====================================================
-        // ИЗБИРАМЕ УДОБНА СТЪПКА
-        // =====================================================
-        function getNiceStep(maxKm) {
-            const targetDivisions = 5;
-            const rawStep = maxKm / targetDivisions;
-
-            const magnitude =
-                Math.pow(10, Math.floor(Math.log10(rawStep)));
-
-            const normalized = rawStep / magnitude;
-
-            let niceNormalized;
-
-            if (normalized <= 1) {
-                niceNormalized = 1;
-            } else if (normalized <= 2) {
-                niceNormalized = 2;
-            } else if (normalized <= 2.5) {
-                niceNormalized = 2.5;
-            } else if (normalized <= 5) {
-                niceNormalized = 5;
-            } else {
-                niceNormalized = 10;
+        // Ако сме близо до някой от тактическите обхвати (20..300 км), закръгляме етикета до него
+        let maxGridKm = Math.round(rawRadiusKm);
+        for (const rKm of TACTICAL_RANGES_KM) {
+            if (Math.abs(rawRadiusKm - rKm) / rKm < 0.08) {
+                maxGridKm = rKm;
+                break;
             }
-
-            return niceNormalized * magnitude;
         }
 
-        const kmStep = getNiceStep(radarRadiusKm);
+        // Определяме стъпката на вътрешните пръстени:
+        // За 150, 200, 250, 300 км -> стъпка 50 км! За по-малките -> 4 равни пръстена.
+        let kmStep;
+        if (maxGridKm >= 150) {
+            kmStep = 50;
+        } else if (maxGridKm === 100) {
+            kmStep = 25;
+        } else if (maxGridKm === 60) {
+            kmStep = 20;
+        } else {
+            kmStep = maxGridKm / 4;
+        }
 
-        // =====================================================
         // ВЪНШЕН РАДАРЕН КРЪГ
-        // =====================================================
         ctx.beginPath();
         ctx.arc(0, 0, radius, 0, Math.PI * 2);
-
         ctx.strokeStyle = 'rgba(150, 0, 0, 0.90)';
         ctx.lineWidth = 2;
-
         ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
         ctx.shadowBlur = 3;
-
         ctx.stroke();
         ctx.shadowBlur = 0;
 
-        // =====================================================
-        // KM КРЪГОВЕ
-        // =====================================================
-        for (
-            let km = kmStep;
-            km < radarRadiusKm;
-            km += kmStep
-        ) {
-            const r = (km / radarRadiusKm) * radius;
+        // ВЪТРЕШНИ KM КРЪГОВЕ + ВЪНШЕН ЕТИКЕТ
+        for (let km = kmStep; km <= maxGridKm + 0.1; km += kmStep) {
+            const isOuter = Math.abs(km - maxGridKm) < 0.5;
+            const r = isOuter ? radius : (km / maxGridKm) * radius;
+            const kmVal = Math.round(km * 10) / 10;
 
-            // -------------------------------------------------
-            // КРЪГ
-            // -------------------------------------------------
-            ctx.beginPath();
-            ctx.arc(0, 0, r, 0, Math.PI * 2);
+            if (!isOuter) {
+                ctx.beginPath();
+                ctx.arc(0, 0, r, 0, Math.PI * 2);
+                ctx.strokeStyle = 'rgba(130, 0, 0, 0.55)';
+                ctx.lineWidth = 1;
+                ctx.stroke();
 
-            ctx.strokeStyle = 'rgba(130, 0, 0, 0.55)';
-            ctx.lineWidth = 1;
+                // ТИКЧЕТА НА 4 СТРАНИ
+                ctx.beginPath();
+                ctx.moveTo(r, -5); ctx.lineTo(r, 5);
+                ctx.moveTo(-r, -5); ctx.lineTo(-r, 5);
+                ctx.moveTo(-5, -r); ctx.lineTo(5, -r);
+                ctx.moveTo(-5, r); ctx.lineTo(5, r);
+                ctx.strokeStyle = '#a80000';
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
+            }
 
-            ctx.stroke();
-
-            // -------------------------------------------------
-            // ТИКЧЕТА НА 4 СТРАНИ
-            // -------------------------------------------------
-            ctx.beginPath();
-
-            // ДЯСНО
-            ctx.moveTo(r, -5);
-            ctx.lineTo(r, 5);
-
-            // ЛЯВО
-            ctx.moveTo(-r, -5);
-            ctx.lineTo(-r, 5);
-
-            // ГОРЕ
-            ctx.moveTo(-5, -r);
-            ctx.lineTo(5, -r);
-
-            // ДОЛУ
-            ctx.moveTo(-5, r);
-            ctx.lineTo(5, r);
-
-            ctx.strokeStyle = '#a80000';
-            ctx.lineWidth = 1.5;
-
-            ctx.stroke();
-
-            // =================================================
-            // KM ТЕКСТ — ЖЪЛТ С ЧЕРЕН КОНТУР
-            // =================================================
-            const kmText = `${Math.round(km * 10) / 10} km`;
-
+            const kmText = `${kmVal} km`;
 
             ctx.font = 'bold 11px Segoe UI, sans-serif';
-
-// СВЕТЪЛ ЦИАН — ДИСТАНЦИИ
             ctx.fillStyle = '#7DF9FF';
-
-// ЧЕРЕН КОНТУР ЗА КОНТРАСТ
             ctx.strokeStyle = 'rgba(0, 0, 0, 0.98)';
             ctx.lineWidth = 3;
-
             ctx.shadowColor = '#000000';
             ctx.shadowBlur = 3;
 
-
-            // -------------------------------------------------
-            // ДЯСНО — ПРЕМЕСТЕНО НАДОЛУ С 12 PX
-            // -------------------------------------------------
+            // ДЯСНО
             ctx.textAlign = 'left';
             ctx.textBaseline = 'middle';
+            ctx.strokeText(kmText, r + 6, 14);
+            ctx.fillText(kmText, r + 6, 14);
 
-            ctx.strokeText(kmText, r + 8, 12);
-            ctx.fillText(kmText, r + 8, 12);
-
-            // -------------------------------------------------
-            // ЛЯВО — ПРЕМЕСТЕНО НАДОЛУ С 12 PX
-            // -------------------------------------------------
+            // ЛЯВО
             ctx.textAlign = 'right';
             ctx.textBaseline = 'middle';
+            ctx.strokeText(kmText, -r - 6, 14);
+            ctx.fillText(kmText, -r - 6, 14);
 
-            ctx.strokeText(kmText, -r - 8, 12);
-            ctx.fillText(kmText, -r - 8, 12);
+            // ГОРЕ И ДОЛУ (само за вътрешните пръстени)
+            if (!isOuter) {
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'bottom';
+                ctx.strokeText(kmText, 0, -r + 4);
+                ctx.fillText(kmText, 0, -r + 4);
 
-            // -------------------------------------------------
-            // ГОРЕ — ЛЕКО НАДОЛУ
-            // -------------------------------------------------
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'bottom';
-
-            ctx.strokeText(kmText, 0, -r + 4);
-            ctx.fillText(kmText, 0, -r + 4);
-
-            // -------------------------------------------------
-            // ДОЛУ — ПРЕМЕСТЕНО НАДОЛУ С 12 PX
-            // -------------------------------------------------
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'top';
-
-            ctx.strokeText(kmText, 0, r + 20);
-            ctx.fillText(kmText, 0, r + 20);
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'top';
+                ctx.strokeText(kmText, 0, r + 6);
+                ctx.fillText(kmText, 0, r + 6);
+            }
 
             ctx.shadowBlur = 0;
         }
 
-        // =====================================================
         // ГРАДУСОВИ ТИКЧЕТА
-        // =====================================================
         for (let deg = 0; deg < 360; deg += 10) {
             const angle = (deg - 90) * Math.PI / 180;
-
             const isMajor = deg % 30 === 0;
             const tickLength = isMajor ? 12 : 6;
 
@@ -1340,45 +1278,31 @@
 
             const x1 = Math.cos(angle) * innerRadius;
             const y1 = Math.sin(angle) * innerRadius;
-
             const x2 = Math.cos(angle) * outerRadius;
             const y2 = Math.sin(angle) * outerRadius;
 
             ctx.beginPath();
             ctx.moveTo(x1, y1);
             ctx.lineTo(x2, y2);
-
-            ctx.strokeStyle = isMajor
-                ? 'rgba(155, 0, 0, 0.90)'
-                : 'rgba(130, 0, 0, 0.65)';
-
+            ctx.strokeStyle = isMajor ? 'rgba(155, 0, 0, 0.90)' : 'rgba(130, 0, 0, 0.65)';
             ctx.lineWidth = isMajor ? 2 : 1;
-
             ctx.stroke();
 
-            // =================================================
-            // ГРАДУСИ ПРЕЗ 30°
-            // =================================================
             if (isMajor) {
                 const textRadius = radius - 23;
-
                 const tx = Math.cos(angle) * textRadius;
                 const ty = Math.sin(angle) * textRadius;
 
                 ctx.font = 'bold 10px Segoe UI, sans-serif';
-
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
-
                 ctx.shadowColor = '#000000';
                 ctx.shadowBlur = 3;
 
-                // СЕВЕР 0°С — ЦИАН
                 if (deg === 0) {
                     ctx.fillStyle = '#00e5ff';
                     ctx.fillText('0°С', tx, ty);
                 } else {
-                    // ОСТАНАЛИТЕ ГРАДУСИ — ТЪМНО ЧЕРВЕНО
                     ctx.fillStyle = '#b82020';
                     ctx.fillText(`${deg}°`, tx, ty);
                 }
@@ -1387,30 +1311,18 @@
             }
         }
 
-        // =====================================================
-        // ЦЕНТРАЛЕН КРЪСТ
-        // =====================================================
+        // ЦЕНТРАЛЕН КРЪСТ И ТОЧКА
         ctx.strokeStyle = 'rgba(120, 0, 0, 0.45)';
         ctx.lineWidth = 1;
-
         ctx.beginPath();
-
-        // ХОРИЗОНТАЛНА ЛИНИЯ
         ctx.moveTo(-radius, 0);
         ctx.lineTo(radius, 0);
-
-        // ВЕРТИКАЛНА ЛИНИЯ
         ctx.moveTo(0, -radius);
         ctx.lineTo(0, radius);
-
         ctx.stroke();
 
-        // =====================================================
-        // ЦЕНТРАЛНА ТОЧКА
-        // =====================================================
         ctx.beginPath();
         ctx.arc(0, 0, 3, 0, Math.PI * 2);
-
         ctx.fillStyle = '#b82020';
         ctx.fill();
 
@@ -1900,9 +1812,22 @@
         fetchPlanes(true);
     };
 
-    document.getElementById('btnZoomIn').onclick = () => map.zoomIn();
-    document.getElementById('btnZoomOut').onclick = () => map.zoomOut();
-    document.getElementById('btnMyLoc').onclick = () => map.setView([myLat, myLon], 9);
+    document.getElementById('btnZoomIn').onclick = () => {
+        if (currentRangeIdx > 0) currentRangeIdx--;
+        setRadarRangeKm(TACTICAL_RANGES_KM[currentRangeIdx]);
+    };
+    document.getElementById('btnZoomOut').onclick = () => {
+        if (currentRangeIdx < TACTICAL_RANGES_KM.length - 1) currentRangeIdx++;
+        setRadarRangeKm(TACTICAL_RANGES_KM[currentRangeIdx]);
+    };
+    document.getElementById('btnMyLoc').onclick = () => {
+        currentRangeIdx = 3; // 80 km
+        map.setView([myLat, myLon], map.getZoom(), { animate: false });
+        setRadarRangeKm(80);
+    };
+
+    // Задаваме начален точен обхват 80 км при зареждане
+    setTimeout(() => setRadarRangeKm(80), 100);
     document.getElementById('btnMilOnly').onclick = function() { milOnlyFilter = !milOnlyFilter; this.classList.toggle('active', milOnlyFilter); };
     document.getElementById('btnTrails').onclick = function() { showTrails = !showTrails; this.classList.toggle('active', showTrails); };
     document.getElementById('btnMapStyle').onclick = function() {
