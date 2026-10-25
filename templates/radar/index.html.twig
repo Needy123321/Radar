@@ -769,6 +769,7 @@
     let pinnedTargets = {};
     ALL_SLOTS.forEach(s => { pinnedTargets[s] = null; });
     let highestTrackNumber = 0;
+    let nextSlotCursor = 1; // Следи реда на слотовете (1..21) при презаписване
     let slotsExpanded = false;
     let cardSlotsOpen = false;
     let showTrails = true;
@@ -777,37 +778,43 @@
     const planeRouteCache = {};
     const knownSquawkMemory = {};
 
-    // ЛОКАЛЕН БУФЕР ЗА ТРЕЙСЪРА (СЛЕДИТЕ НА САМОЛЕТИТЕ)
-    // Структура: { [planeId]: { pts: [{lat, lon}, ...], lastSeen: timestamp } }
     const planeTrails = {};
     const MAX_TRAIL_POINTS = 80;
 
     try {
         const savedPins = localStorage.getItem('radar_pinned_targets_21');
         const savedCounter = localStorage.getItem('radar_highest_track_num_21');
+        const savedCursor = localStorage.getItem('radar_next_slot_cursor_21');
         if (savedPins) {
             const parsed = JSON.parse(savedPins);
             ALL_SLOTS.forEach(s => { pinnedTargets[s] = parsed[s] || null; });
         }
         if (savedCounter) highestTrackNumber = parseInt(savedCounter, 10) || 0;
+        if (savedCursor) nextSlotCursor = parseInt(savedCursor, 10) || 1;
     } catch (e) {}
 
     function savePinState() {
         try {
             localStorage.setItem('radar_pinned_targets_21', JSON.stringify(pinnedTargets));
             localStorage.setItem('radar_highest_track_num_21', String(highestTrackNumber));
+            localStorage.setItem('radar_next_slot_cursor_21', String(nextSlotCursor));
         } catch (e) {}
     }
 
     function checkAutoResetCounter() {
         const anyActive = ALL_SLOTS.some(s => pinnedTargets[s] !== null);
-        if (!anyActive) highestTrackNumber = 0;
+        if (!anyActive) {
+            highestTrackNumber = 0;
+            nextSlotCursor = 1;
+        }
     }
 
     function getPinDataForPlane(planeId) {
         if (!planeId) return null;
         for (let slot of ALL_SLOTS) {
-            if (pinnedTargets[slot] && pinnedTargets[slot].id === planeId) return { slot: slot, trackNum: pinnedTargets[slot].trackNum };
+            if (pinnedTargets[slot] && pinnedTargets[slot].id === planeId) {
+                return { slot: slot, trackNum: pinnedTargets[slot].trackNum };
+            }
         }
         return null;
     }
@@ -826,13 +833,26 @@
 
     window.togglePinSlot = function(slot, planeId) {
         if (pinnedTargets[slot] && pinnedTargets[slot].id === planeId) {
+            // Ръчно демаркиране от същия слот
             pinnedTargets[slot] = null;
             checkAutoResetCounter();
         } else {
-            for (let s of ALL_SLOTS) { if (pinnedTargets[s] && pinnedTargets[s].id === planeId) pinnedTargets[s] = null; }
+            // Ако този самолет вече е в друг слот, го местим тук
+            for (let s of ALL_SLOTS) {
+                if (pinnedTargets[s] && pinnedTargets[s].id === planeId) pinnedTargets[s] = null;
+            }
             checkAutoResetCounter();
             highestTrackNumber++;
-            pinnedTargets[slot] = { id: planeId, trackNum: highestTrackNumber };
+            const pl = planes.find(p => p.id === planeId);
+            pinnedTargets[slot] = {
+                id: planeId,
+                trackNum: highestTrackNumber,
+                lastLabel: pl ? getBestPlaneLabel(pl) : String(planeId).toUpperCase().slice(0, 6),
+                lastLat: pl ? pl.lat : null,
+                lastLon: pl ? pl.lon : null,
+                lastDistKm: pl ? (pl.distKm || 0) : null
+            };
+            nextSlotCursor = (slot % TOTAL_PIN_SLOTS) + 1;
         }
         savePinState();
         updatePinnedBarUI();
@@ -845,12 +865,29 @@
     window.autoAssignNextTrack = function(planeId) {
         const existing = getPinDataForPlane(planeId);
         if (existing) {
+            // Само при изрично цъкане на бутона [МАХНИ] освобождаваме слота
             pinnedTargets[existing.slot] = null;
             checkAutoResetCounter();
         } else {
-            let targetSlot = ALL_SLOTS.find(s => pinnedTargets[s] === null) || 1;
+            // 1. Търсим първия свободен слот по ред от 1 до 21
+            let targetSlot = ALL_SLOTS.find(s => pinnedTargets[s] === null);
+
+            // 2. Ако всички 21 слота са пълни, презаписваме по реда на курсора (1 -> 2 -> ... -> 21)
+            if (!targetSlot) {
+                targetSlot = nextSlotCursor;
+            }
+
             highestTrackNumber++;
-            pinnedTargets[targetSlot] = { id: planeId, trackNum: highestTrackNumber };
+            const pl = planes.find(p => p.id === planeId);
+            pinnedTargets[targetSlot] = {
+                id: planeId,
+                trackNum: highestTrackNumber,
+                lastLabel: pl ? getBestPlaneLabel(pl) : String(planeId).toUpperCase().slice(0, 6),
+                lastLat: pl ? pl.lat : null,
+                lastLon: pl ? pl.lon : null,
+                lastDistKm: pl ? (pl.distKm || 0) : null
+            };
+            nextSlotCursor = (targetSlot % TOTAL_PIN_SLOTS) + 1;
         }
         savePinState();
         updatePinnedBarUI();
@@ -863,6 +900,7 @@
     window.resetAllTrackedTargets = function() {
         ALL_SLOTS.forEach(s => { pinnedTargets[s] = null; });
         highestTrackNumber = 0;
+        nextSlotCursor = 1;
         savePinState();
         updatePinnedBarUI();
         if (selectedPlaneId) {
@@ -879,11 +917,9 @@
             selectedPlaneId = found.id;
             map.panTo([found.lat, found.lon]);
             updateInfoPanelHTML(found);
-        } else {
-            pinnedTargets[slot] = null;
-            checkAutoResetCounter();
-            savePinState();
-            updatePinnedBarUI();
+        } else if (slotObj.lastLat && slotObj.lastLon) {
+            // ВАЖНО: НЕ трием слота, ако самолетът е изгубен! Центрираме на последната му известна позиция.
+            map.panTo([slotObj.lastLat, slotObj.lastLon]);
         }
     };
 
@@ -905,24 +941,43 @@
     function updatePinnedBarUI() {
         checkAutoResetCounter();
         let activePinnedCount = 0;
+        let stateChanged = false;
+
         for (let slot of ALL_SLOTS) {
             const btn = document.getElementById(`pin-slot-${slot}`);
             if (!btn) continue;
             const slotObj = pinnedTargets[slot];
-            const p = (slotObj && slotObj.id) ? planes.find(pl => pl.id === slotObj.id) : null;
             btn.classList.remove('filled', 'alert');
-            if (p && slotObj) {
+            btn.style.opacity = '1';
+
+            if (slotObj && slotObj.id) {
                 activePinnedCount++;
                 btn.classList.add('filled');
-                const lbl = getBestPlaneLabel(p);
-                btn.innerText = `🎯#${slotObj.trackNum}: ${lbl} (${(p.distKm || 0).toFixed(0)}km)`;
+                const p = planes.find(pl => pl.id === slotObj.id);
+
+                if (p) {
+                    // Целта е на живо в ефира -> обновяваме паметта на слота
+                    const lbl = getBestPlaneLabel(p);
+                    slotObj.lastLabel = lbl;
+                    slotObj.lastLat = p.lat;
+                    slotObj.lastLon = p.lon;
+                    slotObj.lastDistKm = p.distKm || 0;
+                    stateChanged = true;
+                    btn.innerText = `🎯#${slotObj.trackNum}: ${lbl} (${(p.distKm || 0).toFixed(0)}km)`;
+                } else {
+                    // Целта е временно изгубена от радара -> ПАЗИМ я в слота!
+                    const savedLbl = slotObj.lastLabel || String(slotObj.id).toUpperCase().slice(0, 6);
+                    btn.style.opacity = '0.72';
+                    btn.innerText = `📡#${slotObj.trackNum}: ${savedLbl} (ИЗГУБЕН)`;
+                }
             } else {
                 btn.innerText = `#${slot}: -`;
             }
         }
+
+        if (stateChanged) savePinState();
         document.getElementById('trackCounterInfo').innerText = `🎯 МАРКИРАНИ: ${activePinnedCount}/${TOTAL_PIN_SLOTS} | Следв: #${highestTrackNumber + 1}`;
     }
-
     const canvas = document.getElementById('radarCanvas');
     const ctx = canvas.getContext('2d');
 
@@ -1174,7 +1229,7 @@
         const edgeLatLng = map.containerPointToLatLng([cx + radius, cy]);
         const rawRadiusKm = map.distance(centerLatLng, edgeLatLng) / 1000;
 
-        // Ако сме близо до някой от тактическите обхвати (20..300 км), закръгляме етикета до него
+        // Закръгляме към тактическите обхвати (20, 40, 60, 80, 100, 150, 200, 250, 300 км)
         let maxGridKm = Math.round(rawRadiusKm);
         for (const rKm of TACTICAL_RANGES_KM) {
             if (Math.abs(rawRadiusKm - rKm) / rKm < 0.08) {
@@ -1183,8 +1238,6 @@
             }
         }
 
-        // Определяме стъпката на вътрешните пръстени:
-        // За 150, 200, 250, 300 км -> стъпка 50 км! За по-малките -> 4 равни пръстена.
         let kmStep;
         if (maxGridKm >= 150) {
             kmStep = 50;
@@ -1206,7 +1259,51 @@
         ctx.stroke();
         ctx.shadowBlur = 0;
 
-        // ВЪТРЕШНИ KM КРЪГОВЕ + ВЪНШЕН ЕТИКЕТ
+        // ГРАДУСОВИ ТИКЧЕТА (рисуваме ги първо, за да са чисти KM надписите отгоре)
+        for (let deg = 0; deg < 360; deg += 10) {
+            const angle = (deg - 90) * Math.PI / 180;
+            const isMajor = deg % 30 === 0;
+            const tickLength = isMajor ? 12 : 6;
+
+            const innerRadius = radius - tickLength;
+            const outerRadius = radius;
+
+            const x1 = Math.cos(angle) * innerRadius;
+            const y1 = Math.sin(angle) * innerRadius;
+            const x2 = Math.cos(angle) * outerRadius;
+            const y2 = Math.sin(angle) * outerRadius;
+
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.strokeStyle = isMajor ? 'rgba(155, 0, 0, 0.90)' : 'rgba(130, 0, 0, 0.65)';
+            ctx.lineWidth = isMajor ? 2 : 1;
+            ctx.stroke();
+
+            if (isMajor) {
+                const textRadius = radius - 23;
+                const tx = Math.cos(angle) * textRadius;
+                const ty = Math.sin(angle) * textRadius;
+
+                ctx.font = 'bold 10px Segoe UI, sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.shadowColor = '#000000';
+                ctx.shadowBlur = 3;
+
+                if (deg === 0) {
+                    ctx.fillStyle = '#00e5ff';
+                    ctx.fillText('0°С', tx, ty);
+                } else {
+                    ctx.fillStyle = '#b82020';
+                    ctx.fillText(`${deg}°`, tx, ty);
+                }
+
+                ctx.shadowBlur = 0;
+            }
+        }
+
+        // KM КРЪГОВЕ + НАДПИСИ ОТ ЧЕТИРИТЕ СТРАНИ (ВКЛЮЧИТЕЛНО ГОРЕ И ДОЛУ НА 80 KM)
         for (let km = kmStep; km <= maxGridKm + 0.1; km += kmStep) {
             const isOuter = Math.abs(km - maxGridKm) < 0.5;
             const r = isOuter ? radius : (km / maxGridKm) * radius;
@@ -1251,64 +1348,21 @@
             ctx.strokeText(kmText, -r - 6, 14);
             ctx.fillText(kmText, -r - 6, 14);
 
-            // ГОРЕ И ДОЛУ (само за вътрешните пръстени)
-            if (!isOuter) {
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'bottom';
-                ctx.strokeText(kmText, 0, -r + 4);
-                ctx.fillText(kmText, 0, -r + 4);
+            // ГОРЕ (за външния пръстен се изписва точно над червения кръг, за да не покрива 0°С)
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+            const topY = isOuter ? (-r - 4) : (-r + 4);
+            ctx.strokeText(kmText, 0, topY);
+            ctx.fillText(kmText, 0, topY);
 
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'top';
-                ctx.strokeText(kmText, 0, r + 6);
-                ctx.fillText(kmText, 0, r + 6);
-            }
+            // ДОЛУ (изписва се и на вътрешните, и на външния кръг)
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+            const bottomY = isOuter ? (r + 6) : (r + 6);
+            ctx.strokeText(kmText, 0, bottomY);
+            ctx.fillText(kmText, 0, bottomY);
 
             ctx.shadowBlur = 0;
-        }
-
-        // ГРАДУСОВИ ТИКЧЕТА
-        for (let deg = 0; deg < 360; deg += 10) {
-            const angle = (deg - 90) * Math.PI / 180;
-            const isMajor = deg % 30 === 0;
-            const tickLength = isMajor ? 12 : 6;
-
-            const innerRadius = radius - tickLength;
-            const outerRadius = radius;
-
-            const x1 = Math.cos(angle) * innerRadius;
-            const y1 = Math.sin(angle) * innerRadius;
-            const x2 = Math.cos(angle) * outerRadius;
-            const y2 = Math.sin(angle) * outerRadius;
-
-            ctx.beginPath();
-            ctx.moveTo(x1, y1);
-            ctx.lineTo(x2, y2);
-            ctx.strokeStyle = isMajor ? 'rgba(155, 0, 0, 0.90)' : 'rgba(130, 0, 0, 0.65)';
-            ctx.lineWidth = isMajor ? 2 : 1;
-            ctx.stroke();
-
-            if (isMajor) {
-                const textRadius = radius - 23;
-                const tx = Math.cos(angle) * textRadius;
-                const ty = Math.sin(angle) * textRadius;
-
-                ctx.font = 'bold 10px Segoe UI, sans-serif';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.shadowColor = '#000000';
-                ctx.shadowBlur = 3;
-
-                if (deg === 0) {
-                    ctx.fillStyle = '#00e5ff';
-                    ctx.fillText('0°С', tx, ty);
-                } else {
-                    ctx.fillStyle = '#b82020';
-                    ctx.fillText(`${deg}°`, tx, ty);
-                }
-
-                ctx.shadowBlur = 0;
-            }
         }
 
         // ЦЕНТРАЛЕН КРЪСТ И ТОЧКА
