@@ -15,7 +15,7 @@
             --pin-magenta: #ff00ff;
         }
 
-        * {
+        *, *:before, *:after {
             box-sizing: border-box;
             margin: 0;
             padding: 0;
@@ -71,7 +71,6 @@
             pointer-events: none;
         }
 
-        /* На телефон застава точно под камерата и статус бара */
         @media (max-width: 768px) {
             .top-hud {
                 top: 34px;
@@ -281,6 +280,13 @@
             box-shadow: 0 0 6px rgba(255, 0, 255, 0.4);
         }
 
+        .pin-slot.swap-source {
+            background: rgba(255, 170, 0, 0.95) !important;
+            border: 1.5px solid #ffffff !important;
+            color: #000000 !important;
+            box-shadow: 0 0 12px #ffaa00 !important;
+        }
+
         .map-side-controls {
             position: fixed;
             right: 8px;
@@ -416,6 +422,22 @@
             font-weight: bold;
         }
 
+        .ai-brief-box {
+            display: none;
+            background: rgba(0, 32, 22, 0.92);
+            border: 1px solid #00e5ff;
+            border-left: 3px solid #00e5ff;
+            padding: 5px 7px;
+            border-radius: 4px;
+            margin-bottom: 5px;
+            font-size: 10px;
+            line-height: 1.35;
+            color: #e0ffff;
+            white-space: pre-line;
+            max-height: 110px;
+            overflow-y: auto;
+        }
+
         .info-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -466,6 +488,18 @@
             background: #ff00ff;
             color: #000;
             box-shadow: 0 0 10px #ff00ff;
+        }
+
+        .ai-intel-btn {
+            background: rgba(0, 50, 65, 0.95);
+            border: 1px solid #00e5ff;
+            color: #00e5ff;
+            font-size: 10px;
+            font-weight: bold;
+            padding: 5px 7px;
+            border-radius: 4px;
+            cursor: pointer;
+            white-space: nowrap;
         }
 
         .toggle-card-slots-btn {
@@ -562,9 +596,8 @@
         </div>
 
         <div class="controls-compact-bar">
-            <button class="radar-btn loc-btn active" id="locRadishevo" onclick="setBaseLocation(43.36764916688548, 24.666731248063613, 'с. Радишево', 'locRadishevo')">📍 РАДИШЕВО</button>
-            <button class="radar-btn loc-btn" id="locPleven" onclick="setBaseLocation(43.4170, 24.6067, 'гр. Плевен', 'locPleven')">📍 ПЛЕВЕН</button>
-            <button class="radar-btn loc-btn" id="locEmona" onclick="setBaseLocation(42.70260944933075, 27.89720568192577, 'нос ЕМОНА', 'locEmona')">🌊 ЕМОНА</button>
+            <button class="radar-btn loc-btn active" id="locRadishevo" onclick="setBaseLocation(43.3664995, 24.6621337, 'с. Радишево', 'locRadishevo')">📍 Позиция 1</button>
+            <button class="radar-btn loc-btn" id="locEmona" onclick="setBaseLocation(42.70260944933075, 27.89720568192577, 'нос ЕМОНА', 'locEmona')">🌊 Позиция 2</button>
             <button class="radar-btn loc-btn" id="locGps" onclick="activateRealGps()">📡 GPS</button>
             <button class="radar-btn loc-btn" id="locManual" onclick="promptManualCoords()">✍️ КООРД.</button>
             <button class="radar-btn" id="btn-gyro" onclick="toggleGyroCompass()">🧭 0° ИСТ.</button>
@@ -585,7 +618,11 @@
 
     <div class="pinned-bar" id="pinnedBarContainer">
         {% for i in 1..21 %}
-            <button class="pin-slot" id="pin-slot-{{ i }}" onclick="selectPinnedTarget({{ i }})">#{{ i }}: -</button>
+            <button class="pin-slot" id="pin-slot-{{ i }}"
+                    onpointerdown="startSlotLongPress({{ i }}, event)"
+                    onpointerup="endSlotLongPress({{ i }}, event)"
+                    onpointercancel="cancelSlotLongPress()"
+                    oncontextmenu="return false;">#{{ i }}: -</button>
         {% endfor %}
     </div>
 </div>
@@ -602,7 +639,7 @@
         <span>⏪ ИСТОРИЯ НА ПОЛЕТИТЕ</span>
         <div style="display:flex; align-items:center; gap:8px;">
             <span id="tmTimestampLabel">НА ЖИВО</span>
-            <button class="acAion-btn" onclick="closeTimeMachine()" style="border-color:var(--warn-amber); color:var(--warn-amber); padding:1px 6px;">✕</button>
+            <button class="action-btn" onclick="closeTimeMachine()" style="border-color:var(--warn-amber); color:var(--warn-amber); padding:1px 6px;">✕</button>
         </div>
     </div>
     <div class="tm-slider-wrap">
@@ -624,33 +661,55 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-    let myLat = 43.3676;
-    let myLon = 24.6667;
+    let myLat = 43.3664995;
+    let myLon = 24.6621337;
     let myBaseName = 'с. Радишево';
     let gpsWatchId = null;
 
-    let useMagneticNorth = false;
-    const BG_MAGNETIC_DECLINATION = 5.5;
+    let azimuthOffsetDeg = parseFloat(localStorage.getItem('radar_azimuth_offset_deg') || '0') || 0.0;
 
     function getAzimuthCorrectionDeg() {
-        return useMagneticNorth ? -BG_MAGNETIC_DECLINATION : 0.0;
+        return azimuthOffsetDeg;
     }
 
-    window.toggleGyroCompass = function() {
-        useMagneticNorth = !useMagneticNorth;
+    function updateAzimuthButtonUI() {
         const btn = document.getElementById('btn-gyro');
-        if (useMagneticNorth) {
-            btn.classList.add('active');
-            btn.innerText = '🧭 -5.5° МАГ.';
-        } else {
+        if (!btn) return;
+        if (Math.abs(azimuthOffsetDeg) < 0.01) {
             btn.classList.remove('active');
             btn.innerText = '🧭 0° ИСТ.';
+        } else {
+            btn.classList.add('active');
+            const sign = azimuthOffsetDeg > 0 ? '+' : '';
+            btn.innerText = `🧭 ${sign}${azimuthOffsetDeg}° АЗИМ.`;
         }
+    }
+
+    function applyNewAzimuthOffset(val) {
+        azimuthOffsetDeg = isNaN(val) ? 0.0 : val;
+        try { localStorage.setItem('radar_azimuth_offset_deg', String(azimuthOffsetDeg)); } catch (e) {}
+        updateAzimuthButtonUI();
+        planes.forEach(p => {
+            p.bearing = calcBearing(myLat, myLon, p.lat, p.lon);
+        });
+        updatePinnedBarUI();
         if (selectedPlaneId) {
             const sel = planes.find(p => p.id === selectedPlaneId);
             if (sel) updateInfoPanelHTML(sel);
         }
+    }
+
+    window.toggleGyroCompass = function() {
+        const input = prompt(
+            'Въведи поправка на азимута в градуси (напр. -4 за 4° надолу, +4 за 4° нагоре, или 0 за Истински север):',
+            String(azimuthOffsetDeg)
+        );
+        if (input === null) return;
+        const parsed = parseFloat(input.replace(',', '.').trim());
+        applyNewAzimuthOffset(isNaN(parsed) ? 0.0 : parsed);
     };
+
+    setTimeout(updateAzimuthButtonUI, 50);
 
     const map = L.map('terrainMap', {
         center: [myLat, myLon],
@@ -661,27 +720,24 @@
         attributionControl: false
     });
 
-    // Фиксирани тактически обхвати на радара в километри (последните са през 50 км)
     const TACTICAL_RANGES_KM = [20, 40, 60, 80, 100, 150, 200, 250, 300];
-    let currentRangeIdx = 3; // Стартираме на 80 km (индекс 3)
+    let currentRangeIdx = 3;
 
     function setRadarRangeKm(targetKm) {
         const radiusPx = Math.min(window.innerWidth, window.innerHeight) * 0.42;
         if (radiusPx <= 10) return;
-
-        // Изчисляваме какъв точно zoom ни трябва, за да може radiusPx да отговаря точно на targetKm
         const currentZoom = map.getZoom();
         const centerPt = [window.innerWidth / 2, window.innerHeight / 2];
         const cLatLng = map.containerPointToLatLng(centerPt);
         const eLatLng = map.containerPointToLatLng([centerPt[0] + radiusPx, centerPt[1]]);
         const currentKm = map.distance(cLatLng, eLatLng) / 1000;
-
         if (currentKm > 0) {
             const zoomDiff = Math.log2(currentKm / targetKm);
             const exactZoom = Math.max(5.5, Math.min(14, currentZoom + zoomDiff));
             map.setZoom(exactZoom, { animate: false });
         }
     }
+
     const googleTerrainLayer = L.tileLayer('https://{s}.google.com/vt/lyrs=p&x={x}&y={y}&z={z}&hl=bg', { maxZoom: 18, subdomains: ['mt0', 'mt1', 'mt2', 'mt3'] });
     const googleHybridLayer = L.tileLayer('https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&hl=bg', { maxZoom: 18, subdomains: ['mt0', 'mt1', 'mt2', 'mt3'] });
     const openTopoLayer = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 17 });
@@ -734,13 +790,20 @@
     };
 
     window.promptManualCoords = function() {
-        const input = prompt('Въведи координати (Ширина, Дължина):', `${myLat.toFixed(4)}, ${myLon.toFixed(4)}`);
+        const input = prompt(
+            'Въведи: Ширина, Дължина, Поправка° (напр. 43.3665, 24.6621, -4):',
+            `${myLat.toFixed(6)}, ${myLon.toFixed(6)}, ${azimuthOffsetDeg}`
+        );
         if (!input) return;
-        const parts = input.split(/[ ,;]+/);
+        const parts = input.trim().split(/[\s,;]+/);
         if (parts.length >= 2) {
             const lat = parseFloat(parts[0]);
             const lon = parseFloat(parts[1]);
             if (!isNaN(lat) && !isNaN(lon)) {
+                if (parts.length >= 3) {
+                    const deg = parseFloat(parts[2]);
+                    if (!isNaN(deg)) applyNewAzimuthOffset(deg);
+                }
                 window.setBaseLocation(lat, lon, 'Ръчна точка', 'locManual');
             }
         }
@@ -769,13 +832,18 @@
     let pinnedTargets = {};
     ALL_SLOTS.forEach(s => { pinnedTargets[s] = null; });
     let highestTrackNumber = 0;
-    let nextSlotCursor = 1; // Следи реда на слотовете (1..21) при презаписване
+    let nextSlotCursor = 1;
     let slotsExpanded = false;
     let cardSlotsOpen = false;
     let showTrails = true;
 
+    let swapSourceSlot = null;
+    let slotPressTimer = null;
+    let slotLongPressTriggered = false;
+
     const planePhotoCache = {};
     const planeRouteCache = {};
+    const planeAiBriefCache = {};
     const knownSquawkMemory = {};
 
     const planeTrails = {};
@@ -831,63 +899,246 @@
         if (row) row.classList.toggle('open', cardSlotsOpen);
     };
 
-    window.togglePinSlot = function(slot, planeId) {
-        if (pinnedTargets[slot] && pinnedTargets[slot].id === planeId) {
-            // Ръчно демаркиране от същия слот
-            pinnedTargets[slot] = null;
-            checkAutoResetCounter();
-        } else {
-            // Ако този самолет вече е в друг слот, го местим тук
-            for (let s of ALL_SLOTS) {
-                if (pinnedTargets[s] && pinnedTargets[s].id === planeId) pinnedTargets[s] = null;
-            }
-            checkAutoResetCounter();
-            highestTrackNumber++;
-            const pl = planes.find(p => p.id === planeId);
-            pinnedTargets[slot] = {
-                id: planeId,
-                trackNum: highestTrackNumber,
-                lastLabel: pl ? getBestPlaneLabel(pl) : String(planeId).toUpperCase().slice(0, 6),
-                lastLat: pl ? pl.lat : null,
-                lastLon: pl ? pl.lon : null,
-                lastDistKm: pl ? (pl.distKm || 0) : null
-            };
-            nextSlotCursor = (slot % TOTAL_PIN_SLOTS) + 1;
-        }
+    function finishPinChange() {
+        checkAutoResetCounter();
         savePinState();
         updatePinnedBarUI();
+
         if (selectedPlaneId) {
             const sel = planes.find(p => p.id === selectedPlaneId);
             if (sel) updateInfoPanelHTML(sel);
         }
+    }
+
+    // Показва свободните позиции, без да променя текущото разположение.
+    function chooseFreePinSlot(sourceSlot = null) {
+        const freeSlots = ALL_SLOTS.filter(s =>
+            pinnedTargets[s] === null && s !== sourceSlot
+        );
+
+        if (freeSlots.length === 0) {
+            alert('Няма свободни позиции. Нито един самолет не е преместен.');
+            return null;
+        }
+
+        const answer = prompt(
+            'Избери свободна позиция:\n' +
+            freeSlots.map(s => '#' + s).join(', ') +
+            '\n\nВъведи номер от 1 до 21:'
+        );
+
+        if (answer === null) return null;
+
+        const selected = Number(String(answer).trim());
+        if (!Number.isInteger(selected) || !freeSlots.includes(selected)) {
+            alert('Невалидна или заета позиция. Нищо не е променено.');
+            return null;
+        }
+
+        return selected;
+    }
+
+    // Премества самолет чрез INSERT, а не чрез размяна (SWAP).
+    // При заета целева позиция пита дали да измести поредицата надясно.
+    function movePinToSlot(sourceSlot, targetSlot, newPlaneData = null) {
+        if (!ALL_SLOTS.includes(targetSlot)) return false;
+
+        const movingPlane = sourceSlot !== null
+            ? pinnedTargets[sourceSlot]
+            : newPlaneData;
+
+        if (!movingPlane) return false;
+        if (sourceSlot === targetSlot) return true;
+
+        let finalSlot = targetSlot;
+        let shouldShift = false;
+        const targetOccupied = pinnedTargets[targetSlot] !== null;
+
+        if (targetOccupied) {
+            // Търсим най-близкото свободно място след целта.
+            // Ако местим самолет отдясно, неговият стар слот също ще се освободи.
+            const freeRightSlot = ALL_SLOTS.find(s =>
+                s > targetSlot &&
+                (pinnedTargets[s] === null || s === sourceSlot)
+            );
+
+            if (freeRightSlot !== undefined) {
+                const confirmed = confirm(
+                    'Позиция #' + targetSlot + ' вече е заета.\n\n' +
+                    'ДА – постави избрания самолет на #' + targetSlot +
+                    ' и измести заетите позиции след него с едно място надясно.\n\n' +
+                    'НЕ – избери друга свободна позиция.'
+                );
+
+                if (confirmed) {
+                    shouldShift = true;
+                } else {
+                    finalSlot = chooseFreePinSlot(sourceSlot);
+                    if (finalSlot === null) return false;
+                }
+            } else {
+                alert(
+                    'Няма свободно място след позиция #' + targetSlot + '.\n' +
+                    'Можеш да избереш друга свободна позиция. Няма да бъде изтрит самолет.'
+                );
+                finalSlot = chooseFreePinSlot(sourceSlot);
+                if (finalSlot === null) return false;
+            }
+        }
+
+        // Допълнителна защита: не презаписваме заета позиция.
+        if (!shouldShift && pinnedTargets[finalSlot] !== null) {
+            return false;
+        }
+
+        // Освобождаваме старото място едва след като изборът е потвърден.
+        if (sourceSlot !== null) {
+            pinnedTargets[sourceSlot] = null;
+        }
+
+        if (shouldShift) {
+            // Изместваме само непрекъснатата поредица до най-близкото свободно място.
+            // Така не губим самолет, дори когато #21 е зает, но има свободен слот по-рано.
+            let freeRightSlot = finalSlot + 1;
+            while (freeRightSlot <= TOTAL_PIN_SLOTS && pinnedTargets[freeRightSlot] !== null) {
+                freeRightSlot++;
+            }
+
+            if (freeRightSlot > TOTAL_PIN_SLOTS) {
+                // Защита при неочаквана промяна на състоянието.
+                if (sourceSlot !== null) pinnedTargets[sourceSlot] = movingPlane;
+                finishPinChange();
+                alert('Не може да се пренареди безопасно. Подредбата е възстановена.');
+                return false;
+            }
+
+            for (let s = freeRightSlot; s > finalSlot; s--) {
+                pinnedTargets[s] = pinnedTargets[s - 1];
+                if (pinnedTargets[s]) pinnedTargets[s].trackNum = s;
+            }
+        }
+
+        // Номерът на целта следва новата ѝ позиция, както при старото ръчно преместване.
+        movingPlane.trackNum = finalSlot;
+        if (finalSlot > highestTrackNumber) highestTrackNumber = finalSlot;
+
+        pinnedTargets[finalSlot] = movingPlane;
+        finishPinChange();
+        return true;
+    }
+
+    // Запазваме старото име, за да не се налага промяна на други извиквания.
+    // Функцията вече НЕ разменя самолетите, а ги вмъква с изместване.
+    function swapSlots(slotA, slotB) {
+        if (slotA === slotB) return;
+        return movePinToSlot(slotA, slotB);
+    }
+
+    window.startSlotLongPress = function(slot, ev) {
+        slotLongPressTriggered = false;
+        clearTimeout(slotPressTimer);
+        slotPressTimer = setTimeout(() => {
+            slotLongPressTriggered = true;
+            if (swapSourceSlot === slot) {
+                swapSourceSlot = null;
+            } else {
+                swapSourceSlot = slot;
+                if (navigator.vibrate) navigator.vibrate(45);
+            }
+            updatePinnedBarUI();
+        }, 480);
+    };
+
+    window.endSlotLongPress = function(slot, ev) {
+        clearTimeout(slotPressTimer);
+
+        if (slotLongPressTriggered) {
+            slotLongPressTriggered = false;
+            return;
+        }
+
+        if (swapSourceSlot !== null) {
+            const sourceSlot = swapSourceSlot;
+            swapSourceSlot = null;
+
+            if (sourceSlot !== slot) {
+                movePinToSlot(sourceSlot, slot);
+            }
+
+            updatePinnedBarUI();
+            return;
+        }
+
+        window.selectPinnedTarget(slot);
+    };
+
+    window.cancelSlotLongPress = function() {
+        clearTimeout(slotPressTimer);
+    };
+
+    window.togglePinSlot = function(slot, planeId) {
+        if (!ALL_SLOTS.includes(slot) || !planeId) return;
+
+        const existing = getPinDataForPlane(planeId);
+
+        // Натиснат е същият самолет в същия слот – премахваме маркировката.
+        if (pinnedTargets[slot] && pinnedTargets[slot].id === planeId) {
+            pinnedTargets[slot] = null;
+            finishPinChange();
+            return;
+        }
+
+        // Самолетът вече е маркиран другаде – преместваме го без дублиране.
+        if (existing) {
+            movePinToSlot(existing.slot, slot);
+            return;
+        }
+
+        // Нов самолет: ако слотът е зает, movePinToSlot() ще попита как да продължи.
+        const pl = planes.find(p => p.id === planeId);
+        const newPlaneData = {
+            id: planeId,
+            trackNum: slot,
+            lastLabel: pl ? getBestPlaneLabel(pl) : String(planeId).toUpperCase().slice(0, 6),
+            lastLat: pl ? pl.lat : null,
+            lastLon: pl ? pl.lon : null,
+            lastDistKm: pl ? (pl.distKm || 0) : null,
+            lastBearing: pl ? (pl.bearing || 0) : null
+        };
+
+        if (slot > highestTrackNumber) highestTrackNumber = slot;
+        movePinToSlot(null, slot, newPlaneData);
     };
 
     window.autoAssignNextTrack = function(planeId) {
         const existing = getPinDataForPlane(planeId);
         if (existing) {
-            // Само при изрично цъкане на бутона [МАХНИ] освобождаваме слота
             pinnedTargets[existing.slot] = null;
             checkAutoResetCounter();
         } else {
-            // 1. Търсим първия свободен слот по ред от 1 до 21
             let targetSlot = ALL_SLOTS.find(s => pinnedTargets[s] === null);
+            let trackNumToUse;
 
-            // 2. Ако всички 21 слота са пълни, презаписваме по реда на курсора (1 -> 2 -> ... -> 21)
-            if (!targetSlot) {
+            if (targetSlot) {
+                trackNumToUse = targetSlot;
+                if (trackNumToUse > highestTrackNumber) highestTrackNumber = trackNumToUse;
+            } else {
                 targetSlot = nextSlotCursor;
+                highestTrackNumber++;
+                trackNumToUse = highestTrackNumber;
+                nextSlotCursor = (targetSlot % TOTAL_PIN_SLOTS) + 1;
             }
 
-            highestTrackNumber++;
             const pl = planes.find(p => p.id === planeId);
             pinnedTargets[targetSlot] = {
                 id: planeId,
-                trackNum: highestTrackNumber,
+                trackNum: trackNumToUse,
                 lastLabel: pl ? getBestPlaneLabel(pl) : String(planeId).toUpperCase().slice(0, 6),
                 lastLat: pl ? pl.lat : null,
                 lastLon: pl ? pl.lon : null,
-                lastDistKm: pl ? (pl.distKm || 0) : null
+                lastDistKm: pl ? (pl.distKm || 0) : null,
+                lastBearing: pl ? (pl.bearing || 0) : null
             };
-            nextSlotCursor = (targetSlot % TOTAL_PIN_SLOTS) + 1;
         }
         savePinState();
         updatePinnedBarUI();
@@ -901,6 +1152,7 @@
         ALL_SLOTS.forEach(s => { pinnedTargets[s] = null; });
         highestTrackNumber = 0;
         nextSlotCursor = 1;
+        swapSourceSlot = null;
         savePinState();
         updatePinnedBarUI();
         if (selectedPlaneId) {
@@ -918,7 +1170,6 @@
             map.panTo([found.lat, found.lon]);
             updateInfoPanelHTML(found);
         } else if (slotObj.lastLat && slotObj.lastLon) {
-            // ВАЖНО: НЕ трием слота, ако самолетът е изгубен! Центрираме на последната му известна позиция.
             map.panTo([slotObj.lastLat, slotObj.lastLon]);
         }
     };
@@ -947,8 +1198,12 @@
             const btn = document.getElementById(`pin-slot-${slot}`);
             if (!btn) continue;
             const slotObj = pinnedTargets[slot];
-            btn.classList.remove('filled', 'alert');
+            btn.classList.remove('filled', 'alert', 'swap-source');
             btn.style.opacity = '1';
+
+            if (swapSourceSlot === slot) {
+                btn.classList.add('swap-source');
+            }
 
             if (slotObj && slotObj.id) {
                 activePinnedCount++;
@@ -956,28 +1211,34 @@
                 const p = planes.find(pl => pl.id === slotObj.id);
 
                 if (p) {
-                    // Целта е на живо в ефира -> обновяваме паметта на слота
                     const lbl = getBestPlaneLabel(p);
+                    const azi = Math.round(p.bearing || 0);
+                    const dst = Math.round(p.distKm || 0);
                     slotObj.lastLabel = lbl;
                     slotObj.lastLat = p.lat;
                     slotObj.lastLon = p.lon;
-                    slotObj.lastDistKm = p.distKm || 0;
+                    slotObj.lastDistKm = dst;
+                    slotObj.lastBearing = azi;
                     stateChanged = true;
-                    btn.innerText = `🎯#${slotObj.trackNum}: ${lbl} (${(p.distKm || 0).toFixed(0)}km)`;
+                    btn.innerText = `🎯#${slotObj.trackNum}: ${lbl} ${azi}°/${dst}km`;
                 } else {
-                    // Целта е временно изгубена от радара -> ПАЗИМ я в слота!
                     const savedLbl = slotObj.lastLabel || String(slotObj.id).toUpperCase().slice(0, 6);
+                    const savedAzi = slotObj.lastBearing !== undefined && slotObj.lastBearing !== null ? `${slotObj.lastBearing}°/` : '';
+                    const savedDst = slotObj.lastDistKm !== undefined && slotObj.lastDistKm !== null ? `${slotObj.lastDistKm}km` : 'ИЗГ.';
                     btn.style.opacity = '0.72';
-                    btn.innerText = `📡#${slotObj.trackNum}: ${savedLbl} (ИЗГУБЕН)`;
+                    btn.innerText = `📡#${slotObj.trackNum}: ${savedLbl} (${savedAzi}${savedDst})`;
                 }
             } else {
-                btn.innerText = `#${slot}: -`;
+                btn.innerText = swapSourceSlot === slot ? `⇄ #${slot} (ИЗБРАН)` : `#${slot}: -`;
             }
         }
 
         if (stateChanged) savePinState();
-        document.getElementById('trackCounterInfo').innerText = `🎯 МАРКИРАНИ: ${activePinnedCount}/${TOTAL_PIN_SLOTS} | Следв: #${highestTrackNumber + 1}`;
+        const nextEmpty = ALL_SLOTS.find(s => pinnedTargets[s] === null) || nextSlotCursor;
+        const swapHint = swapSourceSlot ? ` | Преместване от слот #${swapSourceSlot}` : ` | Следв: #${nextEmpty}`;
+        document.getElementById('trackCounterInfo').innerText = `🎯 МАРКИРАНИ: ${activePinnedCount}/${TOTAL_PIN_SLOTS}${swapHint}`;
     }
+
     const canvas = document.getElementById('radarCanvas');
     const ctx = canvas.getContext('2d');
 
@@ -1024,7 +1285,7 @@
         const dLon = (lon2 - lon1) * Math.PI / 180;
         const y = Math.sin(dLon) * Math.cos(lat2 * Math.PI / 180);
         const x = Math.cos(lat1 * Math.PI / 180) * Math.sin(lat2 * Math.PI / 180) - Math.sin(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.cos(dLon);
-        const trueAzi = Math.round((Math.atan2(y, x) * 180 / Math.PI + 360) % 360);
+        const trueAzi = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
         return Math.round((trueAzi + getAzimuthCorrectionDeg() + 360) % 360);
     }
 
@@ -1038,30 +1299,23 @@
         return { lat: plane.lat + dLat, lon: plane.lon + dLon };
     }
 
-    // РИСУВАНЕ НА ТРЕЙСЪР (СЛЕДА ОТКЪДЕ Е МИНАЛА ЦЕЛТА)
     function drawPlaneTrail(planeId, currentScreenPt, isMil, isSelected, pinData) {
         if (!showTrails) return;
-        // Рисуваме следата за избрания самолет, маркираните цели (1-21) и военните обекти
         if (!isSelected && !pinData && !isMil) return;
 
         const trailObj = planeTrails[planeId];
         if (!trailObj || trailObj.pts.length === 0) return;
 
         const pts = trailObj.pts;
-        const strokeColor = isSelected
-            ? '#00ffff'
-            : (pinData ? '#ff00ff' : (isMil ? '#ff3333' : '#00ff66'));
+        const strokeColor = isSelected ? '#00ffff' : (pinData ? '#ff00ff' : (isMil ? '#ff3333' : '#00ff66'));
 
         ctx.save();
         ctx.beginPath();
 
         for (let i = 0; i < pts.length; i++) {
             const pScreen = map.latLngToContainerPoint([pts[i].lat, pts[i].lon]);
-            if (i === 0) {
-                ctx.moveTo(pScreen.x, pScreen.y);
-            } else {
-                ctx.lineTo(pScreen.x, pScreen.y);
-            }
+            if (i === 0) ctx.moveTo(pScreen.x, pScreen.y);
+            else ctx.lineTo(pScreen.x, pScreen.y);
         }
         ctx.lineTo(currentScreenPt.x, currentScreenPt.y);
 
@@ -1072,7 +1326,6 @@
         ctx.shadowBlur = isSelected ? 8 : 4;
         ctx.stroke();
 
-        // Точки по възлите на траекторията за избрана или маркирана цел
         if (isSelected || pinData) {
             ctx.fillStyle = strokeColor;
             for (let i = 0; i < pts.length; i += 2) {
@@ -1087,149 +1340,84 @@
     }
 
     function drawRealisticPlane(x, y, trackDeg, isMil, isSelected, pinData) {
-
-        // =====================================================
-        // ПЛАВЕН РАЗМЕР НА САМОЛЕТА СПОРЕД ZOOM-А (работи и с дробен zoom!)
-        // Далечен zoom (300 км / zoom ~6) -> малки (0.45 - 0.50)
-        // Близък zoom (20 км / zoom ~12) -> големи (1.30 - 1.35)
-        // =====================================================
         const zoom = map.getZoom();
-
         let planeScale = 0.50 + (zoom - 6.0) * 0.12;
         planeScale = Math.max(0.45, Math.min(1.35, planeScale));
 
         ctx.save();
-
         ctx.translate(x, y);
-
-        // Прилагаме САМО мащаба на самолетчето
         ctx.scale(planeScale, planeScale);
 
-        const visualTrack =
-            ((trackDeg || 0) + getAzimuthCorrectionDeg() + 360) % 360;
-
+        const visualTrack = ((trackDeg || 0) + getAzimuthCorrectionDeg() + 360) % 360;
         ctx.rotate(visualTrack * Math.PI / 180);
 
-        // =====================================================
-        // ОРИГИНАЛНИ ЦВЕТОВЕ
-        // =====================================================
-        const fillColor = isMil
-            ? '#ff2222'
-            : (
-                pinData
-                    ? '#ff55ff'
-                    : (
-                        isSelected
-                            ? '#ffffff'
-                            : '#ffdd00'
-                    )
-            );
+        const fillColor = isMil ? '#ff2222' : (pinData ? '#ff55ff' : (isSelected ? '#ffffff' : '#ffdd00'));
 
         ctx.fillStyle = fillColor;
         ctx.strokeStyle = '#111111';
         ctx.lineWidth = 1.6;
-
         ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
         ctx.shadowBlur = 5;
 
-        // =====================================================
-        // ОРИГИНАЛНА ФОРМА НА САМОЛЕТИТЕ
-        // =====================================================
         ctx.beginPath();
-
         if (isMil) {
-
-            // ВОЕНЕН САМОЛЕТ
             ctx.moveTo(0, -14);
             ctx.lineTo(3.5, -4);
             ctx.lineTo(12, 4);
             ctx.lineTo(12, 7);
-
             ctx.lineTo(3.5, 5);
             ctx.lineTo(5, 12);
             ctx.lineTo(0, 9.5);
             ctx.lineTo(-5, 12);
-
             ctx.lineTo(-3.5, 5);
             ctx.lineTo(-12, 7);
             ctx.lineTo(-12, 4);
             ctx.lineTo(-3.5, -4);
-
         } else {
-
-            // ЦИВИЛЕН САМОЛЕТ
             ctx.moveTo(0, -13);
             ctx.lineTo(2.4, -8);
             ctx.lineTo(2.4, -2);
             ctx.lineTo(13, 3);
-
             ctx.lineTo(13, 5.5);
             ctx.lineTo(2.2, 2.5);
             ctx.lineTo(1.8, 9);
             ctx.lineTo(6, 11.5);
-
             ctx.lineTo(6, 13);
             ctx.lineTo(0, 11.5);
             ctx.lineTo(-6, 13);
             ctx.lineTo(-6, 11.5);
-
             ctx.lineTo(-1.8, 9);
             ctx.lineTo(-2.2, 2.5);
             ctx.lineTo(-13, 5.5);
             ctx.lineTo(-13, 3);
-
             ctx.lineTo(-2.4, -2);
             ctx.lineTo(-2.4, -8);
         }
-
         ctx.closePath();
-
         ctx.fill();
         ctx.stroke();
-
         ctx.restore();
 
-        // =====================================================
-        // КРЪГ ОКОЛО SELECTED / PINNED
-        // Радиусът следва размера на самолета
-        // =====================================================
         if (isSelected || pinData) {
-
             ctx.save();
-
-            ctx.strokeStyle =
-                pinData
-                    ? '#ff00ff'
-                    : '#00ffff';
-
+            ctx.strokeStyle = pinData ? '#ff00ff' : '#00ffff';
             ctx.lineWidth = 2;
-
             ctx.beginPath();
-
-            ctx.arc(
-                x,
-                y,
-                16 * planeScale,
-                0,
-                Math.PI * 2
-            );
-
+            ctx.arc(x, y, 16 * planeScale, 0, Math.PI * 2);
             ctx.stroke();
-
             ctx.restore();
         }
     }
+
     function drawRadarGrid(cx, cy) {
         ctx.save();
         ctx.translate(cx, cy);
 
         const radius = Math.min(canvas.width, canvas.height) * 0.42;
-
         const centerLatLng = map.containerPointToLatLng([cx, cy]);
         const edgeLatLng = map.containerPointToLatLng([cx + radius, cy]);
         const rawRadiusKm = map.distance(centerLatLng, edgeLatLng) / 1000;
 
-        // Закръгляме към тактическите обхвати (20, 40, 60, 80, 100, 150, 200, 250, 300 км)
         let maxGridKm = Math.round(rawRadiusKm);
         for (const rKm of TACTICAL_RANGES_KM) {
             if (Math.abs(rawRadiusKm - rKm) / rKm < 0.08) {
@@ -1239,17 +1427,11 @@
         }
 
         let kmStep;
-        if (maxGridKm >= 150) {
-            kmStep = 50;
-        } else if (maxGridKm === 100) {
-            kmStep = 25;
-        } else if (maxGridKm === 60) {
-            kmStep = 20;
-        } else {
-            kmStep = maxGridKm / 4;
-        }
+        if (maxGridKm >= 150) kmStep = 50;
+        else if (maxGridKm === 100) kmStep = 25;
+        else if (maxGridKm === 60) kmStep = 20;
+        else kmStep = maxGridKm / 4;
 
-        // ВЪНШЕН РАДАРЕН КРЪГ
         ctx.beginPath();
         ctx.arc(0, 0, radius, 0, Math.PI * 2);
         ctx.strokeStyle = 'rgba(150, 0, 0, 0.90)';
@@ -1259,7 +1441,6 @@
         ctx.stroke();
         ctx.shadowBlur = 0;
 
-        // ГРАДУСОВИ ТИКЧЕТА (рисуваме ги първо, за да са чисти KM надписите отгоре)
         for (let deg = 0; deg < 360; deg += 10) {
             const angle = (deg - 90) * Math.PI / 180;
             const isMajor = deg % 30 === 0;
@@ -1298,12 +1479,10 @@
                     ctx.fillStyle = '#b82020';
                     ctx.fillText(`${deg}°`, tx, ty);
                 }
-
                 ctx.shadowBlur = 0;
             }
         }
 
-        // KM КРЪГОВЕ + НАДПИСИ ОТ ЧЕТИРИТЕ СТРАНИ (ВКЛЮЧИТЕЛНО ГОРЕ И ДОЛУ НА 80 KM)
         for (let km = kmStep; km <= maxGridKm + 0.1; km += kmStep) {
             const isOuter = Math.abs(km - maxGridKm) < 0.5;
             const r = isOuter ? radius : (km / maxGridKm) * radius;
@@ -1316,7 +1495,6 @@
                 ctx.lineWidth = 1;
                 ctx.stroke();
 
-                // ТИКЧЕТА НА 4 СТРАНИ
                 ctx.beginPath();
                 ctx.moveTo(r, -5); ctx.lineTo(r, 5);
                 ctx.moveTo(-r, -5); ctx.lineTo(-r, 5);
@@ -1336,26 +1514,22 @@
             ctx.shadowColor = '#000000';
             ctx.shadowBlur = 3;
 
-            // ДЯСНО
             ctx.textAlign = 'left';
             ctx.textBaseline = 'middle';
             ctx.strokeText(kmText, r + 6, 14);
             ctx.fillText(kmText, r + 6, 14);
 
-            // ЛЯВО
             ctx.textAlign = 'right';
             ctx.textBaseline = 'middle';
             ctx.strokeText(kmText, -r - 6, 14);
             ctx.fillText(kmText, -r - 6, 14);
 
-            // ГОРЕ (за външния пръстен се изписва точно над червения кръг, за да не покрива 0°С)
             ctx.textAlign = 'center';
             ctx.textBaseline = 'bottom';
             const topY = isOuter ? (-r - 4) : (-r + 4);
             ctx.strokeText(kmText, 0, topY);
             ctx.fillText(kmText, 0, topY);
 
-            // ДОЛУ (изписва се и на вътрешните, и на външния кръг)
             ctx.textAlign = 'center';
             ctx.textBaseline = 'top';
             const bottomY = isOuter ? (r + 6) : (r + 6);
@@ -1365,14 +1539,11 @@
             ctx.shadowBlur = 0;
         }
 
-        // ЦЕНТРАЛЕН КРЪСТ И ТОЧКА
         ctx.strokeStyle = 'rgba(120, 0, 0, 0.45)';
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(-radius, 0);
-        ctx.lineTo(radius, 0);
-        ctx.moveTo(0, -radius);
-        ctx.lineTo(0, radius);
+        ctx.moveTo(-radius, 0); ctx.lineTo(radius, 0);
+        ctx.moveTo(0, -radius); ctx.lineTo(0, radius);
         ctx.stroke();
 
         ctx.beginPath();
@@ -1388,10 +1559,8 @@
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
         const myScreenPt = map.latLngToContainerPoint([myLat, myLon]);
-
         drawRadarGrid(myScreenPt.x, myScreenPt.y);
 
-        // МОЯТА ПОЗИЦИЯ
         ctx.save();
         ctx.fillStyle = '#00e5ff';
         ctx.strokeStyle = '#ffffff';
@@ -1406,7 +1575,6 @@
         ctx.fillText(`📍 ${myBaseName}`, myScreenPt.x + 10, myScreenPt.y + 4);
         ctx.restore();
 
-        // ПОСТОЯНЕН ЧЕРВЕН РАДАРЕН ЛЪЧ
         const sweepRadius = Math.min(canvas.width, canvas.height) * 0.42;
         sweepAngle = (sweepAngle + 0.032) % (Math.PI * 2);
 
@@ -1437,7 +1605,6 @@
         ctx.stroke();
         ctx.restore();
 
-        // САМОЛЕТИ
         let totalCount = 0;
         let milCount = 0;
 
@@ -1445,14 +1612,10 @@
             const isMil = isMilitaryPlane(plane);
             const pinData = getPinDataForPlane(plane.id);
 
-            if (milOnlyFilter && !isMil && !pinData) {
-                return;
-            }
+            if (milOnlyFilter && !isMil && !pinData) return;
 
             totalCount++;
-            if (isMil) {
-                milCount++;
-            }
+            if (isMil) milCount++;
 
             const interp = getInterpolatedLatLon(plane, nowMs);
             const screenPt = map.latLngToContainerPoint([interp.lat, interp.lon]);
@@ -1465,10 +1628,8 @@
 
             const isSelected = plane.id === selectedPlaneId;
 
-            // 1. Първо рисуваме ТРЕЙСЪРА (следата откъде е минала целта)
             drawPlaneTrail(plane.id, screenPt, isMil, isSelected, pinData);
 
-            // 2. Пунктирана линия за пеленг от Базата до избрана/маркирана цел
             if (isSelected || pinData) {
                 ctx.save();
                 ctx.beginPath();
@@ -1481,40 +1642,28 @@
                 ctx.restore();
             }
 
-            // 3. Рисуваме самия самолет
             drawRealisticPlane(screenPt.x, screenPt.y, plane.track, isMil, isSelected, pinData);
 
-            // 4. Етикет с транспондер / позивна
             const labelText = getBestPlaneLabel(plane);
 
             ctx.save();
             ctx.font = 'bold 10.5px Segoe UI, sans-serif';
-
             const textWidth = ctx.measureText(labelText).width;
             const boxW = textWidth + 7;
             const boxH = 16;
 
             ctx.fillStyle = 'rgba(0, 10, 4, 0.82)';
-
-            if (isMil) {
-                ctx.strokeStyle = '#ff2222';
-            } else if (pinData) {
-                ctx.strokeStyle = '#ff00ff';
-            } else {
-                ctx.strokeStyle = 'rgba(0, 255, 102, 0.75)';
-            }
+            if (isMil) ctx.strokeStyle = '#ff2222';
+            else if (pinData) ctx.strokeStyle = '#ff00ff';
+            else ctx.strokeStyle = 'rgba(0, 255, 102, 0.75)';
 
             ctx.lineWidth = 1;
             ctx.fillRect(screenPt.x + 13, screenPt.y - 9, boxW, boxH);
             ctx.strokeRect(screenPt.x + 13, screenPt.y - 9, boxW, boxH);
 
-            if (isMil) {
-                ctx.fillStyle = '#ff5555';
-            } else if (pinData) {
-                ctx.fillStyle = '#ff88ff';
-            } else {
-                ctx.fillStyle = '#ffdd00';
-            }
+            if (isMil) ctx.fillStyle = '#ff5555';
+            else if (pinData) ctx.fillStyle = '#ff88ff';
+            else ctx.fillStyle = '#ffdd00';
 
             ctx.fillText(labelText, screenPt.x + 16.5, screenPt.y + 2.5);
             ctx.restore();
@@ -1535,9 +1684,7 @@
     };
 
     map.on('click', function(e) {
-        // Ако прозорецът за История е отворен и цъкнем отстрани по картата -> скриваме го!
         closeTimeMachine();
-
         const clickX = e.containerPoint.x;
         const clickY = e.containerPoint.y;
         let closest = null, minDist = 28;
@@ -1602,6 +1749,51 @@
         if (routeEl && selectedPlaneId === plane.id) routeEl.innerText = planeRouteCache[plane.id];
     }
 
+    window.requestAiBrief = async function(planeId) {
+        const p = planes.find(pl => pl.id === planeId);
+        const box = document.getElementById('aiBriefBox');
+        if (!p || !box) return;
+
+        box.style.display = 'block';
+        if (planeAiBriefCache[planeId]) {
+            box.innerText = planeAiBriefCache[planeId];
+            return;
+        }
+
+        box.innerText = '🧠 Генериране на тактически AI анализ...';
+        try {
+            const trailPts = planeTrails[planeId] ? planeTrails[planeId].pts : [];
+            const res = await fetch('/api/ai-brief', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    id: p.id,
+                    callsign: cleanCallsign(p.callsign, ''),
+                    squawk: p.squawk,
+                    type: p.type,
+                    operator: p.operator,
+                    altitude: p.altitude,
+                    speed: p.speed,
+                    track: p.track,
+                    bearing: p.bearing,
+                    distKm: p.distKm,
+                    isMilitary: isMilitaryPlane(p),
+                    route: planeRouteCache[p.id] || '',
+                    trail: trailPts
+                })
+            });
+            const data = await res.json();
+            const text = data.brief || 'Няма данни от AI анализатора.';
+            planeAiBriefCache[planeId] = text;
+            if (selectedPlaneId === planeId && document.getElementById('aiBriefBox')) {
+                document.getElementById('aiBriefBox').style.display = 'block';
+                document.getElementById('aiBriefBox').innerText = text;
+            }
+        } catch (e) {
+            box.innerText = '⚠️ Грешка при заявката към AI сървъра.';
+        }
+    };
+
     function updateInfoPanelHTML(p) {
         const panel = document.getElementById('infoPanel');
         const isMilitary = isMilitaryPlane(p);
@@ -1618,11 +1810,9 @@
 
         const pinData = getPinDataForPlane(p.id);
         const currentPinSlot = pinData ? pinData.slot : null;
-        const nextAutoNum = highestTrackNumber + 1;
+        const nextAutoNum = ALL_SLOTS.find(s => pinnedTargets[s] === null) || (highestTrackNumber + 1);
 
-        const autoBtnText = pinData
-            ? `🎯 ЦЕЛ #${pinData.trackNum} (С${pinData.slot}) [МАХНИ]`
-            : `📌 МАРКИРАЙ КАТО ЦЕЛ #${nextAutoNum}`;
+        const autoBtnText = pinData ? `🎯 ЦЕЛ #${pinData.trackNum} (С${pinData.slot}) [МАХНИ]` : `📌 МАРКИРАЙ КАТО ЦЕЛ #${nextAutoNum}`;
 
         let slotButtonsHtml = '';
         for (let s of ALL_SLOTS) {
@@ -1637,6 +1827,8 @@
 
         const currentRoute = planeRouteCache[p.id] || 'Проверка на маршрут...';
         const sqkDisplay = (p.squawk && p.squawk !== '----' && p.squawk !== '0000') ? p.squawk : 'Няма (MLAT)';
+        const aziLabel = azimuthOffsetDeg !== 0 ? (azimuthOffsetDeg > 0 ? '+' : '') + azimuthOffsetDeg + '°' : 'ИСТ.';
+        const cachedAi = planeAiBriefCache[p.id];
 
         panel.innerHTML = `
             <div class="panel-top-actions">
@@ -1659,9 +1851,10 @@
                 </div>
             </div>
             <div class="route-banner"><span id="planeRouteText">${currentRoute}</span></div>
+            <div id="aiBriefBox" class="ai-brief-box" style="${cachedAi ? 'display:block;' : 'display:none;'}">${cachedAi || ''}</div>
             <div class="info-grid">
                 <div class="info-item">
-                    <span class="info-label">АЗИМУТ (${useMagneticNorth ? 'МАГН.' : 'ИСТ.'}) / РАЗСТ.</span>
+                    <span class="info-label">АЗИМУТ (${aziLabel}) / РАЗСТ.</span>
                     <span class="info-val" style="color:#00ff66;">AZ: ${p.bearing}° / ${(p.distKm || 0).toFixed(1)} км</span>
                 </div>
                 <div class="info-item">
@@ -1671,6 +1864,7 @@
             </div>
             <div class="card-actions-row">
                 <button class="auto-track-btn ${pinData ? 'active' : ''}" onclick="autoAssignNextTrack('${p.id}')">${autoBtnText}</button>
+                <button class="ai-intel-btn" onclick="requestAiBrief('${p.id}')">🧠 АНАЛИЗ</button>
                 <button class="toggle-card-slots-btn" onclick="toggleCardSlots()">🎛️ СЛОТОВЕ</button>
             </div>
             <div id="cardSlotsGrid" class="mark-targets-row ${cardSlotsOpen ? 'open' : ''}">${slotButtonsHtml}</div>
@@ -1695,21 +1889,15 @@
             return;
         }
         const movedKm = calcDistanceKm(lastPt.lat, lastPt.lon, lat, lon);
-        // Записваме нова точка само при реално преместване (> 150m) и < 80km (защита от телепортиране)
         if (movedKm >= 0.15 && movedKm < 80) {
             entry.pts.push({ lat, lon });
-            if (entry.pts.length > MAX_TRAIL_POINTS) {
-                entry.pts.shift();
-            }
+            if (entry.pts.length > MAX_TRAIL_POINTS) entry.pts.shift();
         }
     }
 
-    // Почистване на стари следи на самолети, които вече са напуснали обхвата (> 10 мин)
     function cleanupOldTrails(now) {
         for (const id in planeTrails) {
-            if (now - planeTrails[id].lastSeen > 600000) {
-                delete planeTrails[id];
-            }
+            if (now - planeTrails[id].lastSeen > 600000) delete planeTrails[id];
         }
     }
 
@@ -1735,7 +1923,6 @@
                     normalized.callsign = `${normalized.callsign || normalized.id || ''} [ВОЕНЕН]`.trim();
                 }
 
-                // Добавяме точка в трейсъра
                 recordPlaneTrailPoint(normalized.id, latNum, lonNum, now);
 
                 const distKm = calcDistanceKm(myLat, myLon, latNum, lonNum);
@@ -1755,12 +1942,10 @@
         if (isReplayMode || (isFetchingPlanes && !force)) return;
         isFetchingPlanes = true;
         try {
-            const res = await fetch(`/api/planes?lat=${myLat.toFixed(4)}&lon=${myLon.toFixed(4)}${force ? '&force=1' : ''}`);
+            const res = await fetch(`/api/planes?lat=${myLat.toFixed(6)}&lon=${myLon.toFixed(6)}${force ? '&force=1' : ''}`);
             if (res.ok) {
                 const data = await res.json();
-                if (Array.isArray(data)) {
-                    ingestPlanesData(data);
-                }
+                if (Array.isArray(data)) ingestPlanesData(data);
             }
         } catch (e) {} finally { isFetchingPlanes = false; }
     }
@@ -1823,10 +2008,9 @@
             document.getElementById('tmTimestampLabel').textContent = dt.toLocaleTimeString('bg-BG');
         }
         clearTimeout(sliderDebounceTimer);
-        sliderDebounceTimer = setTimeout(() => {
-            loadHistoryFrame(idx);
-        }, 80);
+        sliderDebounceTimer = setTimeout(() => { loadHistoryFrame(idx); }, 80);
     };
+
     document.getElementById('btnPlayHistory').onclick = function() {
         if (historyTimestamps.length === 0) return;
         if (replayPlaying) {
@@ -1875,13 +2059,13 @@
         setRadarRangeKm(TACTICAL_RANGES_KM[currentRangeIdx]);
     };
     document.getElementById('btnMyLoc').onclick = () => {
-        currentRangeIdx = 3; // 80 km
+        currentRangeIdx = 3;
         map.setView([myLat, myLon], map.getZoom(), { animate: false });
         setRadarRangeKm(80);
     };
 
-    // Задаваме начален точен обхват 80 км при зареждане
     setTimeout(() => setRadarRangeKm(80), 100);
+
     document.getElementById('btnMilOnly').onclick = function() { milOnlyFilter = !milOnlyFilter; this.classList.toggle('active', milOnlyFilter); };
     document.getElementById('btnTrails').onclick = function() { showTrails = !showTrails; this.classList.toggle('active', showTrails); };
     document.getElementById('btnMapStyle').onclick = function() {
@@ -1905,3 +2089,4 @@
 </script>
 </body>
 </html>
+

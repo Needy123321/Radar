@@ -39,8 +39,9 @@ class RadarController extends AbstractController
     #[Route('/api/planes', name: 'api_planes')]
     public function getPlanes(Request $request): JsonResponse
     {
-        $centerLat = (float) $request->query->get('lat', 43.36764433890423);
-        $centerLon = (float) $request->query->get('lon', 24.666729786478978);
+        $centerLat = (float) $request->query->get('lat', 43.3664995);
+        $centerLon = (float) $request->query->get('lon', 24.6621337);
+        $force = $request->query->getBoolean('force', false);
 
         if (
             !is_finite($centerLat) ||
@@ -58,6 +59,7 @@ class RadarController extends AbstractController
         $now = time();
 
         if (
+            !$force &&
             is_file($cacheFile) &&
             ($now - (int) @filemtime($cacheFile)) < self::CACHE_TTL
         ) {
@@ -306,6 +308,164 @@ class RadarController extends AbstractController
         ]);
     }
 
+    #[Route('/api/ai-brief', name: 'api_ai_brief', methods: ['POST'])]
+    public function aiBrief(Request $request): JsonResponse
+    {
+        $rawKey = $_ENV['GEMINI_API_KEY'] ?? $_SERVER['GEMINI_API_KEY'] ?? getenv('GEMINI_API_KEY') ?: '';
+        $apiKey = trim((string) $rawKey, " \t\n\r\0\x0B\"'");
+
+        if ($apiKey === '') {
+            return new JsonResponse([
+                'brief' => '⚠️ Липсва GEMINI_API_KEY в настройките на сървъра (.env или Render Environment).'
+            ]);
+        }
+
+        $payload = json_decode($request->getContent(), true);
+        if (!is_array($payload)) {
+            return new JsonResponse(['error' => 'Invalid payload'], 400);
+        }
+
+        $hex      = strtoupper((string) ($payload['id'] ?? 'НЕИЗВЕСТЕН'));
+        $callsign = (string) ($payload['callsign'] ?? 'Няма позивна');
+        $squawk   = (string) ($payload['squawk'] ?? '----');
+        $type     = (string) ($payload['type'] ?? 'Неизвестен тип');
+        $operator = (string) ($payload['operator'] ?? 'Неизвестен оператор');
+        $altM     = (int) ($payload['altitude'] ?? 0);
+        $speedKmh = (int) ($payload['speed'] ?? 0);
+        $trackDeg = (int) ($payload['track'] ?? 0);
+        $aziDeg   = (int) ($payload['bearing'] ?? 0);
+        $distKm   = round((float) ($payload['distKm'] ?? 0), 1);
+        $isMil    = !empty($payload['isMilitary']) ? 'ДА (Военен)' : 'НЕ (Граждански/Неясен)';
+        $route    = (string) ($payload['route'] ?? 'Няма данни');
+        $trailPts = is_array($payload['trail'] ?? null) ? array_slice($payload['trail'], -12) : [];
+
+        $trailSummary = '';
+        if ($trailPts !== []) {
+            $coordsList = array_map(
+                static fn($pt) => round((float) ($pt['lat'] ?? 0), 3) . ',' . round((float) ($pt['lon'] ?? 0), 3),
+                $trailPts
+            );
+            $trailSummary = implode(' -> ', $coordsList);
+        } else {
+            $trailSummary = 'Няма натрупана следа';
+        }
+
+        $prompt = <<<PROMPT
+Ти си военен ПВО и OSINT анализатор към радарна станция в с. Радишево (Плевен, Северна България).
+Направи кратък, точен тактически анализ на следната въздушна цел (до 3 кратки точки на български език, без уводи):
+- ICAO HEX: {$hex} | Позивна: {$callsign} | Squawk: {$squawk}
+- Тип: {$type} | Оператор: {$operator} | Военен флаг: {$isMil}
+- Позиция спрямо Радишево: Азимут {$aziDeg}°, Разстояние {$distKm} км
+- Параметри: Височина {$altM} м, Скорост {$speedKmh} км/ч, Курс {$trackDeg}°
+- Маршрут: {$route}
+- Последна траектория (lat,lon): {$trailSummary}
+
+ВАЖНО ЗА SQUAWK КОДОВЕТЕ:
+Ако Squawk кодът е 7700 (АВАРИЯ), 7600 (ЗАГУБА НА РАДИОВРЪЗКА/КОМУНИКАЦИЯ) или 7500 (ОТВЛИЧАНЕ/ЗАПЛАХА), задължително го подчертавай на първо място с предупреждение! Ако е 7777 или друг военен/стандартен код, разкодирай значението му.
+
+Форматирай отговора точно така:
+1. 🛩️ БОРД / ПРИНАДЛЕЖНОСТ: (разкодирай позивната/HEX кода, държавата, модела, базата и значението на Squawk кода)
+2. 🎯 ПРОФИЛ НА ПОЛЕТА: (анализирай височината, скоростта и траекторията - транзит, учебно-тренировъчен полет към Долна Митрополия/Граф Игнатиево, орбита за дозареждане, разузнаване или снижение)
+3. ⚡ ТАКТИЧЕСКА ОЦЕНКА: (1 кратко изречение за поведението или евентуална аномалия на целта)
+PROMPT;
+
+        $postData = json_encode([
+            'contents' => [
+                ['parts' => [['text' => $prompt]]]
+            ],
+            'generationConfig' => [
+                'temperature'     => 0.3,
+                'maxOutputTokens' => 1024,
+            ],
+        ], JSON_UNESCAPED_UNICODE);
+
+        // Актуалните модели според изискването на Google API
+        // 1. Точните модели, които Google изиска за твоя ключ
+        $models = [
+            'gemini-3.5-flash-lite',
+            'gemini-3.0-flash',
+            'gemini-3.5-flash',
+        ];
+
+        // 2. Автоматично откриване: ако горните не отговорят, питаме Google кои модели са активни за ключа ти
+        $listUrl = 'https://generativelanguage.googleapis.com/v1beta/models?key=' . urlencode($apiKey);
+        $listRes = $this->curlFetch($listUrl);
+        if ($listRes['code'] === 200 && $listRes['body'] !== '') {
+            $listData = json_decode($listRes['body'], true);
+            foreach (($listData['models'] ?? []) as $m) {
+                $mName = str_replace('models/', '', (string) ($m['name'] ?? ''));
+                $methods = (array) ($m['supportedGenerationMethods'] ?? []);
+                if (
+                    $mName !== '' &&
+                    str_contains($mName, 'gemini') &&
+                    in_array('generateContent', $methods, true) &&
+                    !in_array($mName, $models, true)
+                ) {
+                    $models[] = $mName;
+                }
+            }
+        }
+
+        $lastCode = 0;
+        $lastErrorDetail = '';
+
+        foreach ($models as $model) {
+            $url = "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key=" . urlencode($apiKey);
+
+            $ch = curl_init($url);
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_POST           => true,
+                CURLOPT_TIMEOUT        => 20,
+                CURLOPT_CONNECTTIMEOUT => 5,
+                CURLOPT_SSL_VERIFYPEER => true,
+                CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
+                CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
+                CURLOPT_POSTFIELDS     => $postData,
+            ]);
+
+            $body = curl_exec($ch);
+            $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $curlErr = curl_error($ch);
+            curl_close($ch);
+
+            $lastCode = $code;
+
+            if ($code === 200 && is_string($body) && $body !== '') {
+                $decoded = json_decode($body, true);
+                $parts = $decoded['candidates'][0]['content']['parts'] ?? [];
+                $text = '';
+                foreach ($parts as $part) {
+                    if (isset($part['text'])) {
+                        $text .= $part['text'];
+                    }
+                }
+                if (trim($text) !== '') {
+                    return new JsonResponse(['brief' => trim($text)]);
+                }
+            }
+
+            if (is_string($body) && $body !== '') {
+                $errDecoded = json_decode($body, true);
+                if (!empty($errDecoded['error']['message'])) {
+                    $lastErrorDetail = $errDecoded['error']['message'];
+                }
+            } elseif ($curlErr !== '') {
+                $lastErrorDetail = $curlErr;
+            }
+
+            if ($code === 429 || str_contains(strtolower($lastErrorDetail), 'api_key_invalid')) {
+                break;
+            }
+        }
+
+        $msg = '⚠️ Грешка при връзка с AI модула (HTTP ' . $lastCode . ').';
+        if ($lastErrorDetail !== '') {
+            $msg .= ' Детайли: ' . $lastErrorDetail;
+        }
+
+        return new JsonResponse(['brief' => $msg]);
+    }
     /**
      * Записва историята в лек Ring Buffer от отделни слот файлове (~60KB всеки),
      * така че PHP никога да не превишава RAM лимита и да не връща 502 Bad Gateway.
