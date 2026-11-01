@@ -25,7 +25,7 @@ COPY . /var/www/html
 ENV APP_ENV=prod
 
 # Инсталираме пакетите на Symfony
-RUN composer install --no-dev --optimize-autoloader
+RUN composer install --no-dev --optimize-autoloader --no-scripts
 
 # Даваме права на сървъра да чете и изпълнява файловете
 RUN chown -R www-data:www-data /var/www/html
