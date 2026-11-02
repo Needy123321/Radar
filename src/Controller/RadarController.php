@@ -325,69 +325,269 @@ class RadarController extends AbstractController
             return new JsonResponse(['error' => 'Invalid payload'], 400);
         }
 
-        $hex      = strtoupper((string) ($payload['id'] ?? 'НЕИЗВЕСТЕН'));
-        $callsign = (string) ($payload['callsign'] ?? 'Няма позивна');
-        $squawk   = (string) ($payload['squawk'] ?? '----');
-        $type     = (string) ($payload['type'] ?? 'Неизвестен тип');
-        $operator = (string) ($payload['operator'] ?? 'Неизвестен оператор');
+        $hex      = strtoupper(trim((string) ($payload['id'] ?? 'НЕИЗВЕСТЕН')));
+        $hexLower = strtolower($hex);
+        $callsign = strtoupper(trim((string) ($payload['callsign'] ?? '')));
+        $squawk   = trim((string) ($payload['squawk'] ?? '----'));
+        $type     = trim((string) ($payload['type'] ?? 'Неизвестен тип'));
+        $operator = trim((string) ($payload['operator'] ?? 'Неизвестен оператор'));
         $altM     = (int) ($payload['altitude'] ?? 0);
         $speedKmh = (int) ($payload['speed'] ?? 0);
         $trackDeg = (int) ($payload['track'] ?? 0);
         $aziDeg   = (int) ($payload['bearing'] ?? 0);
         $distKm   = round((float) ($payload['distKm'] ?? 0), 1);
-        $isMil    = !empty($payload['isMilitary']) ? 'ДА (Военен)' : 'НЕ (Граждански/Неясен)';
-        $route    = (string) ($payload['route'] ?? 'Няма данни');
-        $trailPts = is_array($payload['trail'] ?? null) ? array_slice($payload['trail'], -12) : [];
+        $isMil    = !empty($payload['isMilitary']);
+        $route    = trim((string) ($payload['route'] ?? 'Няма данни'));
+        $trailPts = is_array($payload['trail'] ?? null) ? array_slice($payload['trail'], -15) : [];
 
-        $trailSummary = '';
-        if ($trailPts !== []) {
-            $coordsList = array_map(
-                static fn($pt) => round((float) ($pt['lat'] ?? 0), 3) . ',' . round((float) ($pt['lon'] ?? 0), 3),
-                $trailPts
-            );
-            $trailSummary = implode(' -> ', $coordsList);
-        } else {
-            $trailSummary = 'Няма натрупана следа';
+        // Текущи координати на целта (от последната точка на следата или подадените)
+        $lastPt   = !empty($trailPts) ? end($trailPts) : null;
+        $planeLat = (float) ($payload['lat'] ?? ($lastPt['lat'] ?? 43.3665));
+        $planeLon = (float) ($payload['lon'] ?? ($lastPt['lon'] ?? 24.6621));
+
+        // 1. ПАРАЛЕЛНО ИЗТЕГЛЯНЕ ОТ 5 ВЪНШНИ РАЗУЗНАВАТЕЛНИ API-ТА НАВЕДНЪЖ (~0.4 сек)
+        $osintQueries = [];
+        if ($hex !== '' && !str_starts_with($hex, 'FR_')) {
+            $osintQueries[] = [
+                'name' => 'adsbdb_ac',
+                'base' => 'adsbdb_ac',
+                'url'  => 'https://api.adsbdb.com/v0/aircraft/' . urlencode($hexLower),
+            ];
+            $osintQueries[] = [
+                'name' => 'hexdb_ac',
+                'base' => 'hexdb_ac',
+                'url'  => 'https://hexdb.io/api/v1/aircraft/' . urlencode($hexLower),
+            ];
+            $osintQueries[] = [
+                'name' => 'live_telemetry',
+                'base' => 'live_telemetry',
+                'url'  => 'https://api.airplanes.live/v2/hex/' . urlencode($hexLower),
+            ];
+        }
+        if ($callsign !== '' && !str_starts_with($callsign, 'FR_')) {
+            $osintQueries[] = [
+                'name' => 'adsbdb_cs',
+                'base' => 'adsbdb_cs',
+                'url'  => 'https://api.adsbdb.com/v0/callsign/' . urlencode($callsign),
+            ];
+        }
+        // Метео, ветрове на височина и релеф под самолета (Open-Meteo API)
+        $osintQueries[] = [
+            'name' => 'meteo_terrain',
+            'base' => 'meteo_terrain',
+            'url'  => sprintf(
+                'https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f&current=temperature_2m,wind_speed_10m,wind_direction_10m&hourly=wind_speed_850hPa,wind_direction_850hPa,wind_speed_300hPa,wind_direction_300hPa,temperature_300hPa&forecast_days=1',
+                $planeLat,
+                $planeLon
+            ),
+        ];
+
+        $osintResponses = $this->curlFetchMany($osintQueries);
+
+        // 2. ОБРАБОТКА НА ДОСИЕТО ОТ РЕГИСТРИТЕ (ADSBDB + HEXDB)
+        $osintReg      = 'Няма данни';
+        $osintCountry  = 'Няма данни';
+        $osintFullType = $type;
+        $osintRoute    = $route;
+
+        if (($osintResponses['adsbdb_ac']['code'] ?? 0) === 200) {
+            $acObj = json_decode($osintResponses['adsbdb_ac']['body'], true)['response']['aircraft'] ?? null;
+            if (is_array($acObj)) {
+                $osintReg      = (string) ($acObj['registration'] ?? $osintReg);
+                $osintCountry  = (string) ($acObj['registered_owner_country_name'] ?? $osintCountry);
+                $osintFullType = trim(($acObj['manufacturer'] ?? '') . ' ' . ($acObj['type'] ?? $type));
+                if (!empty($acObj['registered_owner'])) {
+                    $operator = (string) $acObj['registered_owner'];
+                }
+            }
         }
 
+        // Допълване от HexDB.io, ако липсват данни в ADSBdb
+        if (($osintResponses['hexdb_ac']['code'] ?? 0) === 200) {
+            $hxObj = json_decode($osintResponses['hexdb_ac']['body'], true);
+            if (is_array($hxObj)) {
+                if ($osintReg === 'Няма данни' && !empty($hxObj['Registration'])) {
+                    $osintReg = (string) $hxObj['Registration'];
+                }
+                if (($osintFullType === '' || $osintFullType === 'Неизвестен тип') && !empty($hxObj['Type'])) {
+                    $osintFullType = trim(($hxObj['Manufacturer'] ?? '') . ' ' . $hxObj['Type']);
+                }
+                if (($operator === 'Неизвестен оператор' || $operator === 'Граждански полет') && !empty($hxObj['RegisteredOwners'])) {
+                    $operator = (string) $hxObj['RegisteredOwners'];
+                }
+            }
+        }
+
+        if (($osintResponses['adsbdb_cs']['code'] ?? 0) === 200) {
+            $frObj = json_decode($osintResponses['adsbdb_cs']['body'], true)['response']['flightroute'] ?? null;
+            if (is_array($frObj)) {
+                $orig     = $frObj['origin']['municipality'] ?? ($frObj['origin']['name'] ?? '');
+                $origIcao = $frObj['origin']['icao_code'] ?? '';
+                $dest     = $frObj['destination']['municipality'] ?? ($frObj['destination']['name'] ?? '');
+                $destIcao = $frObj['destination']['icao_code'] ?? '';
+                $airline  = $frObj['airline']['name'] ?? '';
+                $osintRoute = "{$orig} ({$origIcao}) -> {$dest} ({$destIcao})" . ($airline ? " | Авиокомпания: {$airline}" : '');
+            }
+        }
+
+        // 3. ДЪЛБОКА ТЕЛЕМЕТРИЯ ОТ ТРАНСПОНДЕРА И АВТОПИЛОТА (MCP / Вертикална скорост / GPS Integrity)
+        $telemetryNote = 'Стандартно ADS-B излъчване';
+        if (($osintResponses['live_telemetry']['code'] ?? 0) === 200) {
+            $acLive = json_decode($osintResponses['live_telemetry']['body'], true)['ac'][0] ?? null;
+            if (is_array($acLive)) {
+                $tParts = [];
+                if (isset($acLive['baro_rate'])) {
+                    $vRateMps = round(((float) $acLive['baro_rate']) * 0.00508, 1);
+                    $vSign    = $vRateMps > 0 ? '+' : '';
+                    $tParts[] = "Верт. скорост: {$vSign}{$vRateMps} m/s";
+                }
+                if (isset($acLive['nav_altitude_mcp'])) {
+                    $mcpMeters = (int) round(((float) $acLive['nav_altitude_mcp']) * 0.3048);
+                    $tParts[]  = "Зададена височина в автопилота (MCP): {$mcpMeters} м";
+                }
+                if (isset($acLive['mach'])) {
+                    $tParts[] = 'Бордови Mach: ' . round((float) $acLive['mach'], 2);
+                }
+                if (isset($acLive['rssi'])) {
+                    $tParts[] = 'Ниво на сигнала (RSSI): ' . $acLive['rssi'] . ' dBFS';
+                }
+                if (isset($acLive['nic']) && (int) $acLive['nic'] < 5) {
+                    $tParts[] = '⚠️ НИСКА GPS ТОЧНОСТ (NIC=' . $acLive['nic'] . ' - възможни РЕБ/GPS смущения!)';
+                }
+                if (!empty($acLive['r']) && $osintReg === 'Няма данни') {
+                    $osintReg = (string) $acLive['r'];
+                }
+                if ($tParts !== []) {
+                    $telemetryNote = implode(' | ', $tParts);
+                }
+            }
+        }
+
+        // 4. РЕЛЕФ ПОД ЦЕЛТА (AGL ВИСОЧИНА), ВЯТЪР НА ЕШЕЛОНА (TAS / MACH) И РАДИОХОРИЗОНТ
+        $terrainElevationM = 180;
+        $aglMeters         = max(0, $altM - $terrainElevationM);
+        $windInfo          = 'Няма данни';
+
+        if (($osintResponses['meteo_terrain']['code'] ?? 0) === 200) {
+            $meteo = json_decode($osintResponses['meteo_terrain']['body'], true);
+            if (is_array($meteo)) {
+                $terrainElevationM = (int) round((float) ($meteo['elevation'] ?? 180));
+                $aglMeters         = max(0, $altM - $terrainElevationM);
+
+                $hourIdx = (int) gmdate('G');
+                if ($altM > 5500) {
+                    $wSpd = (float) ($meteo['hourly']['wind_speed_300hPa'][$hourIdx] ?? 0);
+                    $wDir = (float) ($meteo['hourly']['wind_direction_300hPa'][$hourIdx] ?? 0);
+                } elseif ($altM > 1000) {
+                    $wSpd = (float) ($meteo['hourly']['wind_speed_850hPa'][$hourIdx] ?? 0);
+                    $wDir = (float) ($meteo['hourly']['wind_direction_850hPa'][$hourIdx] ?? 0);
+                } else {
+                    $wSpd = (float) ($meteo['current']['wind_speed_10m'] ?? 0);
+                    $wDir = (float) ($meteo['current']['wind_direction_10m'] ?? 0);
+                }
+
+                // Изчисляване на попътен/насрещен компонент на вятъра и Истинска въздушна скорост (TAS)
+                $angleDiffRad = deg2rad($wDir - $trackDeg);
+                $headwindKmh  = (int) round($wSpd * cos($angleDiffRad));
+                $tasKmh       = max(0, $speedKmh + $headwindKmh);
+                $soundSpdKmh  = $altM > 8000 ? 1065 : ($altM > 4000 ? 1140 : 1210);
+                $estMach      = round($tasKmh / $soundSpdKmh, 2);
+
+                $windType = $headwindKmh >= 0 ? "насрещен {$headwindKmh} км/ч" : 'попътен ' . abs($headwindKmh) . ' км/ч';
+                $windInfo = "Вятър на височината: " . round($wSpd) . " км/ч от " . round($wDir) . "° ({$windType}) | Истинска въздушна скорост (TAS): ~{$tasKmh} км/ч (Mach {$estMach})";
+            }
+        }
+
+        // Формула за радиохоризонт на УКВ/РЛС спрямо с. Радишево (~240м н.в. + антена)
+        $radarHorizonKm = (int) round(4.12 * (sqrt(250) + sqrt(max(10, $altM))));
+        $horizonStatus  = $distKm <= $radarHorizonKm
+            ? "В ПРЯКА РАДИОВИДИМОСТ (Радиохоризонт за тази височина: {$radarHorizonKm} км)"
+            : "На ръба/отвъд стандартния радиохоризонт ({$radarHorizonKm} км) - приема се чрез рефракция/височинен коридор";
+
+        // 5. ГЕОМЕТРИЯ НА МАНЕВРИТЕ ОТ СЛЕДАТА
+        $maneuverProfile = 'Прав курс (Стабилен)';
+        if (count($trailPts) >= 4) {
+            $totalTurnDeg = 0.0;
+            $prevBearing  = null;
+            for ($i = 1, $n = count($trailPts); $i < $n; $i++) {
+                $lat1 = (float) ($trailPts[$i - 1]['lat'] ?? 0);
+                $lon1 = (float) ($trailPts[$i - 1]['lon'] ?? 0);
+                $lat2 = (float) ($trailPts[$i]['lat'] ?? 0);
+                $lon2 = (float) ($trailPts[$i]['lon'] ?? 0);
+                $dLon = deg2rad($lon2 - $lon1);
+                $y = sin($dLon) * cos(deg2rad($lat2));
+                $x = cos(deg2rad($lat1)) * sin(deg2rad($lat2)) - sin(deg2rad($lat1)) * cos(deg2rad($lat2)) * cos($dLon);
+                $segBrg = fmod(rad2deg(atan2($y, $x)) + 360.0, 360.0);
+
+                if ($prevBearing !== null) {
+                    $diff = abs($segBrg - $prevBearing);
+                    if ($diff > 180.0) {
+                        $diff = 360.0 - $diff;
+                    }
+                    $totalTurnDeg += $diff;
+                }
+                $prevBearing = $segBrg;
+            }
+            $roundedTurn = (int) round($totalTurnDeg);
+            if ($roundedTurn >= 135) {
+                $maneuverProfile = "АКТИВНО МАНЕВРИРАНЕ / ОРБИТА (натрупан завой {$roundedTurn}° - зона за патрул, дозареждане или пилотаж)";
+            } elseif ($roundedTurn >= 45) {
+                $maneuverProfile = "Маневра за смяна на курса / Заход ({$roundedTurn}° сумарен завой)";
+            } else {
+                $maneuverProfile = "Праволинеен коридор (отклонение само {$roundedTurn}°)";
+            }
+        }
+
+        // 6. ДЕКОДЕР НА SQUAWK КОДОВЕ
+        $squawkNote = 'Стандартен транспордерен код от РВД';
+        if ($squawk === '7700') {
+            $squawkNote = '🚨 АВАРИЯ НА БОРДА (EMERGENCY 7700)!';
+        } elseif ($squawk === '7600') {
+            $squawkNote = '📻 ПЪЛНА ЗАГУБА НА РАДИОВРЪЗКА (NORDO / LOST COMMS 7600)!';
+        } elseif ($squawk === '7500') {
+            $squawkNote = '🚨 НЕЗАКОННА НАМЕСА / ОТВЛИЧАНЕ (HIJACK 7500)!';
+        } elseif ($squawk === '7777') {
+            $squawkNote = '⚔️ ВОЕНЕН ПРЕХВАТ / БОЙНО ДЕЖУРСТВО НА НАТО (MILITARY INTERCEPT 7777)';
+        } elseif ($squawk === '7000' || $squawk === '1200') {
+            $squawkNote = 'Визуален полет (VFR) на малка височина без инструментален план';
+        } elseif ($squawk === '0000' || $squawk === '----' || $squawk === '') {
+            $squawkNote = 'Скрит / Неактивен Mode-S код (чисто MLAT засичане)';
+        }
+
+        $milStatusText = $isMil ? 'ВОЕНЕН / ДЪРЖАВЕН БОРД' : 'Граждански / Търговски';
+        $csDisplay     = $callsign !== '' ? $callsign : 'НЯМА ПОЗИВНА';
+
         $prompt = <<<PROMPT
-Ти си военен ПВО и OSINT анализатор към радарна станция в с. Радишево (Плевен, Северна България).
-Направи кратък, точен тактически анализ на следната въздушна цел (до 3 кратки точки на български език, без уводи):
-- ICAO HEX: {$hex} | Позивна: {$callsign} | Squawk: {$squawk}
-- Тип: {$type} | Оператор: {$operator} | Военен флаг: {$isMil}
-- Позиция спрямо Радишево: Азимут {$aziDeg}°, Разстояние {$distKm} км
-- Параметри: Височина {$altM} м, Скорост {$speedKmh} км/ч, Курс {$trackDeg}°
-- Маршрут: {$route}
-- Последна траектория (lat,lon): {$trailSummary}
+Ти си началник на разузнавателен център за ПВО и OSINT.
+Разполагаш с обединена телеметрия от 5 външни сензорни API-та в реално време + Google Search. Направи извънземно точен, експертен анализ без общи приказки:
 
-ВАЖНО ЗА SQUAWK КОДОВЕТЕ:
-Ако Squawk кодът е 7700 (АВАРИЯ), 7600 (ЗАГУБА НА РАДИОВРЪЗКА/КОМУНИКАЦИЯ) или 7500 (ОТВЛИЧАНЕ/ЗАПЛАХА), задължително го подчертавай на първо място с предупреждение! Ако е 7777 или друг военен/стандартен код, разкодирай значението му.
+[1. ДОСИЕ ОТ РЕГИСТРИТЕ (ADSBdb + HexDB)]
+- Позивна: {$csDisplay} | ICAO HEX: {$hex} | Бордна регистрация: {$osintReg} ({$osintCountry})
+- Тип машина: {$osintFullType} | Оператор: {$operator} | Клас: {$milStatusText}
+- Официален маршрут: {$osintRoute}
 
-Форматирай отговора точно така:
-1. 🛩️ БОРД / ПРИНАДЛЕЖНОСТ: (разкодирай позивната/HEX кода, държавата, модела, базата и значението на Squawk кода)
-2. 🎯 ПРОФИЛ НА ПОЛЕТА: (анализирай височината, скоростта и траекторията - транзит, учебно-тренировъчен полет към Долна Митрополия/Граф Игнатиево, орбита за дозареждане, разузнаване или снижение)
-3. ⚡ ТАКТИЧЕСКА ОЦЕНКА: (1 кратко изречение за поведението или евентуална аномалия на целта)
+[2. КИНЕМАТИКА, РЕЛЕФ И МЕТЕО НА ЕШЕЛОНА (Open-Meteo + Airplanes.live)]
+- Пеленг спрямо Радишево: Азимут {$aziDeg}°, Дистанция {$distKm} км
+- Барометрична височина: {$altM} м | Надморска височина на терена отдолу: {$terrainElevationM} м -> РЕАЛНА ВИСОЧИНА НАД РЕЛЕФА (AGL): {$aglMeters} м
+- Пътна скорост (GS): {$speedKmh} км/ч, Курс: {$trackDeg}° | {$windInfo}
+- Автопилот и бордова телеметрия: {$telemetryNote}
+- Геометрия на следата: {$maneuverProfile}
+- Радиолокационна видимост: {$horizonStatus}
+- Транспондер (Squawk): {$squawk} ({$squawkNote})
+
+Изведи анализа на български точно в тези 4 кратки и ударни точки:
+1. ИДЕНТИФИКАЦИЯ И МИСИЯ: (Точен борд {$osintReg}, машина, база/оператор и дали полетът "{$csDisplay}" е редовен по разписание, чартър, карго или специална/военна задача).
+2. АЕРОДИНАМИКА, РЕЛЕФ И АВТОПИЛОТ: (Коментирай реалната височина над терена AGL {$aglMeters}м, истинската скорост/Mach спрямо вятъра и какво прави автопилотът/следата - изкачване, снижение към конкретно летище, транзит или орбита).
+3. РАДИОЛОКАЦИОНЕН И SQUAWK СТАТУС: (Оцени радиохоризонта спрямо Радишево, точността на GPS/NIC и кода {$squawk}).
+4. ОПЕРАТИВНА ОЦЕНКА НА ДЕЖУРНИЯ: (1 категорично заключение за характера на целта).
 PROMPT;
 
-        $postData = json_encode([
-            'contents' => [
-                ['parts' => [['text' => $prompt]]]
-            ],
-            'generationConfig' => [
-                'temperature'     => 0.3,
-                'maxOutputTokens' => 1024,
-            ],
-        ], JSON_UNESCAPED_UNICODE);
-
-        // Актуалните модели според изискването на Google API
-        // 1. Точните модели, които Google изиска за твоя ключ
         $models = [
             'gemini-3.5-flash-lite',
             'gemini-3.0-flash',
             'gemini-3.5-flash',
         ];
 
-        // 2. Автоматично откриване: ако горните не отговорят, питаме Google кои модели са активни за ключа ти
         $listUrl = 'https://generativelanguage.googleapis.com/v1beta/models?key=' . urlencode($apiKey);
         $listRes = $this->curlFetch($listUrl);
         if ($listRes['code'] === 200 && $listRes['body'] !== '') {
@@ -412,49 +612,71 @@ PROMPT;
         foreach ($models as $model) {
             $url = "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key=" . urlencode($apiKey);
 
-            $ch = curl_init($url);
-            curl_setopt_array($ch, [
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_POST           => true,
-                CURLOPT_TIMEOUT        => 20,
-                CURLOPT_CONNECTTIMEOUT => 5,
-                CURLOPT_SSL_VERIFYPEER => true,
-                CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
-                CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
-                CURLOPT_POSTFIELDS     => $postData,
-            ]);
+            foreach ([true, false] as $useSearchTool) {
+                $bodyPayload = [
+                    'contents' => [
+                        ['parts' => [['text' => $prompt]]]
+                    ],
+                    'generationConfig' => [
+                        'temperature'     => 0.25,
+                        'maxOutputTokens' => 1024,
+                    ],
+                ];
 
-            $body = curl_exec($ch);
-            $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            $curlErr = curl_error($ch);
-            curl_close($ch);
+                if ($useSearchTool) {
+                    $bodyPayload['tools'] = [
+                        ['google_search' => new \stdClass()]
+                    ];
+                }
 
-            $lastCode = $code;
+                $ch = curl_init($url);
+                curl_setopt_array($ch, [
+                    CURLOPT_RETURNTRANSFER => true,
+                    CURLOPT_POST           => true,
+                    CURLOPT_TIMEOUT        => 22,
+                    CURLOPT_CONNECTTIMEOUT => 5,
+                    CURLOPT_SSL_VERIFYPEER => true,
+                    CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
+                    CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
+                    CURLOPT_POSTFIELDS     => json_encode($bodyPayload, JSON_UNESCAPED_UNICODE),
+                ]);
 
-            if ($code === 200 && is_string($body) && $body !== '') {
-                $decoded = json_decode($body, true);
-                $parts = $decoded['candidates'][0]['content']['parts'] ?? [];
-                $text = '';
-                foreach ($parts as $part) {
-                    if (isset($part['text'])) {
-                        $text .= $part['text'];
+                $body = curl_exec($ch);
+                $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                $curlErr = curl_error($ch);
+                curl_close($ch);
+
+                $lastCode = $code;
+
+                if ($code === 200 && is_string($body) && $body !== '') {
+                    $decoded = json_decode($body, true);
+                    $parts = $decoded['candidates'][0]['content']['parts'] ?? [];
+                    $text = '';
+                    foreach ($parts as $part) {
+                        if (isset($part['text'])) {
+                            $text .= $part['text'];
+                        }
+                    }
+                    if (trim($text) !== '') {
+                        return new JsonResponse(['brief' => trim($text)]);
                     }
                 }
-                if (trim($text) !== '') {
-                    return new JsonResponse(['brief' => trim($text)]);
+
+                if (is_string($body) && $body !== '') {
+                    $errDecoded = json_decode($body, true);
+                    if (!empty($errDecoded['error']['message'])) {
+                        $lastErrorDetail = $errDecoded['error']['message'];
+                    }
+                } elseif ($curlErr !== '') {
+                    $lastErrorDetail = $curlErr;
+                }
+
+                if ($code === 404) {
+                    break;
                 }
             }
 
-            if (is_string($body) && $body !== '') {
-                $errDecoded = json_decode($body, true);
-                if (!empty($errDecoded['error']['message'])) {
-                    $lastErrorDetail = $errDecoded['error']['message'];
-                }
-            } elseif ($curlErr !== '') {
-                $lastErrorDetail = $curlErr;
-            }
-
-            if ($code === 429 || str_contains(strtolower($lastErrorDetail), 'api_key_invalid')) {
+            if ($lastCode === 429 || str_contains(strtolower($lastErrorDetail), 'api_key_invalid')) {
                 break;
             }
         }
@@ -466,6 +688,9 @@ PROMPT;
 
         return new JsonResponse(['brief' => $msg]);
     }
+
+    // аве ЕЙЙ!
+
     /**
      * Записва историята в лек Ring Buffer от отделни слот файлове (~60KB всеки),
      * така че PHP никога да не превишава RAM лимита и да не връща 502 Bad Gateway.

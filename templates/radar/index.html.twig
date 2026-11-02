@@ -586,7 +586,7 @@
                     <span class="live-dot"></span>
                     <span id="modeText">LIVE</span>
                 </span>
-                <span id="gpsText" style="color:#00e5ff;">📍 с. Радишево</span>
+                <span id="gpsText" style="color:#00e5ff;">📍 Позиция 1</span>
             </div>
             <div class="status-right">
                 <span>ЦЕЛИ: <strong id="planesCount" style="color:#ffdd00;">0</strong></span>
@@ -596,8 +596,8 @@
         </div>
 
         <div class="controls-compact-bar">
-            <button class="radar-btn loc-btn active" id="locRadishevo" onclick="setBaseLocation(43.3664995, 24.6621337, 'с. Радишево', 'locRadishevo')">📍 Позиция 1</button>
-            <button class="radar-btn loc-btn" id="locEmona" onclick="setBaseLocation(42.70260944933075, 27.89720568192577, 'нос ЕМОНА', 'locEmona')">🌊 Позиция 2</button>
+            <button class="radar-btn loc-btn active" id="locRadishevo" onclick="setBaseLocation(43.3664995, 24.6621337, 'Позиция 1', 'locRadishevo')">📍 Позиция 1</button>
+            <button class="radar-btn loc-btn" id="locEmona" onclick="setBaseLocation(42.70260944933075, 27.89720568192577, 'Позиция 2', 'locEmona')">🌊 Позиция 2</button>
             <button class="radar-btn loc-btn" id="locGps" onclick="activateRealGps()">📡 GPS</button>
             <button class="radar-btn loc-btn" id="locManual" onclick="promptManualCoords()">✍️ КООРД.</button>
             <button class="radar-btn" id="btn-gyro" onclick="toggleGyroCompass()">🧭 0° ИСТ.</button>
@@ -1755,12 +1755,23 @@
         if (!p || !box) return;
 
         box.style.display = 'block';
+
+        // Функция за чистене на Markdown звездичките
+        const formatAiText = (rawText) => {
+            return rawText
+                .replace(/\*\*(.*?)\*\*/g, '$1')
+                .replace(/\*(.*?)\*/g, '$1');
+        };
+
         if (planeAiBriefCache[planeId]) {
-            box.innerText = planeAiBriefCache[planeId];
+            box.innerText = formatAiText(planeAiBriefCache[planeId]);
+            setTimeout(() => { box.scrollTop = 0; }, 10);
             return;
         }
 
-        box.innerText = '🧠 Генериране на тактически AI анализ...';
+        box.innerText = '🧠 Събиране на OSINT телеметрия и генериране на тактически анализ...';
+        box.scrollTop = 0;
+
         try {
             const trailPts = planeTrails[planeId] ? planeTrails[planeId].pts : [];
             const res = await fetch('/api/ai-brief', {
@@ -1768,6 +1779,8 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     id: p.id,
+                    lat: p.lat,
+                    lon: p.lon,
                     callsign: cleanCallsign(p.callsign, ''),
                     squawk: p.squawk,
                     type: p.type,
@@ -1783,19 +1796,37 @@
                 })
             });
             const data = await res.json();
-            const text = data.brief || 'Няма данни от AI анализатора.';
-            planeAiBriefCache[planeId] = text;
+            let text = data.brief || 'Няма данни от AI анализатора.';
+
+            text = formatAiText(text);
+
+            if (!text.startsWith('⚠️')) {
+                planeAiBriefCache[planeId] = text;
+            }
+
             if (selectedPlaneId === planeId && document.getElementById('aiBriefBox')) {
-                document.getElementById('aiBriefBox').style.display = 'block';
-                document.getElementById('aiBriefBox').innerText = text;
+                const activeBox = document.getElementById('aiBriefBox');
+                activeBox.style.display = 'block';
+                activeBox.innerText = text;
+                // Принудително позициониране най-горе с лек таймер, за да надделее над браузерния фокус
+                setTimeout(() => { activeBox.scrollTop = 0; }, 10);
             }
         } catch (e) {
             box.innerText = '⚠️ Грешка при заявката към AI сървъра.';
+            box.scrollTop = 0;
         }
     };
 
     function updateInfoPanelHTML(p) {
         const panel = document.getElementById('infoPanel');
+
+        // Запазваме състоянието на OSINT доклада преди обновяването
+        const oldAiBox = panel.querySelector('#aiBriefBox');
+        const savedAiScrollTop = oldAiBox ? oldAiBox.scrollTop : 0;
+        const savedAiWasVisible = oldAiBox
+            ? oldAiBox.style.display !== 'none'
+            : false;
+
         const isMilitary = isMilitaryPlane(p);
         panel.style.display = 'block';
         panel.classList.toggle('mil-panel', isMilitary);
@@ -1812,67 +1843,100 @@
         const currentPinSlot = pinData ? pinData.slot : null;
         const nextAutoNum = ALL_SLOTS.find(s => pinnedTargets[s] === null) || (highestTrackNumber + 1);
 
-        const autoBtnText = pinData ? `🎯 ЦЕЛ #${pinData.trackNum} (С${pinData.slot}) [МАХНИ]` : `📌 МАРКИРАЙ КАТО ЦЕЛ #${nextAutoNum}`;
+        const autoBtnText = pinData
+            ? `🎯 ЦЕЛ #${pinData.trackNum} (С${pinData.slot}) [МАХНИ]`
+            : `📌 МАРКИРАЙ КАТО ЦЕЛ #${nextAutoNum}`;
 
         let slotButtonsHtml = '';
+
         for (let s of ALL_SLOTS) {
             const slotObj = pinnedTargets[s];
             const isThisPlane = (currentPinSlot === s);
             let btnLabel = `С${s}`;
             let extraClass = '';
-            if (isThisPlane && slotObj) { btnLabel = `✓#${slotObj.trackNum}`; extraClass = 'active'; }
-            else if (slotObj) { btnLabel = `${s}:#${slotObj.trackNum}`; extraClass = 'occupied'; }
+
+            if (isThisPlane && slotObj) {
+                btnLabel = `✓#${slotObj.trackNum}`;
+                extraClass = 'active';
+            } else if (slotObj) {
+                btnLabel = `${s}:#${slotObj.trackNum}`;
+                extraClass = 'occupied';
+            }
+
             slotButtonsHtml += `<button class="mark-btn ${extraClass}" onclick="togglePinSlot(${s}, '${p.id}')">${btnLabel}</button>`;
         }
 
         const currentRoute = planeRouteCache[p.id] || 'Проверка на маршрут...';
-        const sqkDisplay = (p.squawk && p.squawk !== '----' && p.squawk !== '0000') ? p.squawk : 'Няма (MLAT)';
-        const aziLabel = azimuthOffsetDeg !== 0 ? (azimuthOffsetDeg > 0 ? '+' : '') + azimuthOffsetDeg + '°' : 'ИСТ.';
+        const sqkDisplay = (p.squawk && p.squawk !== '----' && p.squawk !== '0000')
+            ? p.squawk
+            : 'Няма (MLAT)';
+
+        const aziLabel = azimuthOffsetDeg !== 0
+            ? (azimuthOffsetDeg > 0 ? '+' : '') + azimuthOffsetDeg + '°'
+            : 'ИСТ.';
+
         const cachedAi = planeAiBriefCache[p.id];
 
         panel.innerHTML = `
-            <div class="panel-top-actions">
-                <button class="action-btn" onclick="closeInfoPanel()">✕</button>
+        <div class="panel-top-actions">
+            <button class="action-btn" onclick="closeInfoPanel()">✕</button>
+        </div>
+
+        <div class="plane-card-header">
+            <div class="plane-photo-box">
+                <img id="realPlaneImg" src="${cachedPhoto || ''}" style="${showImg}" alt="Снимка" />
+                <svg id="fallbackPlaneSvg" viewBox="0 0 64 64" width="36" height="36" style="${showSvg} transform: rotate(${trackDeg}deg);">
+                    <path fill="${color}" d="M32 4 L36 18 L58 30 L58 35 L36 31 L35 48 L45 55 L45 59 L32 56 L19 59 L19 55 L29 48 L28 31 L6 35 L6 30 L28 18 Z"/>
+                </svg>
             </div>
-            <div class="plane-card-header">
-                <div class="plane-photo-box">
-                    <img id="realPlaneImg" src="${cachedPhoto || ''}" style="${showImg}" alt="Снимка" />
-                    <svg id="fallbackPlaneSvg" viewBox="0 0 64 64" width="36" height="36" style="${showSvg} transform: rotate(${trackDeg}deg);">
-                        <path fill="${color}" d="M32 4 L36 18 L58 30 L58 35 L36 31 L35 48 L45 55 L45 59 L32 56 L19 59 L19 55 L29 48 L28 31 L6 35 L6 30 L28 18 Z"/>
-                    </svg>
+            <div>
+                <div style="font-size: 9.5px; color: ${color}; font-weight: bold;">● ${badgeText} ${pinData ? `| 🎯 ЦЕЛ #${pinData.trackNum}` : ''}</div>
+                <div style="font-weight: bold; font-size: 12.5px; color: #fff; margin: 1px 0;">
+                    SQK: <span style="color:#00ffff;">${sqkDisplay}</span> | ✈ ${cleanCallsign(p.callsign, p.id)}
                 </div>
-                <div>
-                    <div style="font-size: 9.5px; color: ${color}; font-weight: bold;">● ${badgeText} ${pinData ? `| 🎯 ЦЕЛ #${pinData.trackNum}` : ''}</div>
-                    <div style="font-weight: bold; font-size: 12.5px; color: #fff; margin: 1px 0;">
-                        SQK: <span style="color:#00ffff;">${sqkDisplay}</span> | ✈ ${cleanCallsign(p.callsign, p.id)}
-                    </div>
-                    <div style="font-size: 10px; color: #00ffcc; font-weight: bold;">HEX: ${p.id.toUpperCase()} | ${p.type || 'Няма данни'}</div>
-                    <div style="font-size: 9.5px; color: #88ff88;">${p.operator || 'Неизвестен оператор'}</div>
-                </div>
+                <div style="font-size: 10px; color: #00ffcc; font-weight: bold;">HEX: ${p.id.toUpperCase()} | ${p.type || 'Няма данни'}</div>
+                <div style="font-size: 9.5px; color: #88ff88;">${p.operator || 'Неизвестен оператор'}</div>
             </div>
-            <div class="route-banner"><span id="planeRouteText">${currentRoute}</span></div>
-            <div id="aiBriefBox" class="ai-brief-box" style="${cachedAi ? 'display:block;' : 'display:none;'}">${cachedAi || ''}</div>
-            <div class="info-grid">
-                <div class="info-item">
-                    <span class="info-label">АЗИМУТ (${aziLabel}) / РАЗСТ.</span>
-                    <span class="info-val" style="color:#00ff66;">AZ: ${p.bearing}° / ${(p.distKm || 0).toFixed(1)} км</span>
-                </div>
-                <div class="info-item">
-                    <span class="info-label">КУРС / ВИСОЧИНА / СКОРОСТ</span>
-                    <span class="info-val">${trackDeg}° | ${p.altitude || 0} м | ${p.speed || 0} км/ч</span>
-                </div>
+        </div>
+
+        <div class="route-banner">
+            <span id="planeRouteText">${currentRoute}</span>
+        </div>
+
+        <div id="aiBriefBox" class="ai-brief-box" style="${cachedAi ? 'display:block;' : 'display:none;'}">${cachedAi || ''}</div>
+
+        <div class="info-grid">
+            <div class="info-item">
+                <span class="info-label">АЗИМУТ (${aziLabel}) / РАЗСТ.</span>
+                <span class="info-val" style="color:#00ff66;">AZ: ${p.bearing}° / ${(p.distKm || 0).toFixed(1)} км</span>
             </div>
-            <div class="card-actions-row">
-                <button class="auto-track-btn ${pinData ? 'active' : ''}" onclick="autoAssignNextTrack('${p.id}')">${autoBtnText}</button>
-                <button class="ai-intel-btn" onclick="requestAiBrief('${p.id}')">🧠 АНАЛИЗ</button>
-                <button class="toggle-card-slots-btn" onclick="toggleCardSlots()">🎛️ СЛОТОВЕ</button>
+            <div class="info-item">
+                <span class="info-label">КУРС / ВИСОЧИНА / СКОРОСТ</span>
+                <span class="info-val">${trackDeg}° | ${p.altitude || 0} м | ${p.speed || 0} км/ч</span>
             </div>
-            <div id="cardSlotsGrid" class="mark-targets-row ${cardSlotsOpen ? 'open' : ''}">${slotButtonsHtml}</div>
-        `;
+        </div>
+
+        <div class="card-actions-row">
+            <button class="auto-track-btn ${pinData ? 'active' : ''}" onclick="autoAssignNextTrack('${p.id}')">${autoBtnText}</button>
+            <button class="ai-intel-btn" onclick="requestAiBrief('${p.id}')">🧠 АНАЛИЗ</button>
+            <button class="toggle-card-slots-btn" onclick="toggleCardSlots()">🎛️ СЛОТОВЕ</button>
+        </div>
+
+        <div id="cardSlotsGrid" class="mark-targets-row ${cardSlotsOpen ? 'open' : ''}">${slotButtonsHtml}</div>
+    `;
+
+        // Възстановяваме видимостта и скрол позицията на доклада
+        const newAiBox = panel.querySelector('#aiBriefBox');
+
+        if (newAiBox && cachedAi && savedAiWasVisible) {
+            newAiBox.style.display = 'block';
+            newAiBox.scrollTop = savedAiScrollTop;
+        }
 
         if (cachedPhoto === undefined) fetchRealPlanePhoto(p.id);
         if (planeRouteCache[p.id] === undefined) fetchFlightRoute(p);
     }
+
 
     window.closeInfoPanel = function() { selectedPlaneId = null; document.getElementById('infoPanel').style.display = 'none'; };
 
