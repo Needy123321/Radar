@@ -557,9 +557,62 @@ class RadarController extends AbstractController
         $milStatusText = $isMil ? 'ВОЕНЕН / ДЪРЖАВЕН БОРД' : 'Граждански / Търговски';
         $csDisplay     = $callsign !== '' ? $callsign : 'НЯМА ПОЗИВНА';
 
+        $lat1R = deg2rad($planeLat);
+        $lon1R = deg2rad($planeLon);
+        $brgR = deg2rad($trackDeg);
+
+        $compassDirs = ['Север (С)', 'Североизток (СИ)', 'Изток (И)', 'Югоизток (ЮИ)', 'Юг (Ю)', 'Югозапад (ЮЗ)', 'Запад (З)', 'Северозапад (СЗ)'];
+        $compassDir = $compassDirs[(int) round(fmod($trackDeg, 360) / 45) % 8];
+
+        $angDist = 15 * ($speedKmh / 60) / 111.12;
+        $lat2R = asin(sin($lat1R) * cos(deg2rad($angDist)) + cos($lat1R) * sin(deg2rad($angDist)) * cos($brgR));
+        $lon2R = $lon1R + atan2(sin($brgR) * sin(deg2rad($angDist)) * cos($lat1R), cos(deg2rad($angDist)) - sin($lat1R) * sin($lat2R));
+        $projLat = round(rad2deg($lat2R), 4);
+        $projLon = round(rad2deg($lon2R), 4);
+        $dist15MinKm = round(($speedKmh / 60) * 15);
+
+        $waypoints = [
+            ['name' => 'Плевен / Долна Митрополия (LBPL)', 'lat' => 43.451, 'lon' => 24.503],
+            ['name' => 'Горна Оряховица (LBGO)', 'lat' => 43.151, 'lon' => 25.713],
+            ['name' => 'София (LBSF)', 'lat' => 42.695, 'lon' => 23.406],
+            ['name' => 'Граф Игнатиево / Пловдив (LBPG)', 'lat' => 42.290, 'lon' => 24.714],
+            ['name' => 'Безмер / Ямбол (LBIA)', 'lat' => 42.455, 'lon' => 26.352],
+            ['name' => 'Варна (LBWN)', 'lat' => 43.232, 'lon' => 27.825],
+            ['name' => 'Бургас (LBBG)', 'lat' => 42.570, 'lon' => 27.515],
+            ['name' => 'Букурещ Отопени (LROP)', 'lat' => 44.571, 'lon' => 26.085],
+            ['name' => 'Констанца / М. Когълничану (LRCK)', 'lat' => 44.362, 'lon' => 28.488],
+            ['name' => 'Крайова (LRCV)', 'lat' => 44.318, 'lon' => 23.888],
+            ['name' => 'Белград (LYBE)', 'lat' => 44.818, 'lon' => 20.309],
+            ['name' => 'Истанбул (LTFM)', 'lat' => 41.275, 'lon' => 28.751],
+        ];
+
+        $headingTargets = [];
+        foreach ($waypoints as $wp) {
+            $dLon = deg2rad($wp['lon'] - $planeLon);
+            $y = sin($dLon) * cos(deg2rad($wp['lat']));
+            $x = cos($lat1R) * sin(deg2rad($wp['lat'])) - sin($lat1R) * cos(deg2rad($wp['lat'])) * cos($dLon);
+            $wpBrg = fmod(rad2deg(atan2($y, $x)) + 360.0, 360.0);
+
+            $diff = abs($trackDeg - $wpBrg);
+            if ($diff > 180.0) {
+                $diff = 360.0 - $diff;
+            }
+
+            $wpDistKm = round(6371.0 * acos(min(1.0, max(-1.0, sin($lat1R) * sin(deg2rad($wp['lat'])) + cos($lat1R) * cos(deg2rad($wp['lat'])) * cos($dLon)))));
+
+            if ($diff <= 22.0 && $wpDistKm >= 8 && $wpDistKm <= 450) {
+                $etaMin = $speedKmh > 40 ? (int) round(($wpDistKm / $speedKmh) * 60) : 0;
+                $headingTargets[] = "{$wp['name']} (на {$wpDistKm} км, след ~{$etaMin} мин)";
+            }
+        }
+
+        $vectorSummary = !empty($headingTargets)
+            ? 'Насочен по курс към: ' . implode(' / ', array_slice($headingTargets, 0, 2))
+            : "Транзитен коридор на {$compassDir} (след 15 мин на {$dist15MinKm} км -> коорд. {$projLat}, {$projLon})";
+
         $prompt = <<<PROMPT
-Ти си началник на разузнавателен център за ПВО и OSINT.
-Разполагаш с обединена телеметрия от 5 външни сензорни API-та в реално време + Google Search. Направи извънземно точен, експертен анализ без общи приказки:
+Ти си началник на разузнавателен център.
+Разполагаш с обединена телеметрия от 5 външни сензорни API-та в реално време + Google Search (ADSBdb, HexDB, Airplanes.live, Open-Meteo). Направи извънземно точен, експертен анализ без общи приказки:
 
 [1. ДОСИЕ ОТ РЕГИСТРИТЕ (ADSBdb + HexDB)]
 - Позивна: {$csDisplay} | ICAO HEX: {$hex} | Бордна регистрация: {$osintReg} ({$osintCountry})
@@ -567,19 +620,19 @@ class RadarController extends AbstractController
 - Официален маршрут: {$osintRoute}
 
 [2. КИНЕМАТИКА, РЕЛЕФ И МЕТЕО НА ЕШЕЛОНА (Open-Meteo + Airplanes.live)]
-- Пеленг спрямо Радишево: Азимут {$aziDeg}°, Дистанция {$distKm} км
+- Изчислен вектор движение и накъде отива: {$vectorSummary}
 - Барометрична височина: {$altM} м | Надморска височина на терена отдолу: {$terrainElevationM} м -> РЕАЛНА ВИСОЧИНА НАД РЕЛЕФА (AGL): {$aglMeters} м
-- Пътна скорост (GS): {$speedKmh} км/ч, Курс: {$trackDeg}° | {$windInfo}
+- Пътна скорост (GS): {$speedKmh} км/ч, Курс: {$trackDeg}° ({$compassDir}) | {$windInfo}
 - Автопилот и бордова телеметрия: {$telemetryNote}
 - Геометрия на следата: {$maneuverProfile}
 - Радиолокационна видимост: {$horizonStatus}
 - Транспондер (Squawk): {$squawk} ({$squawkNote})
 
-Изведи анализа на български точно в тези 4 кратки и ударни точки:
+Изведи анализа на български точно в тези 4 кратки и ударни точки (без звездички за удебеляване):
 1. ИДЕНТИФИКАЦИЯ И МИСИЯ: (Точен борд {$osintReg}, машина, база/оператор и дали полетът "{$csDisplay}" е редовен по разписание, чартър, карго или специална/военна задача).
-2. АЕРОДИНАМИКА, РЕЛЕФ И АВТОПИЛОТ: (Коментирай реалната височина над терена AGL {$aglMeters}м, истинската скорост/Mach спрямо вятъра и какво прави автопилотът/следата - изкачване, снижение към конкретно летище, транзит или орбита).
-3. РАДИОЛОКАЦИОНЕН И SQUAWK СТАТУС: (Оцени радиохоризонта спрямо Радишево, точността на GPS/NIC и кода {$squawk}).
-4. ОПЕРАТИВНА ОЦЕНКА НА ДЕЖУРНИЯ: (1 категорично заключение за характера на целта).
+2. НАКЪДЕ ОТИВА, АЕРОДИНАМИКА И АВТОПИЛОТ: (Кажи ясно откъде и за къде лети самолетът според маршрута "{$osintRoute}" и изчисления вектор "{$vectorSummary}", коментирай реалната височина над терена AGL {$aglMeters}м, истинската скорост/Mach спрямо вятъра и какво прави автопилотът/следата).
+3. РАДИОЛОКАЦИОНЕН И SQUAWK СТАТУС: (Оцени радиохоризонта, точността на GPS/NIC и кода {$squawk}).
+4. ОПЕРАТИВНА ОЦЕНКА НА ДЕЖУРНИЯ: (1 категорично заключение за характера на целта и очакваното ѝ движение).
 PROMPT;
 
         $models = [

@@ -586,7 +586,7 @@
                     <span class="live-dot"></span>
                     <span id="modeText">LIVE</span>
                 </span>
-                <span id="gpsText" style="color:#00e5ff;">📍 Позиция 1</span>
+
             </div>
             <div class="status-right">
                 <span>ЦЕЛИ: <strong id="planesCount" style="color:#ffdd00;">0</strong></span>
@@ -596,8 +596,6 @@
         </div>
 
         <div class="controls-compact-bar">
-            <button class="radar-btn loc-btn active" id="locRadishevo" onclick="setBaseLocation(43.3664995, 24.6621337, 'Позиция 1', 'locRadishevo')">📍 Позиция 1</button>
-            <button class="radar-btn loc-btn" id="locEmona" onclick="setBaseLocation(42.70260944933075, 27.89720568192577, 'Позиция 2', 'locEmona')">🌊 Позиция 2</button>
             <button class="radar-btn loc-btn" id="locGps" onclick="activateRealGps()">📡 GPS</button>
             <button class="radar-btn loc-btn" id="locManual" onclick="promptManualCoords()">✍️ КООРД.</button>
             <button class="radar-btn" id="btn-gyro" onclick="toggleGyroCompass()">🧭 0° ИСТ.</button>
@@ -663,11 +661,10 @@
 <script>
     let myLat = 43.3664995;
     let myLon = 24.6621337;
-    let myBaseName = 'с. Радишево';
+    let myBaseName = 'Позиция   ';
     let gpsWatchId = null;
 
-    let azimuthOffsetDeg = parseFloat(localStorage.getItem('radar_azimuth_offset_deg') || '0') || 0.0;
-
+    let azimuthOffsetDeg = parseFloat(localStorage.getItem('radar_azimuth_offset_deg') || '-5.6') || -5.6;
     function getAzimuthCorrectionDeg() {
         return azimuthOffsetDeg;
     }
@@ -1769,7 +1766,7 @@
             return;
         }
 
-        box.innerText = '🧠 Събиране на OSINT телеметрия и генериране на тактически анализ...';
+        box.innerText = '🧠 Събиране  телеметрия и генериране на тактически анализ...';
         box.scrollTop = 0;
 
         try {
@@ -1918,7 +1915,7 @@
 
         <div class="card-actions-row">
             <button class="auto-track-btn ${pinData ? 'active' : ''}" onclick="autoAssignNextTrack('${p.id}')">${autoBtnText}</button>
-            <button class="ai-intel-btn" onclick="requestAiBrief('${p.id}')">🧠 АНАЛИЗ</button>
+            <button class="ai-intel-btn" onclick="requestAiBrief('${p.id}')">AI АНАЛИЗ</button>
             <button class="toggle-card-slots-btn" onclick="toggleCardSlots()">🎛️ СЛОТОВЕ</button>
         </div>
 
