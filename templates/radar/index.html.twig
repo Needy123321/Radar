@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Радар БГ">
     <title>ТАКТИЧЕСКИ ВЪЗДУШЕН РАДАР - БЪЛГАРИЯ</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
@@ -683,7 +686,6 @@
     let myBaseName = 'Позиция';
     let gpsWatchId = null;
 
-    // По подразбиране азимутът е зададен на -5.5° за магнитния север
     let savedAzi = localStorage.getItem('radar_azimuth_offset_deg_v2');
     let azimuthOffsetDeg = savedAzi !== null ? parseFloat(savedAzi) : -5.6;
     if (isNaN(azimuthOffsetDeg)) azimuthOffsetDeg = -5.6;
@@ -879,16 +881,21 @@
             const parsed = JSON.parse(savedPins);
             ALL_SLOTS.forEach(s => {
                 if (parsed[s] && parsed[s].id) {
+                    const tNum = Number(parsed[s].trackNum) || s;
                     pinnedTargets[s] = {
                         ...parsed[s],
-                        trackNum: Number(parsed[s].trackNum) || s
+                        trackNum: tNum
                     };
+                    if (tNum > highestTrackNumber) highestTrackNumber = tNum;
                 } else {
                     pinnedTargets[s] = null;
                 }
             });
         }
-        if (savedCounter) highestTrackNumber = parseInt(savedCounter, 10) || 0;
+        if (savedCounter) {
+            const parsedCounter = parseInt(savedCounter, 10) || 0;
+            if (parsedCounter > highestTrackNumber) highestTrackNumber = parsedCounter;
+        }
         if (savedCursor) nextSlotCursor = parseInt(savedCursor, 10) || 1;
     } catch (e) {}
 
@@ -919,6 +926,36 @@
             }
         }
         return null;
+    }
+
+    function getNextTrackAssignment() {
+        let maxOccupiedSlot = 0;
+        let maxTrackNum = highestTrackNumber;
+
+        for (let s of ALL_SLOTS) {
+            if (pinnedTargets[s] !== null) {
+                if (s > maxOccupiedSlot) maxOccupiedSlot = s;
+                const tNum = Number(pinnedTargets[s].trackNum) || s;
+                if (tNum > maxTrackNum) maxTrackNum = tNum;
+            }
+        }
+
+        if (maxOccupiedSlot === 0) {
+            return { slot: 1, trackNum: 1 };
+        }
+
+        const nextTrackNum = maxTrackNum + 1;
+
+        if (maxOccupiedSlot < TOTAL_PIN_SLOTS && nextTrackNum <= TOTAL_PIN_SLOTS) {
+            return { slot: maxOccupiedSlot + 1, trackNum: nextTrackNum };
+        }
+
+        const freeSlot = ALL_SLOTS.find(s => pinnedTargets[s] === null);
+        if (freeSlot) {
+            return { slot: freeSlot, trackNum: nextTrackNum };
+        }
+
+        return { slot: nextSlotCursor, trackNum: nextTrackNum };
     }
 
     window.toggleExpandSlots = function() {
@@ -1038,12 +1075,18 @@
 
             for (let s = freeRightSlot; s > finalSlot; s--) {
                 pinnedTargets[s] = pinnedTargets[s - 1];
-                if (pinnedTargets[s]) pinnedTargets[s].trackNum = s;
+                if (pinnedTargets[s] && Number(pinnedTargets[s].trackNum) <= TOTAL_PIN_SLOTS) {
+                    pinnedTargets[s].trackNum = s;
+                }
             }
         }
 
-        movingPlane.trackNum = finalSlot;
-        if (finalSlot > highestTrackNumber) highestTrackNumber = finalSlot;
+        if (!movingPlane.trackNum || movingPlane.trackNum <= TOTAL_PIN_SLOTS) {
+            movingPlane.trackNum = finalSlot;
+        }
+        if (movingPlane.trackNum > highestTrackNumber) {
+            highestTrackNumber = movingPlane.trackNum;
+        }
 
         pinnedTargets[finalSlot] = movingPlane;
         finishPinChange();
@@ -1134,18 +1177,12 @@
             pinnedTargets[existing.slot] = null;
             checkAutoResetCounter();
         } else {
-            let targetSlot = ALL_SLOTS.find(s => pinnedTargets[s] === null);
-            let trackNumToUse;
+            const nextAssign = getNextTrackAssignment();
+            const targetSlot = nextAssign.slot;
+            const trackNumToUse = nextAssign.trackNum;
 
-            if (targetSlot) {
-                trackNumToUse = targetSlot;
-                if (trackNumToUse > highestTrackNumber) highestTrackNumber = trackNumToUse;
-            } else {
-                targetSlot = nextSlotCursor;
-                highestTrackNumber++;
-                trackNumToUse = highestTrackNumber;
-                nextSlotCursor = (targetSlot % TOTAL_PIN_SLOTS) + 1;
-            }
+            highestTrackNumber = Math.max(highestTrackNumber, trackNumToUse);
+            nextSlotCursor = (targetSlot % TOTAL_PIN_SLOTS) + 1;
 
             const pl = planes.find(p => String(p.id).toLowerCase() === String(planeId).toLowerCase());
             pinnedTargets[targetSlot] = {
@@ -1161,7 +1198,7 @@
         savePinState();
         updatePinnedBarUI();
         if (selectedPlaneId) {
-            const sel = planes.find(p => p.id === selectedPlaneId);
+            const sel = planes.find(p => String(p.id).toLowerCase() === String(selectedPlaneId).toLowerCase());
             if (sel) updateInfoPanelHTML(sel);
         }
     };
@@ -1192,7 +1229,6 @@
         }
     };
 
-    // Връща само чистия транспондер/позивна без номер на слот
     function getBasePlaneCode(plane) {
         const sqk = String(plane.squawk || '').trim();
         if (sqk !== '' && sqk !== '----' && sqk !== '0000') {
@@ -1208,7 +1244,6 @@
         return String(plane.id || '').replace(/^fr_/i, '').toUpperCase().slice(0, 6);
     }
 
-    // Връща етикета за радарната карта: ако е маркиран -> "1 6251", "2 3216" и т.н.
     function getBestPlaneLabel(plane, includePinNumber = true) {
         const baseCode = getBasePlaneCode(plane);
         if (!includePinNumber) return baseCode;
@@ -1266,8 +1301,9 @@
         }
 
         if (stateChanged) savePinState();
-        const nextEmpty = ALL_SLOTS.find(s => pinnedTargets[s] === null) || nextSlotCursor;
-        const swapHint = swapSourceSlot ? ` | Преместване от слот #${swapSourceSlot}` : ` | Следв: #${nextEmpty}`;
+        const nextAssign = getNextTrackAssignment();
+        const slotSuffix = nextAssign.trackNum !== nextAssign.slot ? ` (С${nextAssign.slot})` : '';
+        const swapHint = swapSourceSlot ? ` | Преместване от слот #${swapSourceSlot}` : ` | Следв: #${nextAssign.trackNum}${slotSuffix}`;
         document.getElementById('trackCounterInfo').innerText = `🎯 МАРКИРАНИ: ${activePinnedCount}/${TOTAL_PIN_SLOTS}${swapHint}`;
     }
 
@@ -1337,7 +1373,18 @@
         const y = Math.sin(dLon) * Math.cos(lat2 * Math.PI / 180);
         const x = Math.cos(lat1 * Math.PI / 180) * Math.sin(lat2 * Math.PI / 180) - Math.sin(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.cos(dLon);
         const trueAzi = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
-        return Math.round((trueAzi + getAzimuthCorrectionDeg() + 360) % 360);
+
+        // Базовата поправка от бутона горе (напр. -5.6°)
+        let azi = (trueAzi + getAzimuthCorrectionDeg() + 360) % 360;
+
+        // Секторна калибровка: от 0° до 180° вадим 4°, от 180° до 360° вадим 2°
+        if (azi >= 0 && azi <= 180) {
+            azi = (azi - 4 + 360) % 360;
+        } else {
+            azi = (azi - 2 + 360) % 360;
+        }
+
+        return Math.round(azi) % 360;
     }
 
     function getInterpolatedLatLon(plane, nowMs) {
@@ -1719,7 +1766,6 @@
 
             drawRealisticPlane(screenPt.x, screenPt.y, plane.track, isMil, isSelected, pinData, nowMs);
 
-            // getBestPlaneLabel автоматично слага "1 ", "2 ", "3 " пред транспондера, ако е маркиран!
             const labelText = getBestPlaneLabel(plane, true);
 
             ctx.save();
@@ -1736,6 +1782,9 @@
             ctx.lineWidth = pinData ? 1.5 : 1;
             ctx.fillRect(screenPt.x + 13, screenPt.y - 9, boxW, boxH);
             ctx.strokeRect(screenPt.x + 13, screenPt.y - 9, boxW, boxH);
+
+            // Запазваме ширината на етикета, за да може да се цъка и директно върху номера!
+            plane.boxW = boxW;
 
             if (pinData) ctx.fillStyle = '#ffffff';
             else if (isMil) ctx.fillStyle = '#ff5555';
@@ -1759,18 +1808,36 @@
         }
     };
 
-    map.on('click', function(e) {
+    function handleRadarTap(clickX, clickY) {
         closeTimeMachine();
-        const clickX = e.containerPoint.x;
-        const clickY = e.containerPoint.y;
-        let closest = null, minDist = 28;
+        let closest = null;
+        let minDist = 55; // Широк обхват за пръст на телефон
 
         planes.forEach(p => {
             const isMil = isMilitaryPlane(p);
             const pinData = getPinDataForPlane(p.id);
             if (milOnlyFilter && !isMil && !pinData) return;
-            const d = Math.hypot((p.screenX || 0) - clickX, (p.screenY || 0) - clickY);
-            if (d < minDist) { minDist = d; closest = p; }
+
+            const px = p.screenX || 0;
+            const py = p.screenY || 0;
+            const bw = p.boxW || 44;
+
+            // Проверка дали пръстът е попаднал върху черната табелка с номера (с 10px буфер)
+            const hitLabelBox = (
+                clickX >= (px + 4) &&
+                clickX <= (px + 22 + bw) &&
+                clickY >= (py - 18) &&
+                clickY <= (py + 18)
+            );
+
+            const distPlane = Math.hypot(px - clickX, py - clickY);
+            const distLabel = Math.hypot((px + 13 + bw / 2) - clickX, py - clickY);
+            const d = hitLabelBox ? Math.min(distPlane, distLabel) * 0.35 : Math.min(distPlane, distLabel);
+
+            if (d < minDist) {
+                minDist = d;
+                closest = p;
+            }
         });
 
         if (closest) {
@@ -1779,7 +1846,49 @@
         } else {
             closeInfoPanel();
         }
+    }
+
+    // 1. За компютър с мишка:
+    let lastTouchTime = 0;
+    map.on('click', function(e) {
+        if (Date.now() - lastTouchTime < 500) return; // Предотвратява двойно сработване на телефон
+        handleRadarTap(e.containerPoint.x, e.containerPoint.y);
     });
+
+    // 2. Директно прихващане за тъчскрийн на телефон (Android / iPhone):
+    const mapEl = document.getElementById('terrainMap');
+    let touchStartX = 0, touchStartY = 0, touchMoved = false;
+
+    mapEl.addEventListener('touchstart', function(e) {
+        if (e.touches.length === 1) {
+            touchStartX = e.touches[0].clientX;
+            touchStartY = e.touches[0].clientY;
+            touchMoved = false;
+        } else {
+            touchMoved = true; // Игнорираме при зуум с два пръста (pinch-to-zoom)
+        }
+    }, { passive: true });
+
+    mapEl.addEventListener('touchmove', function(e) {
+        if (e.touches.length === 1) {
+            const dx = e.touches[0].clientX - touchStartX;
+            const dy = e.touches[0].clientY - touchStartY;
+            // Ако пръстът се мръдне под 14 пиксела, пак го броим за цъкане, а не за местене!
+            if (Math.hypot(dx, dy) > 14) {
+                touchMoved = true;
+            }
+        }
+    }, { passive: true });
+
+    mapEl.addEventListener('touchend', function(e) {
+        if (!touchMoved && e.changedTouches.length === 1) {
+            lastTouchTime = Date.now();
+            const rect = mapEl.getBoundingClientRect();
+            const x = e.changedTouches[0].clientX - rect.left;
+            const y = e.changedTouches[0].clientY - rect.top;
+            handleRadarTap(x, y);
+        }
+    }, { passive: true });
 
     async function fetchRealPlanePhoto(planeId) {
         if (!planeId || String(planeId).startsWith('fr_')) {
@@ -1854,7 +1963,7 @@
             return;
         }
 
-        box.innerHTML = '<span style="color:#00e5ff;">🧠 Събиране на данни  и генериране на тактически анализ...</span>';
+        box.innerHTML = '<span style="color:#00e5ff;">🧠 Събиране на данни и генериране на тактически анализ...</span>';
         box.scrollTop = 0;
 
         try {
@@ -1922,11 +2031,12 @@
 
         const pinData = getPinDataForPlane(p.id);
         const currentPinSlot = pinData ? pinData.slot : null;
-        const nextAutoNum = ALL_SLOTS.find(s => pinnedTargets[s] === null) || (highestTrackNumber + 1);
+        const nextAssign = getNextTrackAssignment();
+        const slotHint = nextAssign.trackNum !== nextAssign.slot ? ` (С${nextAssign.slot})` : '';
 
         const autoBtnText = pinData
             ? `🎯 ЦЕЛ #${pinData.trackNum} (С${pinData.slot}) [МАХНИ]`
-            : `📌 МАРКИРАЙ КАТО ЦЕЛ #${nextAutoNum}`;
+            : `📌 МАРКИРАЙ КАТО ЦЕЛ #${nextAssign.trackNum}${slotHint}`;
 
         let slotButtonsHtml = '';
 
