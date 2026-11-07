@@ -15,7 +15,7 @@ class RadarController extends AbstractController
     private const MAX_HISTORY_FRAMES = 120;
     private const SEARCH_RADIUS_NM = 250;
 
-    // Максимална възраст на позицията в секунди (реже фантоми)
+    // Максимална възраст на позицията за граждански цели (за военни е 180 сек)
     private const MAX_POS_AGE_SEC = 60.0;
 
     #[Route('/', name: 'app_home')]
@@ -169,7 +169,7 @@ class RadarController extends AbstractController
                 }
             }
 
-            // 2. Публичен MLAT/ADS-B фийд от Flightradar24 (хваща PC-9M и местните приемници в БГ)
+            // 2. Публичен MLAT/ADS-B фийд от Flightradar24 (хваща PC-9M, L-39 и нисколетящи машини в БГ)
             if (!$this->providerIsCoolingDown('fr24')) {
                 $fr24Url = $this->buildFr24Url($centerLat, $centerLon);
                 $frRes = $this->curlFetch($fr24Url, true);
@@ -338,7 +338,7 @@ class RadarController extends AbstractController
         $route    = trim((string) ($payload['route'] ?? 'Няма данни'));
         $trailPts = is_array($payload['trail'] ?? null) ? array_slice($payload['trail'], -15) : [];
 
-        // 0. СЪРВЪРЕН КЕШ ЗА 10 МИНУТИ (600 сек) - пести токени при повторни заявки за същия борд
+        // 0. СЪРВЪРЕН КЕШ ЗА 10 МИНУТИ (600 сек) - пести токени и пази от спам
         $safeHex = preg_replace('/[^a-zA-Z0-9_-]/', '', $hexLower);
         $aiCacheFile = sys_get_temp_dir() . '/radar_ai_brief_' . $safeHex . '.txt';
         if ($safeHex !== '' && is_file($aiCacheFile) && (time() - (int) @filemtime($aiCacheFile)) < 600) {
@@ -348,12 +348,11 @@ class RadarController extends AbstractController
             }
         }
 
-        // Текущи координати на целта
         $lastPt   = !empty($trailPts) ? end($trailPts) : null;
         $planeLat = (float) ($payload['lat'] ?? ($lastPt['lat'] ?? 43.3665));
         $planeLon = (float) ($payload['lon'] ?? ($lastPt['lon'] ?? 24.6621));
 
-        // 1. ПАРАЛЕЛНО ИЗТЕГЛЯНЕ ОТ 5 ВЪНШНИ РАЗУЗНАВАТЕЛНИ API-ТА НАВЕДНЪЖ (~0.4 сек)
+        // 1. ПАРАЛЕЛНО ИЗТЕГЛЯНЕ ОТ 5 ВЪНШНИ РАЗУЗНАВАТЕЛНИ API-ТА НАВЕДНЪЖ
         $osintQueries = [];
         if ($hex !== '' && !str_starts_with($hex, 'FR_')) {
             $osintQueries[] = [
@@ -615,7 +614,7 @@ class RadarController extends AbstractController
             ? 'Насочен по курс към: ' . implode(' / ', array_slice($headingTargets, 0, 2))
             : "Транзитен коридор на {$compassDir} (след 15 мин на {$dist15MinKm} км -> коорд. {$projLat}, {$projLon})";
 
-        // 8. СТРУКТУРИРАН ПРОМПТ (Пести входни токени и забранява английските чернови)
+        // 8. СТРУКТУРИРАН ПРОМПТ
         $promptLines = [
             "Ти си началник на разузнавателен център за ПВО и OSINT.",
             "Направи извънземно точен експертен анализ САМО на български език (БЕЗ английски думи и БЕЗ звездички за удебеляване):",
@@ -642,14 +641,14 @@ class RadarController extends AbstractController
         ];
         $prompt = implode("\n", $promptLines);
 
-        // 9. СПИСЪК С МОДЕЛИ (с 6-часов кеш за listModels, за да не хабим заявки на всеки клик)
+        // 9. СПИСЪК С МОДЕЛИ
         $models = [
-            'gemini-3.5-flash-lite',
-            'gemini-3.0-flash',
-            'gemini-3.5-flash',
             'gemini-2.5-flash',
             'gemini-2.5-flash-lite',
             'gemini-2.0-flash',
+            'gemini-3.5-flash-lite',
+            'gemini-3.0-flash',
+            'gemini-3.5-flash',
         ];
 
         $modelsCacheFile = sys_get_temp_dir() . '/radar_gemini_models_cache.json';
@@ -687,7 +686,6 @@ class RadarController extends AbstractController
             }
         }
 
-        // Пускаме Google Search инструмент само ако самолетът е военен или нямаме маршрут от ADSBdb (пести огромна квота!)
         $needGoogleSearch = $isMil
             || $osintRoute === 'Няма данни'
             || stripos($osintRoute, 'не е публикуван') !== false
@@ -710,7 +708,6 @@ class RadarController extends AbstractController
                     'generationConfig' => [
                         'temperature'     => 0.2,
                         'maxOutputTokens' => 1024,
-                        // Нулираме скритото мислене, за да не изяжда токените и да не реже текста до Point 4!
                         'thinkingConfig'  => [
                             'thinkingBudget' => 0,
                         ],
@@ -740,7 +737,6 @@ class RadarController extends AbstractController
                 $curlErr = curl_error($ch);
                 curl_close($ch);
 
-                // Ако конкретният модел не приема thinkingConfig (HTTP 400), веднага повтаряме без него
                 if ($code === 400 && isset($bodyPayload['generationConfig']['thinkingConfig'])) {
                     unset($bodyPayload['generationConfig']['thinkingConfig']);
                     $ch = curl_init($url);
@@ -767,7 +763,6 @@ class RadarController extends AbstractController
                     $parts   = $decoded['candidates'][0]['content']['parts'] ?? [];
                     $text    = '';
                     foreach ($parts as $part) {
-                        // Пропускаме мисловните чернови (thought === true), взимаме само чистия отговор
                         if (isset($part['text']) && empty($part['thought'])) {
                             $text .= $part['text'];
                         }
@@ -800,7 +795,7 @@ class RadarController extends AbstractController
             }
         }
 
-        // 10. АВТОМАТИЧЕН ЛОКАЛЕН СИНТЕЗ ПРИ ИЗЧЕРПАНИ ТОКЕНИ (Никога не оставя празен екран!)
+        // 10. АВТОМАТИЧЕН ЛОКАЛЕН СИНТЕЗ ПРИ ИЗЧЕРПАНИ ТОКЕНИ
         $fallbackBrief = "1. ИДЕНТИФИКАЦИЯ И МИСИЯ: Борд {$osintReg} ({$osintCountry}), машина {$osintFullType}, оператор: {$operator} ({$milStatusText}). Позивна: {$csDisplay}.\n"
             . "2. НАКЪДЕ ОТИВА, АЕРОДИНАМИКА И АВТОПИЛОТ: Маршрут: {$osintRoute}. {$vectorSummary}. Реална височина над релефа AGL: {$aglMeters} м (барометрична {$altM} м), пътна скорост {$speedKmh} км/ч, курс {$trackDeg}° ({$compassDir}). {$windInfo}. {$telemetryNote}.\n"
             . "3. РАДИОЛОКАЦИОНЕН И SQUAWK СТАТУС: Транспондер {$squawk} ({$squawkNote}). {$horizonStatus}. Следа: {$maneuverProfile}.\n"
@@ -809,10 +804,6 @@ class RadarController extends AbstractController
         return new JsonResponse(['brief' => $fallbackBrief]);
     }
 
-    /**
-     * Записва историята в лек Ring Buffer от отделни слот файлове (~60KB всеки),
-     * така че PHP никога да не превишава RAM лимита и да не връща 502 Bad Gateway.
-     */
     private function appendHistorySnapshot(string $cacheDir, int $timestamp, array $planes): void
     {
         $indexFile = $cacheDir . '/radar_history_index.json';
@@ -1004,7 +995,7 @@ class RadarController extends AbstractController
         $west  = max(-180.0, round($lon - 6.5, 2));
         $east  = min(180.0, round($lon + 6.5, 2));
 
-        return "https://data-cloud.flightradar24.com/zones/fcgi/feed.js?bounds={$north},{$south},{$west},{$east}&faa=1&satellite=1&mlat=1&flarm=1&adsb=1&gnd=0&air=1&vehicles=0&estimated=0&maxage=60&gliders=1&stats=0";
+        return "https://data-cloud.flightradar24.com/zones/fcgi/feed.js?bounds={$north},{$south},{$west},{$east}&faa=1&satellite=1&mlat=1&flarm=1&adsb=1&gnd=1&air=1&vehicles=0&estimated=0&maxage=60&gliders=1&stats=0";
     }
 
     private function buildOpenSkyUrl(float $lat, float $lon, float $radiusNm): string
@@ -1062,30 +1053,6 @@ class RadarController extends AbstractController
                 continue;
             }
 
-            $altRaw = $ac['alt_baro'] ?? $ac['alt_geom'] ?? $ac['alt'] ?? 0;
-            if ($altRaw === 'ground' || !empty($ac['ground'])) {
-                continue;
-            }
-
-            $seenPos = (float) ($ac['seen_pos'] ?? $ac['seen'] ?? 0.5);
-            if ($seenPos > self::MAX_POS_AGE_SEC) {
-                continue;
-            }
-
-            $lat = $ac['lat'] ?? $ac['latitude'] ?? null;
-            $lon = $ac['lon'] ?? $ac['longitude'] ?? null;
-
-            if (!is_numeric($lat) || !is_numeric($lon)) {
-                continue;
-            }
-
-            $lat = (float) $lat;
-            $lon = (float) $lon;
-
-            if (abs($lat - $centerLat) > 5.5 || abs($lon - $centerLon) > 7.5) {
-                continue;
-            }
-
             $id = strtolower(trim((string) ($ac['hex'] ?? $ac['icao24'] ?? '')));
             if ($id === '' || str_starts_with($id, '~')) {
                 continue;
@@ -1102,11 +1069,51 @@ class RadarController extends AbstractController
                 || (((int) ($ac['dbFlags'] ?? 0) & 1) === 1)
                 || $this->isKnownMilitary($id, $rawCallsign, $squawk, $aircraftType, $operator, $desc, $reg);
 
-            $altitudeMeters = is_numeric($altRaw) ? (int) round((float) $altRaw * 0.3048) : 0;
-            $speedKnots = (float) ($ac['gs'] ?? $ac['spd'] ?? 0);
+            // За военни машини (МиГ-29, L-39) позволяваме до 180 сек памет на позицията при нисък полет
+            $seenPos = (float) ($ac['seen_pos'] ?? ($ac['lastPosition']['seen_pos'] ?? ($ac['seen'] ?? 0.5)));
+            $maxAllowedAge = $isMil ? 180.0 : self::MAX_POS_AGE_SEC;
+            if ($seenPos > $maxAllowedAge) {
+                continue;
+            }
+
+            // 1. Точни ADS-B / MLAT координати
+            // 2. lastPosition (последната MLAT точка преди снижаване/вираж)
+            // 3. rr_lat / rr_lon (център на приемника при чист Mode-S без MLAT)
+            $lat = $ac['lat']
+                ?? $ac['latitude']
+                ?? ($ac['lastPosition']['lat'] ?? null)
+                ?? ($ac['rr_lat'] ?? null);
+
+            $lon = $ac['lon']
+                ?? $ac['longitude']
+                ?? ($ac['lastPosition']['lon'] ?? null)
+                ?? ($ac['rr_lon'] ?? null);
+
+            $isModeSApproximate = !isset($ac['lat'], $ac['lon']) && isset($lat, $lon);
+
+            if (!is_numeric($lat) || !is_numeric($lon)) {
+                continue;
+            }
+
+            $lat = (float) $lat;
+            $lon = (float) $lon;
+
+            if (abs($lat - $centerLat) > 5.5 || abs($lon - $centerLon) > 7.5) {
+                continue;
+            }
+
+            $altBaro = $ac['alt_baro'] ?? null;
+            $altGeom = $ac['alt_geom'] ?? $ac['alt'] ?? ($ac['lastPosition']['alt_baro'] ?? 0);
+            $isOnGroundFlag = ($altBaro === 'ground' || !empty($ac['ground']));
+
+            $numericAltFeet = is_numeric($altBaro) ? (float) $altBaro : (is_numeric($altGeom) ? (float) $altGeom : 0.0);
+            $altitudeMeters = max(0, (int) round($numericAltFeet * 0.3048));
+
+            $speedKnots = (float) ($ac['gs'] ?? $ac['spd'] ?? $ac['tas'] ?? $ac['ias'] ?? 0);
             $speedKmh = (int) round($speedKnots * 1.852);
 
-            if ($altitudeMeters <= 0 && $speedKmh < 40) {
+            // Всички военни се показват винаги; гражданските се крият само ако са паркирани (< 30 км/ч на земята)
+            if (!$isMil && ($isOnGroundFlag || $altitudeMeters <= 0) && $speedKmh < 30) {
                 continue;
             }
 
@@ -1121,11 +1128,14 @@ class RadarController extends AbstractController
             }
 
             $displayCallsign = $rawCallsign !== '' ? $rawCallsign : ($reg !== '' ? $reg : strtoupper($id));
+            if ($isModeSApproximate && !str_contains($displayCallsign, 'MODE-S')) {
+                $displayCallsign .= ' [MODE-S]';
+            }
             if ($isMil && !str_contains($displayCallsign, '[ВОЕНЕН]')) {
                 $displayCallsign .= ' [ВОЕНЕН]';
             }
 
-            $track = (float) ($ac['track'] ?? $ac['true_heading'] ?? $ac['mag_heading'] ?? 0);
+            $track = (float) ($ac['track'] ?? $ac['true_heading'] ?? $ac['mag_heading'] ?? $ac['calc_track'] ?? 0);
 
             $planesMap[$id] = [
                 'id'         => $id,
@@ -1171,17 +1181,6 @@ class RadarController extends AbstractController
                 continue;
             }
 
-            $onGround = (int) ($val[14] ?? 0);
-            if ($onGround === 1) {
-                continue;
-            }
-
-            $ts = (int) ($val[10] ?? 0);
-            $age = $ts > 0 ? max(0.0, (float) ($now - $ts)) : 2.0;
-            if ($age > self::MAX_POS_AGE_SEC) {
-                continue;
-            }
-
             $hex = strtolower(trim((string) ($val[0] ?? '')));
             $id = $hex !== '' ? $hex : 'fr_' . strtolower(trim((string) $key));
 
@@ -1191,17 +1190,29 @@ class RadarController extends AbstractController
             $squawk       = trim((string) ($val[6] ?? '----'));
             $aircraftType = trim((string) ($val[8] ?? ''));
             $reg          = trim((string) ($val[9] ?? ''));
+            $ts           = (int) ($val[10] ?? 0);
+            $onGround     = (int) ($val[14] ?? 0);
             $rawCallsign  = trim((string) ($val[16] ?? $val[13] ?? ''));
             $operator     = trim((string) ($val[18] ?? ''));
 
-            $altitudeMeters = (int) round($altFeet * 0.3048);
-            $speedKmh       = (int) round($speedKnots * 1.852);
-
-            if ($altitudeMeters <= 0 && $speedKmh < 40) {
+            if ($aircraftType === 'GRND' || str_starts_with(strtoupper($rawCallsign), 'GND')) {
                 continue;
             }
 
             $isMil = $this->isKnownMilitary($hex, $rawCallsign, $squawk, $aircraftType, $operator, '', $reg);
+
+            $age = $ts > 0 ? max(0.0, (float) ($now - $ts)) : 2.0;
+            $maxAllowedAge = $isMil ? 180.0 : self::MAX_POS_AGE_SEC;
+            if ($age > $maxAllowedAge) {
+                continue;
+            }
+
+            $altitudeMeters = max(0, (int) round($altFeet * 0.3048));
+            $speedKmh       = (int) round($speedKnots * 1.852);
+
+            if (!$isMil && ($onGround === 1 || $altitudeMeters <= 0) && $speedKmh < 30) {
+                continue;
+            }
 
             $existing = $planesMap[$id] ?? null;
             if (is_array($existing)) {
@@ -1260,21 +1271,14 @@ class RadarController extends AbstractController
                 continue;
             }
 
-            if (!empty($st[8])) {
-                continue;
-            }
-
-            $posTime = (int) ($st[3] ?? $st[4] ?? 0);
-            if ($posTime > 0 && ($now - $posTime) > self::MAX_POS_AGE_SEC) {
-                continue;
-            }
-
             $id = strtolower(trim((string) ($st[0] ?? '')));
             $rawCallsign = trim((string) ($st[1] ?? ''));
             $originCountry = trim((string) ($st[2] ?? 'Граждански полет'));
+            $posTime = (int) ($st[3] ?? $st[4] ?? 0);
             $lon = $st[5] ?? null;
             $lat = $st[6] ?? null;
             $altMeters = $st[7] ?? $st[13] ?? 0;
+            $onGround = !empty($st[8]);
             $velocityMs = (float) ($st[9] ?? 0);
             $track = (float) ($st[10] ?? 0);
             $squawk = trim((string) ($st[14] ?? '----'));
@@ -1284,6 +1288,19 @@ class RadarController extends AbstractController
             }
 
             $isMil = $this->isKnownMilitary($id, $rawCallsign, $squawk, '', $originCountry);
+            $maxAllowedAge = $isMil ? 180.0 : self::MAX_POS_AGE_SEC;
+
+            if ($posTime > 0 && ($now - $posTime) > $maxAllowedAge) {
+                continue;
+            }
+
+            $speedKmh = (int) round($velocityMs * 3.6);
+            $altitudeMeters = is_numeric($altMeters) ? max(0, (int) round((float) $altMeters)) : 0;
+
+            if (!$isMil && ($onGround || $altitudeMeters <= 0) && $speedKmh < 30) {
+                continue;
+            }
+
             $displayCallsign = $rawCallsign !== '' ? $rawCallsign : strtoupper($id);
 
             if ($isMil && !str_contains($displayCallsign, '[ВОЕНЕН]')) {
@@ -1296,8 +1313,8 @@ class RadarController extends AbstractController
                 'lat'        => (float) $lat,
                 'lon'        => (float) $lon,
                 'track'      => $track,
-                'altitude'   => is_numeric($altMeters) ? (int) round((float) $altMeters) : 0,
-                'speed'      => (int) round($velocityMs * 3.6),
+                'altitude'   => $altitudeMeters,
+                'speed'      => $speedKmh,
                 'squawk'     => $squawk !== '' ? $squawk : '----',
                 'type'       => $isMil ? 'Военен борд' : 'Въздушна цел',
                 'operator'   => $originCountry,
@@ -1325,7 +1342,6 @@ class RadarController extends AbstractController
         $desc = strtoupper(trim($description));
         $regClean = strtoupper(trim($reg));
 
-        // 0. Защита: Игнорираме сигурни граждански авиокомпании
         $civilCallsigns = [
             'THY', 'WZZ', 'WMT', 'RYR', 'RYS', 'DLH', 'LZB', 'AUA', 'BAW',
             'AFR', 'KLM', 'SWR', 'EZY', 'EJU', 'TAR', 'ROT', 'ASL', 'AEE',
@@ -1338,7 +1354,6 @@ class RadarController extends AbstractController
             }
         }
 
-        // 1. Точни военни ICAO HEX диапазони
         if ($hex !== '') {
             if (
                 str_starts_with($hex, '45f4') ||
@@ -1351,17 +1366,14 @@ class RadarController extends AbstractController
             }
         }
 
-        // 2. Строго военен Squawk
         if ($squawk === '7777') {
             return true;
         }
 
-        // 3. Бордни номера на Българските ВВС
         if ($regClean !== '' && preg_match('/^(66\d|07[123]|11\d|20\d)$/', $regClean)) {
             return true;
         }
 
-        // 4. Военни позивни (Callsigns)
         $milPrefixes = [
             'BAF', 'BULAF', 'BGF', 'NATO', 'FORTE', 'LAGR', 'NCHO',
             'JAKE', 'RCH', 'RRR', 'ASCOT', 'DUKE', 'VIPER', 'COBRA',
@@ -1375,7 +1387,6 @@ class RadarController extends AbstractController
             }
         }
 
-        // 5. Военни типове самолети
         $milTypes = [
             'F16', 'C27J', 'C130', 'C30J', 'PC9', 'PC7', 'L39', 'MIG29',
             'SU25', 'UH60', 'CH47', 'MI8', 'MI17', 'MI24', 'AS32', 'AS532',
@@ -1390,7 +1401,6 @@ class RadarController extends AbstractController
             }
         }
 
-        // 6. Оператори
         $milKeywords = [
             'AIR FORCE', 'MILITARY', 'NAVY', 'ARMY', 'NATO',
             'DEFENCE', 'DEFENSE', 'LUFTWAFFE', 'GUARD',
