@@ -581,6 +581,7 @@
             gap: 4px;
         }
 
+
         .action-btn {
             background: rgba(0, 40, 0, 0.85);
             border: 1px solid #0f0;
@@ -590,6 +591,16 @@
             padding: 2px 6px;
             border-radius: 4px;
             cursor: pointer;
+        }
+        /* Копринено плавно плъзгане на самолетите всяка секунда */
+        .leaflet-marker-pane .leaflet-marker-icon {
+            transition: transform 1s linear;
+            will-change: transform;
+        }
+
+        /* Изключваме анимацията по време на зуумване на картата, за да не плуват иконките */
+        .leaflet-zoom-anim .leaflet-marker-pane .leaflet-marker-icon {
+            transition: none !important;
         }
 
         .leaflet-control-attribution { display: none !important; }
@@ -620,7 +631,7 @@
         <div class="controls-compact-bar">
             <button class="radar-btn loc-btn" id="locGps" onclick="activateRealGps()">📡 GPS</button>
             <button class="radar-btn loc-btn" id="locManual" onclick="promptManualCoords()">✍️ КООРД.</button>
-            <button class="radar-btn" id="btn-gyro" onclick="toggleGyroCompass()">🧭 -5.6° АЗИМ.</button>
+            <button class="radar-btn" id="btn-gyro" onclick="toggleGyroCompass()">3.3° АЗИМ.</button>
             <button class="radar-btn mil-btn" id="btnMilOnly">⚔️ ВОЕННИ</button>
             <button class="radar-btn active" id="btnTrails" title="Покажи/скрий следите на полетите">〰️ СЛЕДИ</button>
             <button class="radar-btn amber-btn" id="btnHistory">⏪ ИСТОРИЯ</button>
@@ -687,8 +698,8 @@
     let gpsWatchId = null;
 
     let savedAzi = localStorage.getItem('radar_azimuth_offset_deg_v2');
-    let azimuthOffsetDeg = savedAzi !== null ? parseFloat(savedAzi) : -5.6;
-    if (isNaN(azimuthOffsetDeg)) azimuthOffsetDeg = -5.6;
+    let azimuthOffsetDeg = savedAzi !== null ? parseFloat(savedAzi) : 3.3;
+    if (isNaN(azimuthOffsetDeg)) azimuthOffsetDeg = 3.3;
 
     function getAzimuthCorrectionDeg() {
         return azimuthOffsetDeg;
@@ -708,7 +719,7 @@
     }
 
     function applyNewAzimuthOffset(val) {
-        azimuthOffsetDeg = isNaN(val) ? -5.6 : val;
+        azimuthOffsetDeg = isNaN(val) ? 3.3 : val;
         try { localStorage.setItem('radar_azimuth_offset_deg_v2', String(azimuthOffsetDeg)); } catch (e) {}
         updateAzimuthButtonUI();
         planes.forEach(p => {
@@ -2340,6 +2351,143 @@
     syncHistoryMeta();
     setInterval(() => fetchPlanes(false), 5000);
     setInterval(syncHistoryMeta, 15000);
+    // === АВТОМАТИЧЕН SMOOTH INTERPOLATOR (DEAD RECKONING ВСЯКА СЕКУНДА) ===
+    (function () {
+        const trackedVectors = new Map(); // id -> { lat, lon, speed, track, isModeS }
+        const coordIndex = [];
+
+        // 1. Прихващаме всяко получаване на /api/planes, за да си запишем скоростта и курса
+        const origFetch = window.fetch;
+        window.fetch = async function (...args) {
+            const response = await origFetch.apply(this, args);
+            try {
+                const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
+                if (url.includes('/api/planes')) {
+                    response.clone().json().then(planes => {
+                        if (!Array.isArray(planes)) return;
+                        coordIndex.length = 0;
+                        planes.forEach(p => {
+                            const lat = parseFloat(p.lat);
+                            const lon = parseFloat(p.lon);
+                            if (!isFinite(lat) || !isFinite(lon)) return;
+                            const state = {
+                                id: p.id,
+                                lat: lat,
+                                lon: lon,
+                                speed: parseFloat(p.speed) || 0,
+                                track: parseFloat(p.track) || 0,
+                                isModeS: String(p.callsign || '').includes('[MODE-S]')
+                            };
+                            trackedVectors.set(p.id, state);
+                            coordIndex.push(state);
+                        });
+                    }).catch(() => {});
+                }
+            } catch (e) {}
+            return response;
+        };
+
+        // 2. Връзваме всеки Leaflet маркер със самолета му по координати при setLatLng / създаване
+        function bindMarkerToPlane(marker, latlng) {
+            const ll = L.latLng(latlng);
+            for (let i = 0; i < coordIndex.length; i++) {
+                const p = coordIndex[i];
+                if (Math.abs(p.lat - ll.lat) < 0.0002 && Math.abs(p.lon - ll.lng) < 0.0002) {
+                    marker._radarPlaneId = p.id;
+                    break;
+                }
+            }
+        }
+
+        if (typeof L !== 'undefined' && L.Marker) {
+            const origOnAdd = L.Marker.prototype.onAdd;
+            L.Marker.prototype.onAdd = function (map) {
+                window._radarLeafletMap = map;
+                bindMarkerToPlane(this, this.getLatLng());
+                return origOnAdd.call(this, map);
+            };
+
+            const origSetLatLng = L.Marker.prototype.setLatLng;
+            L.Marker.prototype.setLatLng = function (latlng) {
+                if (!this._isSmoothStep) {
+                    bindMarkerToPlane(this, latlng);
+                }
+                return origSetLatLng.call(this, latlng);
+            };
+        }
+
+        // 3. Таймер на всяка 1 секунда: мести всички самолети плавно по курса и скоростта им
+        setInterval(() => {
+            const map = window._radarLeafletMap || window.map;
+            if (!map || (typeof isHistoryMode !== 'undefined' && isHistoryMode)) return;
+
+            map.eachLayer(layer => {
+                if (!(layer instanceof L.Marker) || !layer._radarPlaneId) return;
+                const vec = trackedVectors.get(layer._radarPlaneId);
+                if (!vec || vec.isModeS || vec.speed < 40) return;
+
+                // Изминато разстояние за 1 секунда (в метри)
+                const distMeters = vec.speed / 3.6;
+                const trackRad = (vec.track * Math.PI) / 180;
+                const latRad = (vec.lat * Math.PI) / 180;
+
+                vec.lat += (distMeters * Math.cos(trackRad)) / 111320;
+                vec.lon += (distMeters * Math.sin(trackRad)) / (111320 * Math.max(0.15, Math.abs(Math.cos(latRad))));
+
+                layer._isSmoothStep = true;
+                layer.setLatLng([vec.lat, vec.lon]);
+                layer._isSmoothStep = false;
+            });
+        }, 1000);
+    })();
+    // === PLANESPOTTERS.NET СНИМКИ И РЕБ ТЕЛЕМЕТРИЯ В ИНФО ПАНЕЛА ===
+    document.addEventListener('DOMContentLoaded', () => {
+        // Наблюдаваме промените в долния инфо панел при клик на самолет
+        const observer = new MutationObserver(async (mutations) => {
+            const infoPanel = document.querySelector('.plane-info-panel, #info-panel, .info-box'); // Нагоди селектора според твоя HTML клас
+            if (!infoPanel) return;
+
+            // Намираме HEX кода или регистрацията от активния панел
+            const hexElement = infoPanel.querySelector('.plane-hex, [data-hex], .hex-code');
+            if (!hexElement) return;
+
+            const hex = hexElement.textContent.trim().toLowerCase().replace('hex:', '').trim();
+            if (!hex || hex.length < 4 || hex.startsWith('fr_')) return;
+
+            // Създаваме контейнер за снимка, ако още го няма в панела
+            let imgContainer = infoPanel.querySelector('.planespotters-photo-container');
+            if (!imgContainer) {
+                imgContainer = document.createElement('div');
+                imgContainer.className = 'planespotters-photo-container';
+                imgContainer.style.cssText = 'margin-top: 10px; text-align: center; border-radius: 6px; overflow: hidden; background: #111; padding: 4px;';
+                infoPanel.appendChild(imgContainer);
+            }
+
+            imgContainer.innerHTML = '<span style="color: #aaa; font-size: 11px;">Зареждане на снимка от базата...</span>';
+
+            try {
+                const res = await fetch(`https://api.planespotters.net/pub/photos/hex/${hex}`);
+                const data = await res.json();
+
+                if (data && data.photos && data.photos.length > 0) {
+                    const photo = data.photos[0];
+                    imgContainer.innerHTML = `
+                    <a href="${photo.link}" target="_blank" title="Виж в Planespotters.net">
+                        <img src="${photo.thumbnail_large.src}" style="width: 100%; height: 120px; object-fit: cover; border-radius: 4px;" alt="Aircraft Photo">
+                    </a>
+                    <div style="font-size: 10px; color: #888; margin-top: 2px;">© ${photo.photographer || 'Planespotters'}</div>
+                `;
+                } else {
+                    imgContainer.innerHTML = '<span style="color: #666; font-size: 10px;">Няма налична снимка за този борд</span>';
+                }
+            } catch (e) {
+                imgContainer.innerHTML = '';
+            }
+        });
+
+        const targetNode = document.body;
+        observer.observe(targetNode, { childList: true, subtree: true });
+    });
 </script>
 </body>
 </html>
