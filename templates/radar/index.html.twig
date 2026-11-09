@@ -2417,7 +2417,7 @@
         }
 
         // 3. Таймер на всяка 1 секунда: мести всички самолети плавно по курса и скоростта им
-        setInterval(() => {
+                setInterval(() => {
             const map = window._radarLeafletMap || window.map;
             if (!map || (typeof isHistoryMode !== 'undefined' && isHistoryMode)) return;
 
@@ -2440,54 +2440,77 @@
             });
         }, 1000);
     })();
-    // === PLANESPOTTERS.NET СНИМКИ И РЕБ ТЕЛЕМЕТРИЯ В ИНФО ПАНЕЛА ===
-    document.addEventListener('DOMContentLoaded', () => {
-        // Наблюдаваме промените в долния инфо панел при клик на самолет
-        const observer = new MutationObserver(async (mutations) => {
-            const infoPanel = document.querySelector('.plane-info-panel, #info-panel, .info-box'); // Нагоди селектора според твоя HTML клас
-            if (!infoPanel) return;
 
-            // Намираме HEX кода или регистрацията от активния панел
-            const hexElement = infoPanel.querySelector('.plane-hex, [data-hex], .hex-code');
-            if (!hexElement) return;
+    // === PLANESPOTTERS.NET СНИМКИ В ИНФО ПАНЕЛА (САМО ПРИ КЛИК - БЕЗ MUTATION OBSERVER) ===
+    (function () {
+        const photoCache = new Map();
+        let lastLoadedHex = '';
 
-            const hex = hexElement.textContent.trim().toLowerCase().replace('hex:', '').trim();
-            if (!hex || hex.length < 4 || hex.startsWith('fr_')) return;
+        document.addEventListener('click', () => {
+            setTimeout(async () => {
+                const bodyText = document.body.innerText || '';
+                const match = bodyText.match(/HEX:\s*([0-9A-F]{6})\b/i);
+                if (!match) return;
 
-            // Създаваме контейнер за снимка, ако още го няма в панела
-            let imgContainer = infoPanel.querySelector('.planespotters-photo-container');
-            if (!imgContainer) {
-                imgContainer = document.createElement('div');
-                imgContainer.className = 'planespotters-photo-container';
-                imgContainer.style.cssText = 'margin-top: 10px; text-align: center; border-radius: 6px; overflow: hidden; background: #111; padding: 4px;';
-                infoPanel.appendChild(imgContainer);
-            }
+                const hex = match[1].toLowerCase();
+                if (hex === lastLoadedHex) return;
+                lastLoadedHex = hex;
 
-            imgContainer.innerHTML = '<span style="color: #aaa; font-size: 11px;">Зареждане на снимка от базата...</span>';
-
-            try {
-                const res = await fetch(`https://api.planespotters.net/pub/photos/hex/${hex}`);
-                const data = await res.json();
-
-                if (data && data.photos && data.photos.length > 0) {
-                    const photo = data.photos[0];
-                    imgContainer.innerHTML = `
-                    <a href="${photo.link}" target="_blank" title="Виж в Planespotters.net">
-                        <img src="${photo.thumbnail_large.src}" style="width: 100%; height: 120px; object-fit: cover; border-radius: 4px;" alt="Aircraft Photo">
-                    </a>
-                    <div style="font-size: 10px; color: #888; margin-top: 2px;">© ${photo.photographer || 'Planespotters'}</div>
-                `;
-                } else {
-                    imgContainer.innerHTML = '<span style="color: #666; font-size: 10px;">Няма налична снимка за този борд</span>';
+                // Намираме панела, в който е изписан HEX кодът на избрания самолет
+                const allElements = document.querySelectorAll('div, span, p');
+                let targetPanel = null;
+                for (const el of allElements) {
+                    if (
+                        el.children.length === 0 &&
+                        el.textContent.includes('HEX:') &&
+                        el.textContent.toUpperCase().includes(hex.toUpperCase())
+                    ) {
+                        targetPanel = el.closest('.plane-info-panel, #info-panel, .info-box, div[style]') || el.parentElement.parentElement;
+                        break;
+                    }
                 }
-            } catch (e) {
-                imgContainer.innerHTML = '';
-            }
-        });
+                if (!targetPanel) return;
 
-        const targetNode = document.body;
-        observer.observe(targetNode, { childList: true, subtree: true });
-    });
+                let imgContainer = document.getElementById('radar-plane-photo-box');
+                if (!imgContainer) {
+                    imgContainer = document.createElement('div');
+                    imgContainer.id = 'radar-plane-photo-box';
+                    imgContainer.style.cssText = 'margin-top: 10px; text-align: center; border-radius: 6px; overflow: hidden; background: #111; padding: 4px;';
+                    targetPanel.appendChild(imgContainer);
+                }
+
+                if (photoCache.has(hex)) {
+                    imgContainer.innerHTML = photoCache.get(hex);
+                    return;
+                }
+
+                imgContainer.innerHTML = '<span style="color: #aaa; font-size: 11px;">Зареждане на снимка от базата...</span>';
+
+                try {
+                    const res = await fetch(`https://api.planespotters.net/pub/photos/hex/${hex}`);
+                    const data = await res.json();
+                    let html = '<span style="color: #666; font-size: 10px;">Няма налична снимка за този борд</span>';
+
+                    if (data && data.photos && data.photos.length > 0) {
+                        const photo = data.photos[0];
+                        html = `
+                            <a href="${photo.link}" target="_blank" rel="noopener" title="Виж в Planespotters.net">
+                                <img src="${photo.thumbnail_large.src}" style="width: 100%; height: 120px; object-fit: cover; border-radius: 4px; display: block;" alt="Aircraft Photo">
+                            </a>
+                            <div style="font-size: 10px; color: #888; margin-top: 2px;">© ${photo.photographer || 'Planespotters'}</div>
+                        `;
+                    }
+                    photoCache.set(hex, html);
+                    if (lastLoadedHex === hex) {
+                        imgContainer.innerHTML = html;
+                    }
+                } catch (e) {
+                    imgContainer.innerHTML = '';
+                }
+            }, 80);
+        });
+    })();
+
 </script>
 </body>
 </html>
