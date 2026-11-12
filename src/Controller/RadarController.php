@@ -16,6 +16,16 @@ class RadarController extends AbstractController
     private const SEARCH_RADIUS_NM = 250;
     private const MAX_POS_AGE_SEC = 60.0;
 
+    private function sub(float|int $a, float|int $b): float
+    {
+        return (float) $a - (float) $b;
+    }
+
+    private function mul(float|int $a, float|int $b): float
+    {
+        return (float) $a * (float) $b;
+    }
+
     #[Route('/', name: 'app_home')]
     public function home(): Response
     {
@@ -60,7 +70,7 @@ class RadarController extends AbstractController
         if (
             !$force &&
             is_file($cacheFile) &&
-            ($now - (int) @filemtime($cacheFile)) < self::CACHE_TTL
+            $this->sub($now, (int) @filemtime($cacheFile)) < self::CACHE_TTL
         ) {
             $cached = @file_get_contents($cacheFile);
             $decoded = is_string($cached) ? json_decode($cached, true) : null;
@@ -88,7 +98,9 @@ class RadarController extends AbstractController
             $planesMap = [];
             $providerNamesWithData = [];
 
-            // 1. Основни безлимитни ADS-B v2 потоци + Военни потоци + PIA/LADD (без бавните theairtraffic)
+            // 1. Основни безлимитни ADS-B v2 потоци + Военни потоци + PIA/LADD
+            // 1. ВСИЧКИ основни потоци (запазени на 100%, но adsb.lol са разпределени да не връщат HTTP 429)
+            // 1. ВСИЧКИ основни потоци (запазени на 100%, но adsb.lol са разпределени да не връщат HTTP 429)
             $adsbProviders = [
                 [
                     'name' => 'adsb.fi',
@@ -97,15 +109,15 @@ class RadarController extends AbstractController
                     'mil'  => false,
                 ],
                 [
+                    'name' => 'adsb.fi-mil',
+                    'base' => 'adsb.fi-mil',
+                    'url'  => 'https://opendata.adsb.fi/api/v2/mil',
+                    'mil'  => true,
+                ],
+                [
                     'name' => 'airplanes.live',
                     'base' => 'airplanes.live',
                     'url'  => "https://api.airplanes.live/v2/point/{$centerLat}/{$centerLon}/" . self::SEARCH_RADIUS_NM,
-                    'mil'  => false,
-                ],
-                [
-                    'name' => 'adsb.lol',
-                    'base' => 'adsb.lol',
-                    'url'  => "https://api.adsb.lol/v2/point/{$centerLat}/{$centerLon}/" . self::SEARCH_RADIUS_NM,
                     'mil'  => false,
                 ],
                 [
@@ -115,16 +127,10 @@ class RadarController extends AbstractController
                     'mil'  => true,
                 ],
                 [
-                    'name' => 'adsb.lol-mil',
-                    'base' => 'adsb.lol-mil',
-                    'url'  => 'https://api.adsb.lol/v2/mil',
-                    'mil'  => true,
-                ],
-                [
-                    'name' => 'adsb.fi-mil',
-                    'base' => 'adsb.fi-mil',
-                    'url'  => 'https://opendata.adsb.fi/api/v2/mil',
-                    'mil'  => true,
+                    'name' => 'adsb.lol',
+                    'base' => 'adsb.lol',
+                    'url'  => "https://api.adsb.lol/v2/point/{$centerLat}/{$centerLon}/" . self::SEARCH_RADIUS_NM,
+                    'mil'  => false,
                 ],
                 [
                     'name' => 'intelsky-mil',
@@ -132,20 +138,34 @@ class RadarController extends AbstractController
                     'url'  => 'https://intelsky.org/api/',
                     'mil'  => true,
                 ],
-                [
-                    'name' => 'adsb.lol-pia',
-                    'base' => 'adsb.lol-pia',
-                    'url'  => 'https://api.adsb.lol/v2/pia',
+            ];
+
+            // Редуваме допълнителните потоци на adsb.lol през 6 сек, за да правим макс 2 заявки наведнъж към api.adsb.lol
+            $cycle = (int) floor($now / self::CACHE_TTL);
+
+            if ($force || ($cycle % 2) === 0) {
+                // На четен цикъл (0, 12, 24 сек) теглим военните от adsb.lol-mil
+                $adsbProviders[] = [
+                    'name' => 'adsb.lol-mil',
+                    'base' => 'adsb.lol-mil',
+                    'url'  => 'https://api.adsb.lol/v2/mil',
                     'mil'  => true,
-                ],
-                [
+                ];
+            } else {
+                // На нечетен цикъл (6, 18, 30 сек) теглим LADD и PIA от adsb.lol
+                $adsbProviders[] = [
                     'name' => 'adsb.lol-ladd',
                     'base' => 'adsb.lol-ladd',
                     'url'  => 'https://api.adsb.lol/v2/ladd',
                     'mil'  => true,
-                ],
-            ];
-
+                ];
+                $adsbProviders[] = [
+                    'name' => 'adsb.lol-pia',
+                    'base' => 'adsb.lol-pia',
+                    'url'  => 'https://api.adsb.lol/v2/pia',
+                    'mil'  => true,
+                ];
+            }
             // 2. FlyItalyADS-B – с делител на честотата за пазене на дневния лимит на ключа
             $flyItalyKey = $_ENV['FLYITALYADSB_API_KEY']
                 ?? $_SERVER['FLYITALYADSB_API_KEY']
@@ -254,7 +274,7 @@ class RadarController extends AbstractController
                             $tokenFile,
                             json_encode([
                                 'access_token' => $openSkyToken,
-                                'expires_at'   => time() + $expiresIn - 60,
+                                'expires_at'   => (int) $this->sub(time() + $expiresIn, 60),
                             ]),
                             LOCK_EX
                         );
@@ -279,6 +299,18 @@ class RadarController extends AbstractController
                         ],
                     ];
                 }
+            }
+
+            // 3.5. AvioADSB Military – веднъж на 15 мин (900 сек = 96 заявки/ден при лимит 100/ден без ключ)
+            $polledAvio = false;
+            if ($force || ($now % 900) < self::CACHE_TTL) {
+                $polledAvio = true;
+                $adsbProviders[] = [
+                    'name' => 'avioadsb-mil',
+                    'base' => 'avioadsb-mil',
+                    'url'  => 'https://avioadsb.org/v1/mil',
+                    'mil'  => true,
+                ];
             }
 
             // 4. Паралелно извличане на всички активни потоци
@@ -340,7 +372,7 @@ class RadarController extends AbstractController
                     }
                 }
 
-                $added = count($planesMap) - $before;
+                $added = (int) $this->sub(count($planesMap), $before);
 
                 error_log(sprintf(
                     '[RADAR PROVIDER] %s HTTP=%d RAW=%d NEW=%d TIME=%dms',
@@ -356,9 +388,10 @@ class RadarController extends AbstractController
                 }
             }
 
-            // 5. Запазване и сливане на самолетите от токен провайдърите (OpenSky/FlyItaly)
+            // 5. Запазване и сливане на самолетите от токен провайдърите (OpenSky/FlyItaly/AvioADSB)
+            // 5. Запазване и сливане на самолетите между циклите (без никакво изчезване от екрана)
             $quotaPlanesBuffer = [];
-            if (is_file($quotaCacheFile) && ($now - (int) @filemtime($quotaCacheFile)) < 45) {
+            if (is_file($quotaCacheFile) && $this->sub($now, (int) @filemtime($quotaCacheFile)) < 90) {
                 $rawQuota = @file_get_contents($quotaCacheFile);
                 $decodedQuota = is_string($rawQuota) ? json_decode($rawQuota, true) : null;
                 if (is_array($decodedQuota)) {
@@ -366,37 +399,43 @@ class RadarController extends AbstractController
                 }
             }
 
+            $bufferedSources = [
+                'opensky',
+                'flyitaly',
+                'flyitaly-mil',
+                'avioadsb-mil',
+                'adsb.lol-mil',
+                'adsb.lol-ladd',
+                'adsb.lol-pia',
+            ];
+
             foreach ($planesMap as $id => $p) {
                 $src = $p['_source'] ?? '';
-                if (in_array($src, ['opensky', 'flyitaly', 'flyitaly-mil'], true)) {
+                if (in_array($src, $bufferedSources, true)) {
                     $quotaPlanesBuffer[$id] = $p;
                 }
             }
 
-            if (!$polledOpenSky || !$polledFlyItaly) {
-                $restoredCount = 0;
-                foreach ($quotaPlanesBuffer as $id => $qp) {
-                    if (!isset($planesMap[$id])) {
-                        $planesMap[$id] = $qp;
-                        $restoredCount++;
-                    } elseif (
-                        str_contains((string) ($planesMap[$id]['callsign'] ?? ''), '[MODE-S]') &&
-                        !str_contains((string) ($qp['callsign'] ?? ''), '[MODE-S]')
-                    ) {
-                        $qp['isMilitary'] = !empty($planesMap[$id]['isMilitary']) || !empty($qp['isMilitary']);
-                        $planesMap[$id] = $qp;
-                    }
-                }
-                if ($restoredCount > 0) {
-                    $providerNamesWithData[] = 'quota-cache';
+            $restoredCount = 0;
+            foreach ($quotaPlanesBuffer as $id => $qp) {
+                if (!isset($planesMap[$id])) {
+                    $planesMap[$id] = $qp;
+                    $restoredCount++;
+                } elseif (
+                    str_contains((string) ($planesMap[$id]['callsign'] ?? ''), '[MODE-S]') &&
+                    !str_contains((string) ($qp['callsign'] ?? ''), '[MODE-S]')
+                ) {
+                    $qp['isMilitary'] = !empty($planesMap[$id]['isMilitary']) || !empty($qp['isMilitary']);
+                    $planesMap[$id] = $qp;
                 }
             }
-
-            if ($polledOpenSky || $polledFlyItaly) {
-                @file_put_contents($quotaCacheFile, json_encode($quotaPlanesBuffer, JSON_UNESCAPED_UNICODE), LOCK_EX);
+            if ($restoredCount > 0) {
+                $providerNamesWithData[] = 'quota-cache';
             }
 
-            // 6. Публичен MLAT/ADS-B/Estimated фийд от Flightradar24
+            @file_put_contents($quotaCacheFile, json_encode($quotaPlanesBuffer, JSON_UNESCAPED_UNICODE), LOCK_EX);
+
+
             if (!$this->providerIsCoolingDown('fr24')) {
                 $fr24Url = $this->buildFr24Url($centerLat, $centerLon);
                 $frRes = $this->curlFetch($fr24Url, true);
@@ -551,7 +590,7 @@ class RadarController extends AbstractController
 
         $safeHex = preg_replace('/[^a-zA-Z0-9_-]/', '', $hexLower);
         $aiCacheFile = sys_get_temp_dir() . '/radar_ai_brief_' . $safeHex . '.txt';
-        if ($safeHex !== '' && is_file($aiCacheFile) && (time() - (int) @filemtime($aiCacheFile)) < 600) {
+        if ($safeHex !== '' && is_file($aiCacheFile) && $this->sub(time(), (int) @filemtime($aiCacheFile)) < 600) {
             $cachedBrief = trim((string) @file_get_contents($aiCacheFile));
             if ($cachedBrief !== '') {
                 return new JsonResponse(['brief' => $cachedBrief, 'cached' => true]);
@@ -652,12 +691,12 @@ class RadarController extends AbstractController
             if (is_array($acLive)) {
                 $tParts = [];
                 if (isset($acLive['baro_rate'])) {
-                    $vRateMps = round(((float) $acLive['baro_rate']) * 0.00508, 1);
+                    $vRateMps = round($this->mul((float) $acLive['baro_rate'], 0.00508), 1);
                     $vSign    = $vRateMps > 0 ? '+' : '';
                     $tParts[] = "Верт. скорост: {$vSign}{$vRateMps} m/s";
                 }
                 if (isset($acLive['nav_altitude_mcp'])) {
-                    $mcpMeters = (int) round(((float) $acLive['nav_altitude_mcp']) * 0.3048);
+                    $mcpMeters = (int) round($this->mul((float) $acLive['nav_altitude_mcp'], 0.3048));
                     $tParts[]  = "Зададена височина в автопилота (MCP): {$mcpMeters} м";
                 }
                 if (isset($acLive['mach'])) {
@@ -679,14 +718,14 @@ class RadarController extends AbstractController
         }
 
         $terrainElevationM = 180;
-        $aglMeters         = max(0, $altM - $terrainElevationM);
+        $aglMeters         = (int) max(0, $this->sub($altM, $terrainElevationM));
         $windInfo          = 'Няма данни';
 
         if (($osintResponses['meteo_terrain']['code'] ?? 0) === 200) {
             $meteo = json_decode($osintResponses['meteo_terrain']['body'], true);
             if (is_array($meteo)) {
                 $terrainElevationM = (int) round((float) ($meteo['elevation'] ?? 180));
-                $aglMeters         = max(0, $altM - $terrainElevationM);
+                $aglMeters         = (int) max(0, $this->sub($altM, $terrainElevationM));
 
                 $hourIdx = (int) gmdate('G');
                 if ($altM > 5500) {
@@ -700,8 +739,8 @@ class RadarController extends AbstractController
                     $wDir = (float) ($meteo['current']['wind_direction_10m'] ?? 0);
                 }
 
-                $angleDiffRad = deg2rad($wDir - $trackDeg);
-                $headwindKmh  = (int) round($wSpd * cos($angleDiffRad));
+                $angleDiffRad = deg2rad($this->sub($wDir, $trackDeg));
+                $headwindKmh  = (int) round($this->mul($wSpd, cos($angleDiffRad)));
                 $tasKmh       = max(0, $speedKmh + $headwindKmh);
                 $soundSpdKmh  = $altM > 8000 ? 1065 : ($altM > 4000 ? 1140 : 1210);
                 $estMach      = round($tasKmh / $soundSpdKmh, 2);
@@ -711,7 +750,7 @@ class RadarController extends AbstractController
             }
         }
 
-        $radarHorizonKm = (int) round(4.12 * (sqrt(250) + sqrt(max(10, $altM))));
+        $radarHorizonKm = (int) round($this->mul(4.12, sqrt(250) + sqrt(max(10, $altM))));
         $horizonStatus  = $distKm <= $radarHorizonKm
             ? "В ПРЯКА РАДИОВИДИМОСТ (Радиохоризонт за тази височина: {$radarHorizonKm} км)"
             : "На ръба/отвъд стандартния радиохоризонт ({$radarHorizonKm} км) - приема се чрез рефракция/височинен коридор";
@@ -721,19 +760,23 @@ class RadarController extends AbstractController
             $totalTurnDeg = 0.0;
             $prevBearing  = null;
             for ($i = 1, $n = count($trailPts); $i < $n; $i++) {
-                $lat1 = (float) ($trailPts[$i - 1]['lat'] ?? 0);
-                $lon1 = (float) ($trailPts[$i - 1]['lon'] ?? 0);
+                $prevIdx = (int) $this->sub($i, 1);
+                $lat1 = (float) ($trailPts[$prevIdx]['lat'] ?? 0);
+                $lon1 = (float) ($trailPts[$prevIdx]['lon'] ?? 0);
                 $lat2 = (float) ($trailPts[$i]['lat'] ?? 0);
                 $lon2 = (float) ($trailPts[$i]['lon'] ?? 0);
-                $dLon = deg2rad($lon2 - $lon1);
-                $y = sin($dLon) * cos(deg2rad($lat2));
-                $x = cos(deg2rad($lat1)) * sin(deg2rad($lat2)) - sin(deg2rad($lat1)) * cos(deg2rad($lat2)) * cos($dLon);
+                $dLon = deg2rad($this->sub($lon2, $lon1));
+                $y = $this->mul(sin($dLon), cos(deg2rad($lat2)));
+                $x = $this->sub(
+                    $this->mul(cos(deg2rad($lat1)), sin(deg2rad($lat2))),
+                    $this->mul($this->mul(sin(deg2rad($lat1)), cos(deg2rad($lat2))), cos($dLon))
+                );
                 $segBrg = fmod(rad2deg(atan2($y, $x)) + 360.0, 360.0);
 
                 if ($prevBearing !== null) {
-                    $diff = abs($segBrg - $prevBearing);
+                    $diff = abs($this->sub($segBrg, $prevBearing));
                     if ($diff > 180.0) {
-                        $diff = 360.0 - $diff;
+                        $diff = $this->sub(360.0, $diff);
                     }
                     $totalTurnDeg += $diff;
                 }
@@ -774,12 +817,15 @@ class RadarController extends AbstractController
         $compassDirs = ['Север (С)', 'Североизток (СИ)', 'Изток (И)', 'Югоизток (ЮИ)', 'Юг (Ю)', 'Югозапад (ЮЗ)', 'Запад (З)', 'Северозапад (СЗ)'];
         $compassDir  = $compassDirs[(int) round(fmod($trackDeg, 360) / 45) % 8];
 
-        $angDist     = 15 * ($speedKmh / 60) / 111.12;
-        $lat2R       = asin(sin($lat1R) * cos(deg2rad($angDist)) + cos($lat1R) * sin(deg2rad($angDist)) * cos($brgR));
-        $lon2R       = $lon1R + atan2(sin($brgR) * sin(deg2rad($angDist)) * cos($lat1R), cos(deg2rad($angDist)) - sin($lat1R) * sin($lat2R));
+        $angDist     = $this->mul(15, $speedKmh / 60) / 111.12;
+        $lat2R       = asin($this->mul(sin($lat1R), cos(deg2rad($angDist))) + $this->mul($this->mul(cos($lat1R), sin(deg2rad($angDist))), cos($brgR)));
+        $lon2R       = $lon1R + atan2(
+                $this->mul($this->mul(sin($brgR), sin(deg2rad($angDist))), cos($lat1R)),
+                $this->sub(cos(deg2rad($angDist)), $this->mul(sin($lat1R), sin($lat2R)))
+            );
         $projLat     = round(rad2deg($lat2R), 4);
         $projLon     = round(rad2deg($lon2R), 4);
-        $dist15MinKm = round(($speedKmh / 60) * 15);
+        $dist15MinKm = round($this->mul($speedKmh / 60, 15));
 
         $waypoints = [
             ['name' => 'Плевен / Долна Митрополия (LBPL)', 'lat' => 43.451, 'lon' => 24.503],
@@ -798,20 +844,24 @@ class RadarController extends AbstractController
 
         $headingTargets = [];
         foreach ($waypoints as $wp) {
-            $dLon  = deg2rad($wp['lon'] - $planeLon);
-            $y     = sin($dLon) * cos(deg2rad($wp['lat']));
-            $x     = cos($lat1R) * sin(deg2rad($wp['lat'])) - sin($lat1R) * cos(deg2rad($wp['lat'])) * cos($dLon);
+            $dLon  = deg2rad($this->sub($wp['lon'], $planeLon));
+            $y     = $this->mul(sin($dLon), cos(deg2rad($wp['lat'])));
+            $x     = $this->sub(
+                $this->mul(cos($lat1R), sin(deg2rad($wp['lat']))),
+                $this->mul($this->mul(sin($lat1R), cos(deg2rad($wp['lat']))), cos($dLon))
+            );
             $wpBrg = fmod(rad2deg(atan2($y, $x)) + 360.0, 360.0);
 
-            $diff = abs($trackDeg - $wpBrg);
+            $diff = abs($this->sub($trackDeg, $wpBrg));
             if ($diff > 180.0) {
-                $diff = 360.0 - $diff;
+                $diff = $this->sub(360.0, $diff);
             }
 
-            $wpDistKm = round(6371.0 * acos(min(1.0, max(-1.0, sin($lat1R) * sin(deg2rad($wp['lat'])) + cos($lat1R) * cos(deg2rad($wp['lat'])) * cos($dLon)))));
+            $cosAngle = $this->mul(sin($lat1R), sin(deg2rad($wp['lat']))) + $this->mul($this->mul(cos($lat1R), cos(deg2rad($wp['lat']))), cos($dLon));
+            $wpDistKm = round($this->mul(6371.0, acos(min(1.0, max(-1.0, $cosAngle)))));
 
             if ($diff <= 22.0 && $wpDistKm >= 8 && $wpDistKm <= 450) {
-                $etaMin = $speedKmh > 40 ? (int) round(($wpDistKm / $speedKmh) * 60) : 0;
+                $etaMin = $speedKmh > 40 ? (int) round($this->mul($wpDistKm / $speedKmh, 60)) : 0;
                 $headingTargets[] = "{$wp['name']} (на {$wpDistKm} км, след ~{$etaMin} мин)";
             }
         }
@@ -857,7 +907,7 @@ class RadarController extends AbstractController
 
         $modelsCacheFile = sys_get_temp_dir() . '/radar_gemini_models_cache.json';
         $extraModels = [];
-        if (is_file($modelsCacheFile) && (time() - (int) @filemtime($modelsCacheFile)) < 21600) {
+        if (is_file($modelsCacheFile) && $this->sub(time(), (int) @filemtime($modelsCacheFile)) < 21600) {
             $cachedModels = json_decode((string) @file_get_contents($modelsCacheFile), true);
             if (is_array($cachedModels)) {
                 $extraModels = $cachedModels;
@@ -1021,7 +1071,7 @@ class RadarController extends AbstractController
         }
 
         $last = end($indexData);
-        if (is_array($last) && isset($last['ts']) && ($timestamp - (int) $last['ts']) < 15) {
+        if (is_array($last) && isset($last['ts']) && $this->sub($timestamp, (int) $last['ts']) < 15) {
             return;
         }
 
@@ -1141,7 +1191,7 @@ class RadarController extends AbstractController
                 'code'    => $code,
                 'body'    => is_string($body) ? $body : '',
                 'error'   => $error,
-                'time_ms' => (int) round((microtime(true) - $item['start']) * 1000),
+                'time_ms' => (int) round($this->mul($this->sub(microtime(true), $item['start']), 1000)),
             ];
 
             curl_multi_remove_handle($multi, $ch);
@@ -1183,7 +1233,7 @@ class RadarController extends AbstractController
 
         $start = microtime(true);
         $body = curl_exec($ch);
-        $elapsed = (int) round((microtime(true) - $start) * 1000);
+        $elapsed = (int) round($this->mul($this->sub(microtime(true), $start), 1000));
         $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $error = curl_error($ch);
         curl_close($ch);
@@ -1199,8 +1249,8 @@ class RadarController extends AbstractController
     private function buildFr24Url(float $lat, float $lon): string
     {
         $north = min(90.0, round($lat + 4.5, 2));
-        $south = max(-90.0, round($lat - 4.5, 2));
-        $west  = max(-180.0, round($lon - 6.5, 2));
+        $south = max(-90.0, round($this->sub($lat, 4.5), 2));
+        $west  = max(-180.0, round($this->sub($lon, 6.5), 2));
         $east  = min(180.0, round($lon + 6.5, 2));
 
         return "https://data-cloud.flightradar24.com/zones/fcgi/feed.js?bounds={$north},{$south},{$west},{$east}&faa=1&satellite=1&mlat=1&flarm=1&adsb=1&gnd=1&air=1&vehicles=0&estimated=1&maxage=90&gliders=1&stats=0";
@@ -1210,11 +1260,11 @@ class RadarController extends AbstractController
     {
         $latDelta = $radiusNm / 60.0;
         $cosLat = max(0.15, abs(cos(deg2rad($lat))));
-        $lonDelta = min(180.0, $radiusNm / (60.0 * $cosLat));
+        $lonDelta = min(180.0, $radiusNm / $this->mul(60.0, $cosLat));
 
-        $lamin = max(-90.0, round($lat - $latDelta, 2));
+        $lamin = max(-90.0, round($this->sub($lat, $latDelta), 2));
         $lamax = min(90.0, round($lat + $latDelta, 2));
-        $lomin = max(-180.0, round($lon - $lonDelta, 2));
+        $lomin = max(-180.0, round($this->sub($lon, $lonDelta), 2));
         $lomax = min(180.0, round($lon + $lonDelta, 2));
 
         return 'https://opensky-network.org/api/states/all?' . http_build_query([
@@ -1234,7 +1284,7 @@ class RadarController extends AbstractController
         }
 
         $timestamp = (int) @file_get_contents($file);
-        if ($timestamp <= 0 || time() - $timestamp > self::PROVIDER_COOLDOWN) {
+        if ($timestamp <= 0 || $this->sub(time(), $timestamp) > self::PROVIDER_COOLDOWN) {
             @unlink($file);
             return false;
         }
@@ -1273,10 +1323,17 @@ class RadarController extends AbstractController
             $operator = trim((string) ($ac['ownOp'] ?? $ac['op'] ?? $ac['operator'] ?? ''));
             $reg = trim((string) ($ac['r'] ?? ''));
 
-            $isStrictMilFeed = in_array($source, ['airplanes.live-mil', 'adsb.lol-mil', 'adsb.fi-mil', 'intelsky-mil', 'flyitaly-mil'], true);
+            $isStrictMilFeed = in_array(
+                $source,
+                ['airplanes.live-mil', 'adsb.lol-mil', 'adsb.fi-mil', 'intelsky-mil', 'flyitaly-mil', 'avioadsb-mil'],
+                true
+            );
 
+            // Бит 1 = Military, Бит 2 = Interesting (VIP/Правителствени/Специални контрактори)
+            $dbFlags = (int) ($ac['dbFlags'] ?? 0);
             $isMil = $isStrictMilFeed
-                || (((int) ($ac['dbFlags'] ?? 0) & 1) === 1)
+                || (($dbFlags & 1) === 1)
+                || (($dbFlags & 2) === 2)
                 || $this->isKnownMilitary($id, $rawCallsign, $squawk, $aircraftType, $operator, $desc, $reg);
 
             $hasLiveLatLon = isset($ac['lat'], $ac['lon']) || isset($ac['latitude'], $ac['longitude']);
@@ -1313,7 +1370,7 @@ class RadarController extends AbstractController
             $lat = (float) $lat;
             $lon = (float) $lon;
 
-            if (abs($lat - $centerLat) > 5.5 || abs($lon - $centerLon) > 7.5) {
+            if (abs($this->sub($lat, $centerLat)) > 5.5 || abs($this->sub($lon, $centerLon)) > 7.5) {
                 continue;
             }
 
@@ -1322,10 +1379,10 @@ class RadarController extends AbstractController
             $isOnGroundFlag = ($altBaro === 'ground' || !empty($ac['ground']));
 
             $numericAltFeet = is_numeric($altBaro) ? (float) $altBaro : (is_numeric($altGeom) ? (float) $altGeom : 0.0);
-            $altitudeMeters = max(0, (int) round($numericAltFeet * 0.3048));
+            $altitudeMeters = max(0, (int) round($this->mul($numericAltFeet, 0.3048)));
 
             $speedKnots = (float) ($ac['gs'] ?? $ac['spd'] ?? $ac['tas'] ?? $ac['ias'] ?? 0);
-            $speedKmh = (int) round($speedKnots * 1.852);
+            $speedKmh = (int) round($this->mul($speedKnots, 1.852));
 
             if (!$isMil && ($isOnGroundFlag || $altitudeMeters <= 0) && $speedKmh < 30) {
                 continue;
@@ -1346,9 +1403,13 @@ class RadarController extends AbstractController
                 }
             }
 
+            $isMlat = !empty($ac['mlat']) || (($ac['type'] ?? '') === 'mlat');
+
             $displayCallsign = $rawCallsign !== '' ? $rawCallsign : ($reg !== '' ? $reg : strtoupper($id));
             if ($isModeSApproximate && !str_contains($displayCallsign, 'MODE-S')) {
                 $displayCallsign .= ' [MODE-S]';
+            } elseif ($isMlat && !str_contains($displayCallsign, '[MLAT]')) {
+                $displayCallsign .= ' [MLAT]';
             }
             if ($isMil && !str_contains($displayCallsign, '[ВОЕНЕН]')) {
                 $displayCallsign .= ' [ВОЕНЕН]';
@@ -1360,7 +1421,16 @@ class RadarController extends AbstractController
             $mach = isset($ac['mach']) ? (float) $ac['mach'] : null;
             $baroRate = isset($ac['baro_rate']) ? (int) $ac['baro_rate'] : 0;
             $nic = isset($ac['nic']) ? (int) $ac['nic'] : 99;
-            $gpsJammed = ($nic < 5 && $nic >= 0);
+            $nacP = isset($ac['nac_p']) ? (int) $ac['nac_p'] : 99;
+            $sil = isset($ac['sil']) ? (int) $ac['sil'] : 99;
+
+            // Детекция за GPS Jamming (нисък NIC/NACp/SIL) или GPS Spoofing (>1000 ft разлика между баро и GPS височина)
+            $altMismatch = is_numeric($altBaro) && is_numeric($altGeom) && abs($this->sub((float) $altBaro, (float) $altGeom)) > 1000.0;
+            $gpsJammed = ($nic >= 0 && $nic < 5) || ($nacP >= 0 && $nacP < 6) || ($sil >= 0 && $sil < 2) || $altMismatch;
+
+            if ($gpsJammed && !str_contains($displayCallsign, '[РЕБ/GPS!]')) {
+                $displayCallsign .= ' [РЕБ/GPS!]';
+            }
 
             $planesMap[$id] = [
                 'id'         => $id,
@@ -1406,7 +1476,7 @@ class RadarController extends AbstractController
             $lat = (float) $lat;
             $lon = (float) $lon;
 
-            if (abs($lat - $centerLat) > 5.5 || abs($lon - $centerLon) > 7.5) {
+            if (abs($this->sub($lat, $centerLat)) > 5.5 || abs($this->sub($lon, $centerLon)) > 7.5) {
                 continue;
             }
 
@@ -1430,14 +1500,14 @@ class RadarController extends AbstractController
 
             $isMil = $this->isKnownMilitary($hex, $rawCallsign, $squawk, $aircraftType, $operator, '', $reg);
 
-            $age = $ts > 0 ? max(0.0, (float) ($now - $ts)) : 2.0;
+            $age = $ts > 0 ? max(0.0, $this->sub($now, $ts)) : 2.0;
             $maxAllowedAge = $isMil ? 180.0 : self::MAX_POS_AGE_SEC;
             if ($age > $maxAllowedAge) {
                 continue;
             }
 
-            $altitudeMeters = max(0, (int) round($altFeet * 0.3048));
-            $speedKmh       = (int) round($speedKnots * 1.852);
+            $altitudeMeters = max(0, (int) round($this->mul($altFeet, 0.3048)));
+            $speedKmh       = (int) round($this->mul($speedKnots, 1.852));
 
             if (!$isMil && ($onGround === 1 || $altitudeMeters <= 0) && $speedKmh < 30) {
                 continue;
@@ -1538,14 +1608,14 @@ class RadarController extends AbstractController
             $lat = (float) $lat;
             $lon = (float) $lon;
 
-            if (abs($lat - $centerLat) > 5.5 || abs($lon - $centerLon) > 7.5) {
+            if (abs($this->sub($lat, $centerLat)) > 5.5 || abs($this->sub($lon, $centerLon)) > 7.5) {
                 continue;
             }
 
             $isMil = $this->isKnownMilitary($id, $rawCallsign, $squawk, '', $originCountry);
             $maxAllowedAge = $isMil ? 180.0 : self::MAX_POS_AGE_SEC;
 
-            if ($posTime > 0 && ($now - $posTime) > $maxAllowedAge) {
+            if ($posTime > 0 && $this->sub($now, $posTime) > $maxAllowedAge) {
                 continue;
             }
 
@@ -1560,7 +1630,7 @@ class RadarController extends AbstractController
                 }
             }
 
-            $speedKmh = (int) round($velocityMs * 3.6);
+            $speedKmh = (int) round($this->mul($velocityMs, 3.6));
             $altitudeMeters = is_numeric($altMeters) ? max(0, (int) round((float) $altMeters)) : 0;
 
             if (!$isMil && ($onGround || $altitudeMeters <= 0) && $speedKmh < 30) {
@@ -1584,7 +1654,7 @@ class RadarController extends AbstractController
                 'squawk'     => $squawk !== '' ? $squawk : ($existing['squawk'] ?? '----'),
                 'type'       => $existing['type'] ?? ($isMil ? 'Военен борд' : 'Въздушна цел'),
                 'operator'   => $originCountry,
-                'age'        => $posTime > 0 ? round(max(0.0, (float) ($now - $posTime)), 1) : 1.0,
+                'age'        => $posTime > 0 ? round(max(0.0, $this->sub($now, $posTime)), 1) : 1.0,
                 'isMilitary' => $isMil,
                 '_source'    => 'opensky',
             ];
