@@ -2424,7 +2424,7 @@
             map.eachLayer(layer => {
                 if (!(layer instanceof L.Marker) || !layer._radarPlaneId) return;
                 const vec = trackedVectors.get(layer._radarPlaneId);
-                if (!vec || vec.isModeS || vec.speed < 40) return;
+                if (!vec || vec.speed < 40) return;
 
                 // Изминато разстояние за 1 секунда (в метри)
                 const distMeters = vec.speed / 3.6;
