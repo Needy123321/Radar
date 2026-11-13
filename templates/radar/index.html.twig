@@ -2488,6 +2488,75 @@
         const targetNode = document.body;
         observer.observe(targetNode, { childList: true, subtree: true });
     });
+    // === ЖИВ OSINT РАДИОПРИХВАТ НА ЦЕЛИ БЕЗ ТРАНСПОНДЕР ВЪРХУ ЧЕРНО МОРЕ ===
+    const osintMarkersLayer = L.layerGroup().addTo(map);
+
+    async function fetchAndRenderOsintAlerts() {
+        try {
+            const res = await fetch('/api/osint-feed');
+            if (!res.ok) return;
+            const data = await res.json();
+            if (!data || !Array.isArray(data.alerts)) return;
+
+            osintMarkersLayer.clearLayers();
+
+            data.alerts.forEach((alert) => {
+                if (!alert.lat || !alert.lon) return;
+
+                const iconHtml = `
+                    <div style="
+                        display:flex;align-items:center;gap:4px;
+                        background:rgba(185, 28, 28, 0.92);
+                        color:#fff;
+                        border:1.5px solid #fca5a5;
+                        border-radius:4px;
+                        padding:2px 6px;
+                        font-family:monospace;
+                        font-size:10px;
+                        font-weight:bold;
+                        white-space:nowrap;
+                        box-shadow:0 0 12px rgba(239,68,68,0.9);
+                        animation: pulse 1.5s infinite;
+                    ">
+                        <span>⚠️ OSINT</span>
+                        <span style="color:#fde047;">${alert.time_ago}</span>
+                    </div>
+                `;
+
+                const osintIcon = L.divIcon({
+                    className: 'osint-tactical-marker',
+                    html: iconHtml,
+                    iconSize: [110, 22],
+                    iconAnchor: [55, 11]
+                });
+
+                const marker = L.marker([alert.lat, alert.lon], { icon: osintIcon, zIndexOffset: 2500 });
+                marker.bindPopup(`
+                    <div style="background:#0f172a;color:#f8fafc;padding:10px;border-radius:6px;border:1px solid #ef4444;min-width:240px;font-family:monospace;">
+                        <div style="color:#f87171;font-weight:bold;font-size:12px;margin-bottom:4px;">
+                            📡 РАДИОПРИХВАТ / ЦЕЛ БЕЗ ТРАНСПОНДЕР
+                        </div>
+                        <div style="color:#fde047;font-size:11px;margin-bottom:6px;">
+                            📍 ${alert.zone} (${alert.time_ago})
+                        </div>
+                        <div style="font-size:12px;line-height:1.4;color:#e2e8f0;margin-bottom:6px;">
+                            ${alert.text}
+                        </div>
+                        <div style="font-size:10px;color:#94a3b8;border-top:1px solid #334155;padding-top:4px;">
+                            Източник: ${alert.source} | Коорд: ${alert.lat}, ${alert.lon}
+                        </div>
+                    </div>
+                `);
+
+                osintMarkersLayer.addLayer(marker);
+            });
+        } catch (err) {
+            console.warn('OSINT Feed Error:', err);
+        }
+    }
+
+    fetchAndRenderOsintAlerts();
+    setInterval(fetchAndRenderOsintAlerts, 60000);
 </script>
 </body>
 </html>
