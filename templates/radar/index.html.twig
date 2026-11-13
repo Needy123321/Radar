@@ -1,1789 +1,2493 @@
-<?php
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Радар БГ">
+    <title>ТАКТИЧЕСКИ ВЪЗДУШЕН РАДАР - БЪЛГАРИЯ</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        :root {
+            --neon: #00ff66;
+            --neon-bg: rgba(6, 18, 10, 0.90);
+            --mil-red: #ff2222;
+            --plane-yellow: #ffdd00;
+            --warn-amber: #ffaa00;
+            --pin-magenta: #ff00ff;
+        }
 
-namespace App\Controller;
+        *, *:before, *:after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            -webkit-user-select: none;
+        }
 
-use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
-use Symfony\Component\HttpFoundation\JsonResponse;
-use Symfony\Component\HttpFoundation\Request;
-use Symfony\Component\HttpFoundation\Response;
-use Symfony\Component\Routing\Attribute\Route;
+        body, html {
+            width: 100%;
+            height: 100%;
+            background-color: #08120c;
+            color: var(--neon);
+            font-family: 'Segoe UI', Tahoma, monospace;
+            overflow: hidden;
+            position: fixed;
+        }
 
-class RadarController extends AbstractController
-{
-    private const CACHE_TTL = 6;
-    private const PROVIDER_COOLDOWN = 300;
-    private const MAX_HISTORY_FRAMES = 120;
-    private const SEARCH_RADIUS_NM = 250;
-    private const MAX_POS_AGE_SEC = 60.0;
+        #terrainMap {
+            position: absolute;
+            inset: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 1;
+            background: #101c14;
+        }
 
-    private function sub(float|int $a, float|int $b): float
-    {
-        return (float) $a - (float) $b;
+        .map-tactical-filter .leaflet-tile-pane {
+            filter: brightness(0.75) contrast(1.14) saturate(0.85);
+        }
+
+        .bg-border-glow {
+            filter: drop-shadow(0 0 6px #ff0000) drop-shadow(0 0 12px rgba(255, 0, 0, 0.8));
+        }
+
+        #radarCanvas {
+            position: absolute;
+            inset: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 10;
+            pointer-events: none;
+        }
+
+        .top-hud {
+            position: fixed;
+            top: 12px;
+            left: 6px;
+            right: 6px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            z-index: 100;
+            pointer-events: none;
+        }
+
+        @media (max-width: 768px) {
+            .top-hud {
+                top: 34px;
+            }
+        }
+
+        .hud-row {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            background: var(--neon-bg);
+            border: 1px solid rgba(0, 255, 102, 0.5);
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.65);
+            padding: 5px 8px;
+            border-radius: 6px;
+            pointer-events: auto;
+            backdrop-filter: blur(5px);
+        }
+
+        .status-header {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+            font-weight: bold;
+            color: #eafff0;
+        }
+
+        .status-left, .status-right {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .live-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 1px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            background: rgba(0, 255, 102, 0.2);
+            border: 1px solid var(--neon);
+            color: var(--neon);
+        }
+
+        .live-badge.replay {
+            background: rgba(255, 170, 0, 0.25);
+            border-color: var(--warn-amber);
+            color: var(--warn-amber);
+        }
+
+        .live-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--neon);
+            box-shadow: 0 0 6px var(--neon);
+        }
+
+        .controls-compact-bar {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .radar-btn {
+            background: rgba(12, 32, 18, 0.92);
+            color: #dfffee;
+            border: 1px solid rgba(0, 255, 102, 0.5);
+            padding: 5px 8px;
+            font-size: 10.5px;
+            font-weight: bold;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            white-space: nowrap;
+            touch-action: manipulation;
+        }
+
+        .radar-btn:hover { background: rgba(0, 255, 102, 0.25); }
+
+        .radar-btn.active {
+            background: var(--neon);
+            color: #031a0b;
+            border-color: var(--neon);
+            box-shadow: 0 0 8px rgba(0, 255, 102, 0.4);
+        }
+
+        .radar-btn.loc-btn {
+            border-color: #00e5ff;
+            color: #99f5ff;
+        }
+
+        .radar-btn.loc-btn.active {
+            background: #00e5ff;
+            color: #001a22;
+            border-color: #00e5ff;
+            box-shadow: 0 0 8px rgba(0, 229, 255, 0.5);
+        }
+
+        .radar-btn.mil-btn {
+            border-color: var(--mil-red);
+            color: #ff8888;
+        }
+
+        .radar-btn.mil-btn.active {
+            background: var(--mil-red);
+            color: #fff;
+            box-shadow: 0 0 8px rgba(255, 34, 34, 0.5);
+        }
+
+        .radar-btn.amber-btn {
+            border-color: var(--warn-amber);
+            color: var(--warn-amber);
+        }
+
+        .radar-btn.amber-btn.active {
+            background: var(--warn-amber);
+            color: #1a0f00;
+            box-shadow: 0 0 8px rgba(255, 170, 0, 0.5);
+        }
+
+        #btn-gyro {
+            border-color: #00ffff;
+            color: #00ffff;
+            background: rgba(0, 35, 45, 0.9);
+        }
+        #btn-gyro.active {
+            background: #00ffff;
+            color: #000;
+            box-shadow: 0 0 10px #00ffff;
+        }
+
+        .pinned-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 10.5px;
+            background: rgba(25, 0, 35, 0.90);
+            padding: 3px 8px;
+            border-radius: 5px;
+            border: 1px solid rgba(255, 0, 255, 0.45);
+            color: #ff99ff;
+            pointer-events: auto;
+            font-weight: bold;
+        }
+
+        .hud-mini-btn {
+            background: rgba(75, 0, 90, 0.9);
+            border: 1px solid #ff33cc;
+            color: #ffccff;
+            font-size: 9.5px;
+            font-weight: bold;
+            padding: 2px 6px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .reset-tracks-btn {
+            background: rgba(130, 0, 30, 0.95);
+            border-color: #ff3355;
+            color: #ffffff;
+        }
+
+        .pinned-bar {
+            display: none;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 3px;
+            pointer-events: auto;
+            max-height: 135px;
+            overflow-y: auto;
+            background: rgba(12, 0, 18, 0.92);
+            padding: 4px;
+            border: 1px solid rgba(255, 0, 255, 0.45);
+            border-radius: 5px;
+        }
+
+        .pinned-bar.expanded {
+            display: grid;
+        }
+
+        .pin-slot {
+            background: rgba(25, 0, 35, 0.88);
+            border: 1px dashed rgba(255, 0, 255, 0.4);
+            color: #cc88cc;
+            padding: 3px 4px;
+            font-family: monospace;
+            font-size: 9.5px;
+            font-weight: bold;
+            border-radius: 3px;
+            cursor: pointer;
+            text-align: center;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .pin-slot.filled {
+            background: rgba(75, 0, 95, 0.96);
+            border: 1px solid #ff00ff;
+            color: #ffffff;
+            box-shadow: 0 0 6px rgba(255, 0, 255, 0.4);
+        }
+
+        .pin-slot.swap-source {
+            background: rgba(255, 170, 0, 0.95) !important;
+            border: 1.5px solid #ffffff !important;
+            color: #000000 !important;
+            box-shadow: 0 0 12px #ffaa00 !important;
+        }
+
+        .map-side-controls {
+            position: fixed;
+            right: 8px;
+            top: 52%;
+            transform: translateY(-50%);
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            z-index: 100;
+        }
+
+        .circle-btn {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: rgba(20, 30, 24, 0.88);
+            border: 1px solid rgba(0, 255, 102, 0.5);
+            color: #fff;
+            font-size: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.6);
+        }
+
+        #timeMachineDock {
+            position: fixed;
+            bottom: 50px;
+            right: 8px;
+            left: 8px;
+            max-width: 400px;
+            margin: 0 auto;
+            background: rgba(18, 12, 8, 0.95);
+            border: 1.5px solid var(--warn-amber);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.85);
+            border-radius: 8px;
+            padding: 8px 10px;
+            z-index: 210;
+            display: none;
+            backdrop-filter: blur(8px);
+        }
+
+        .tm-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+            font-size: 11px;
+            color: var(--warn-amber);
+            font-weight: bold;
+        }
+
+        .tm-slider-wrap {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 8px;
+        }
+
+        #historySlider {
+            flex: 1;
+            accent-color: var(--warn-amber);
+            cursor: pointer;
+        }
+
+        .tm-controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 5px;
+        }
+
+        #infoPanel {
+            position: fixed;
+            bottom: max(42px, env(safe-area-inset-bottom, 42px));
+            left: 8px;
+            right: 8px;
+            background: rgba(4, 18, 9, 0.95);
+            border: 1.5px solid var(--neon);
+            box-shadow: 0 0 18px rgba(0, 255, 68, 0.4);
+            padding: 7px 9px;
+            border-radius: 7px;
+            display: none;
+            max-width: 420px;
+            font-size: 11px;
+            z-index: 200;
+        }
+
+        #infoPanel.mil-panel {
+            border-color: var(--mil-red);
+            box-shadow: 0 0 18px rgba(255, 34, 34, 0.5);
+        }
+
+        .plane-card-header {
+            display: flex;
+            align-items: center;
+            border-bottom: 1px solid rgba(0, 255, 0, 0.25);
+            padding-bottom: 5px;
+            margin-bottom: 5px;
+            gap: 8px;
+            padding-right: 32px;
+        }
+
+        .plane-photo-box {
+            width: 68px;
+            height: 44px;
+            min-width: 68px;
+            background: radial-gradient(circle, rgba(0,60,0,0.6) 0%, rgba(0,15,0,0.95) 100%);
+            border: 1px solid var(--neon);
+            border-radius: 5px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+
+        .plane-photo-box img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: none;
+        }
+
+        .route-banner {
+            background: rgba(0, 50, 40, 0.7);
+            border: 1px solid rgba(0, 255, 200, 0.35);
+            padding: 3px 6px;
+            border-radius: 4px;
+            margin-bottom: 5px;
+            font-size: 10px;
+            color: #00ffcc;
+            font-weight: bold;
+        }
+
+        .ai-brief-box {
+            display: none;
+            background: rgba(0, 32, 22, 0.94);
+            border: 1px solid #00e5ff;
+            border-left: 3px solid #00e5ff;
+            padding: 5px 7px;
+            border-radius: 4px;
+            margin-bottom: 5px;
+            font-size: 10px;
+            line-height: 1.38;
+            color: #e0ffff;
+            white-space: pre-line;
+            max-height: 115px;
+            overflow-y: auto;
+        }
+
+        .ai-sec-title {
+            color: #00e5ff;
+            font-weight: bold;
+            display: inline-block;
+            margin-top: 2px;
+        }
+
+        .ai-hl-num {
+            color: #00ff66;
+            font-weight: bold;
+        }
+
+        .ai-hl-code {
+            color: #ffcc00;
+            font-weight: bold;
+            background: rgba(255, 204, 0, 0.14);
+            padding: 0 3px;
+            border-radius: 2px;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 4px 6px;
+        }
+
+        .info-item {
+            background: rgba(0, 255, 0, 0.07);
+            padding: 3px 6px;
+            border-radius: 4px;
+            border-left: 2.5px solid var(--neon);
+        }
+
+        .info-label {
+            font-size: 8.5px;
+            color: #88cc99;
+            text-transform: uppercase;
+            display: block;
+        }
+
+        .info-val {
+            font-size: 11px;
+            color: #ffffff;
+            font-weight: bold;
+        }
+
+        .card-actions-row {
+            display: flex;
+            gap: 5px;
+            margin-top: 5px;
+        }
+
+        .auto-track-btn {
+            flex: 1;
+            background: rgba(75, 0, 95, 0.95);
+            border: 1px solid #ff00ff;
+            color: #ffffff;
+            font-family: monospace;
+            font-size: 10.5px;
+            font-weight: bold;
+            padding: 5px;
+            border-radius: 4px;
+            cursor: pointer;
+            text-align: center;
+        }
+
+        .auto-track-btn.active {
+            background: #ff00ff;
+            color: #000;
+            box-shadow: 0 0 10px #ff00ff;
+        }
+
+        .ai-intel-btn {
+            background: rgba(0, 50, 65, 0.95);
+            border: 1px solid #00e5ff;
+            color: #00e5ff;
+            font-size: 10px;
+            font-weight: bold;
+            padding: 5px 7px;
+            border-radius: 4px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .toggle-card-slots-btn {
+            background: rgba(35, 0, 45, 0.9);
+            border: 1px solid #cc00cc;
+            color: #ffccff;
+            font-size: 10px;
+            font-weight: bold;
+            padding: 5px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .mark-targets-row {
+            display: none;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 2.5px;
+            margin-top: 5px;
+            padding-top: 4px;
+            border-top: 1px solid rgba(0, 255, 0, 0.25);
+        }
+
+        .mark-targets-row.open {
+            display: grid;
+        }
+
+        .mark-btn {
+            background: rgba(35, 0, 45, 0.85);
+            border: 1px solid #cc00cc;
+            color: #ff77ff;
+            font-family: monospace;
+            font-size: 9px;
+            font-weight: bold;
+            padding: 3px 1px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+
+        .mark-btn.occupied {
+            background: rgba(75, 15, 90, 0.9);
+            border-color: #ff66ff;
+            color: #ffffff;
+        }
+
+        .mark-btn.active {
+            background: #ff00ff;
+            color: #000;
+        }
+
+        .panel-top-actions {
+            position: absolute;
+            top: 6px;
+            right: 8px;
+            display: flex;
+            gap: 4px;
+        }
+
+
+        .action-btn {
+            background: rgba(0, 40, 0, 0.85);
+            border: 1px solid #0f0;
+            color: #0f0;
+            font-size: 11px;
+            font-weight: bold;
+            padding: 2px 6px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        /* Копринено плавно плъзгане на самолетите всяка секунда */
+        .leaflet-marker-pane .leaflet-marker-icon {
+            transition: transform 1s linear;
+            will-change: transform;
+        }
+
+        /* Изключваме анимацията по време на зуумване на картата, за да не плуват иконките */
+        .leaflet-zoom-anim .leaflet-marker-pane .leaflet-marker-icon {
+            transition: none !important;
+        }
+
+        .leaflet-control-attribution { display: none !important; }
+    </style>
+</head>
+<body class="map-tactical-filter">
+
+<div id="terrainMap"></div>
+<canvas id="radarCanvas"></canvas>
+
+<!-- КОМПАКТЕН ГОРЕН ТАКТИЧЕСКИ ПАНЕЛ -->
+<div class="top-hud">
+    <div class="hud-row">
+        <div class="status-header">
+            <div class="status-left">
+                <span id="modeBadge" class="live-badge">
+                    <span class="live-dot"></span>
+                    <span id="modeText">LIVE</span>
+                </span>
+            </div>
+            <div class="status-right">
+                <span>ЦЕЛИ: <strong id="planesCount" style="color:#ffdd00;">0</strong></span>
+                <span>ВОЕННИ: <strong id="milCount" style="color:#ff4444;">0</strong></span>
+                <span id="clockDisplay">--:--:--</span>
+            </div>
+        </div>
+
+        <div class="controls-compact-bar">
+            <button class="radar-btn loc-btn" id="locGps" onclick="activateRealGps()">📡 GPS</button>
+            <button class="radar-btn loc-btn" id="locManual" onclick="promptManualCoords()">✍️ КООРД.</button>
+            <button class="radar-btn" id="btn-gyro" onclick="toggleGyroCompass()">3.3° АЗИМ.</button>
+            <button class="radar-btn mil-btn" id="btnMilOnly">⚔️ ВОЕННИ</button>
+            <button class="radar-btn active" id="btnTrails" title="Покажи/скрий следите на полетите">〰️ СЛЕДИ</button>
+            <button class="radar-btn amber-btn" id="btnHistory">⏪ ИСТОРИЯ</button>
+            <button class="radar-btn" id="btnMapStyle">🗺️ РЕЛЕФ</button>
+        </div>
+    </div>
+
+    <div class="pinned-header">
+        <span id="trackCounterInfo">🎯 МАРКИРАНИ: 0/21 | Следв: #1</span>
+        <div style="display:flex; gap:4px;">
+            <button class="hud-mini-btn" id="toggleSlotsBtn" onclick="toggleExpandSlots()">▼ ЦЕЛИ (21)</button>
+            <button class="hud-mini-btn reset-tracks-btn" onclick="resetAllTrackedTargets()">🗑️ ИЗЧИСТИ</button>
+        </div>
+    </div>
+
+    <div class="pinned-bar" id="pinnedBarContainer">
+        {% for i in 1..21 %}
+            <button class="pin-slot" id="pin-slot-{{ i }}"
+                    onpointerdown="startSlotLongPress({{ i }}, event)"
+                    onpointerup="endSlotLongPress({{ i }}, event)"
+                    onpointercancel="cancelSlotLongPress()"
+                    oncontextmenu="return false;">#{{ i }}: -</button>
+        {% endfor %}
+    </div>
+</div>
+
+<div class="map-side-controls">
+    <button class="circle-btn" id="btnZoomIn">+</button>
+    <button class="circle-btn" id="btnZoomOut">−</button>
+    <button class="circle-btn" id="btnMyLoc">➤</button>
+</div>
+
+<!-- МАШИНА НА ВРЕМЕТО -->
+<div id="timeMachineDock">
+    <div class="tm-header">
+        <span>⏪ ИСТОРИЯ НА ПОЛЕТИТЕ</span>
+        <div style="display:flex; align-items:center; gap:8px;">
+            <span id="tmTimestampLabel">НА ЖИВО</span>
+            <button class="action-btn" onclick="closeTimeMachine()" style="border-color:var(--warn-amber); color:var(--warn-amber); padding:1px 6px;">✕</button>
+        </div>
+    </div>
+    <div class="tm-slider-wrap">
+        <span style="font-size:10px; color:#ccc;">НАЗАД</span>
+        <input type="range" id="historySlider" min="0" max="0" value="0">
+        <span style="font-size:10px; color:#ccc;">СЕГА</span>
+    </div>
+    <div class="tm-controls">
+        <div style="display:flex; gap:5px;">
+            <button class="radar-btn amber-btn" id="btnPlayHistory">▶ ПУСНИ</button>
+            <button class="radar-btn" id="btnSpeedHistory">1x</button>
+        </div>
+        <span id="tmFramesCount" style="font-size:10px; color:#ccc;">Записи: 0</span>
+        <button class="radar-btn active" id="btnBackToLive">🔴 НА ЖИВО</button>
+    </div>
+</div>
+
+<div id="infoPanel"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+    let myLat = 43.3664995;
+    let myLon = 24.6621337;
+    let myBaseName = 'Позиция';
+    let gpsWatchId = null;
+
+    let savedAzi = localStorage.getItem('radar_azimuth_offset_deg_v2');
+    let azimuthOffsetDeg = savedAzi !== null ? parseFloat(savedAzi) : 3.3;
+    if (isNaN(azimuthOffsetDeg)) azimuthOffsetDeg = 3.3;
+
+    function getAzimuthCorrectionDeg() {
+        return azimuthOffsetDeg;
     }
 
-    private function mul(float|int $a, float|int $b): float
-    {
-        return (float) $a * (float) $b;
+    function updateAzimuthButtonUI() {
+        const btn = document.getElementById('btn-gyro');
+        if (!btn) return;
+        if (Math.abs(azimuthOffsetDeg) < 0.01) {
+            btn.classList.remove('active');
+            btn.innerText = '🧭 0° ИСТ.';
+        } else {
+            btn.classList.add('active');
+            const sign = azimuthOffsetDeg > 0 ? '+' : '';
+            btn.innerText = `🧭 ${sign}${azimuthOffsetDeg}° АЗИМ.`;
+        }
     }
 
-    #[Route('/', name: 'app_home')]
-    public function home(): Response
-    {
-        return $this->redirectToRoute('app_radar');
+    function applyNewAzimuthOffset(val) {
+        azimuthOffsetDeg = isNaN(val) ? 3.3 : val;
+        try { localStorage.setItem('radar_azimuth_offset_deg_v2', String(azimuthOffsetDeg)); } catch (e) {}
+        updateAzimuthButtonUI();
+        planes.forEach(p => {
+            p.bearing = calcBearing(myLat, myLon, p.lat, p.lon);
+        });
+        updatePinnedBarUI();
+        if (selectedPlaneId) {
+            const sel = planes.find(p => p.id === selectedPlaneId);
+            if (sel) updateInfoPanelHTML(sel);
+        }
     }
 
-    #[Route('/radar', name: 'app_radar')]
-    public function index(): Response
-    {
-        $response = $this->render('radar/index.html.twig');
-        $response->headers->set(
-            'Cache-Control',
-            'no-store, no-cache, must-revalidate, max-age=0'
+    window.toggleGyroCompass = function() {
+        const input = prompt(
+            'Въведи поправка на азимута в градуси (напр. -5.5 за магнитен север, или 0 за Истински север):',
+            String(azimuthOffsetDeg)
+        );
+        if (input === null) return;
+        const parsed = parseFloat(input.replace(',', '.').trim());
+        applyNewAzimuthOffset(isNaN(parsed) ? 0.0 : parsed);
+    };
+
+    setTimeout(updateAzimuthButtonUI, 50);
+
+    const map = L.map('terrainMap', {
+        center: [myLat, myLon],
+        zoom: 8,
+        zoomSnap: 0.01,
+        zoomDelta: 0.25,
+        zoomControl: false,
+        attributionControl: false
+    });
+
+    const TACTICAL_RANGES_KM = [20, 40, 60, 80, 100, 150, 200, 250, 300];
+    let currentRangeIdx = 3;
+
+    function setRadarRangeKm(targetKm) {
+        const radiusPx = Math.min(window.innerWidth, window.innerHeight) * 0.42;
+        if (radiusPx <= 10) return;
+        const currentZoom = map.getZoom();
+        const centerPt = [window.innerWidth / 2, window.innerHeight / 2];
+        const cLatLng = map.containerPointToLatLng(centerPt);
+        const eLatLng = map.containerPointToLatLng([centerPt[0] + radiusPx, centerPt[1]]);
+        const currentKm = map.distance(cLatLng, eLatLng) / 1000;
+        if (currentKm > 0) {
+            const zoomDiff = Math.log2(currentKm / targetKm);
+            const exactZoom = Math.max(5.6, Math.min(14, currentZoom + zoomDiff));
+            map.setZoom(exactZoom, { animate: false });
+        }
+    }
+
+    const googleTerrainLayer = L.tileLayer('https://{s}.google.com/vt/lyrs=p&x={x}&y={y}&z={z}&hl=bg', { maxZoom: 18, subdomains: ['mt0', 'mt1', 'mt2', 'mt3'] });
+    const googleHybridLayer = L.tileLayer('https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&hl=bg', { maxZoom: 18, subdomains: ['mt0', 'mt1', 'mt2', 'mt3'] });
+    const openTopoLayer = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 17 });
+    googleTerrainLayer.addTo(map);
+    let currentMapMode = 0;
+
+    const fallbackBgBorder = [
+        [44.21, 22.67], [44.04, 22.94], [43.82, 23.25], [43.78, 23.82], [43.69, 24.47], [43.74, 24.89],
+        [43.63, 25.37], [43.68, 25.63], [43.85, 25.95], [44.05, 26.27], [44.13, 26.65], [44.12, 27.27],
+        [43.83, 27.67], [43.74, 28.05], [43.74, 28.58], [43.54, 28.61], [43.37, 28.08], [43.19, 27.92],
+        [42.85, 27.89], [42.66, 27.72], [42.42, 27.78], [42.09, 27.96], [41.98, 28.02], [41.96, 27.65],
+        [42.01, 27.18], [41.87, 26.95], [41.99, 26.59], [41.71, 26.35], [41.58, 26.15], [41.32, 26.12],
+        [41.29, 25.75], [41.24, 25.29], [41.36, 24.85], [41.45, 24.42], [41.55, 24.06], [41.38, 23.85],
+        [41.34, 23.22], [41.37, 22.95], [41.71, 22.97], [41.99, 22.87], [42.22, 22.52], [42.32, 22.36],
+        [42.56, 22.44], [42.87, 22.66], [43.01, 22.81], [43.19, 22.65], [43.39, 22.56], [43.68, 22.41],
+        [43.81, 22.36], [44.03, 22.65], [44.21, 22.67]
+    ];
+
+    let bgBorderLayer = L.polygon(fallbackBgBorder, {
+        color: '#ff1111', weight: 3.5, opacity: 0.95, fillColor: '#ff0000', fillOpacity: 0.04, className: 'bg-border-glow'
+    }).addTo(map);
+
+    fetch('https://raw.githubusercontent.com/johan/world.geo.json/master/countries/BGR.geo.json')
+        .then(r => r.json())
+        .then(geoData => {
+            if (map.hasLayer(bgBorderLayer)) map.removeLayer(bgBorderLayer);
+            bgBorderLayer = L.geoJSON(geoData, {
+                style: { color: '#ff1111', weight: 3.5, opacity: 0.95, fillColor: '#ff0000', fillOpacity: 0.04, className: 'bg-border-glow' }
+            }).addTo(map);
+        }).catch(() => {});
+
+    function highlightLocBtn(activeId) {
+        document.querySelectorAll('.loc-btn').forEach(b => b.classList.remove('active'));
+        const el = document.getElementById(activeId);
+        if (el) el.classList.add('active');
+    }
+
+    window.setBaseLocation = function(lat, lon, label, btnId) {
+        if (gpsWatchId !== null && navigator.geolocation) {
+            navigator.geolocation.clearWatch(gpsWatchId);
+            gpsWatchId = null;
+        }
+        myLat = parseFloat(lat);
+        myLon = parseFloat(lon);
+        myBaseName = label;
+        const gpsEl = document.getElementById('gpsText');
+        if (gpsEl) gpsEl.textContent = `📍 ${label}`;
+        if (btnId) highlightLocBtn(btnId);
+        map.setView([myLat, myLon], map.getZoom());
+        fetchPlanes(true);
+    };
+
+    window.promptManualCoords = function() {
+        const input = prompt(
+            'Въведи: Ширина, Дължина, Поправка° (напр. 43.3665, 24.6621, -5.5):',
+            `${myLat.toFixed(6)}, ${myLon.toFixed(6)}, ${azimuthOffsetDeg}`
+        );
+        if (!input) return;
+        const parts = input.trim().split(/[\s,;]+/);
+        if (parts.length >= 2) {
+            const lat = parseFloat(parts[0]);
+            const lon = parseFloat(parts[1]);
+            if (!isNaN(lat) && !isNaN(lon)) {
+                if (parts.length >= 3) {
+                    const deg = parseFloat(parts[2]);
+                    if (!isNaN(deg)) applyNewAzimuthOffset(deg);
+                }
+                window.setBaseLocation(lat, lon, 'Ръчна точка', 'locManual');
+            }
+        }
+    };
+
+    window.activateRealGps = function() {
+        highlightLocBtn('locGps');
+        const gpsEl = document.getElementById('gpsText');
+        if (gpsEl) gpsEl.textContent = '📡 Търсене...';
+        if (!navigator.geolocation) return alert('Няма GPS поддръжка.');
+        gpsWatchId = navigator.geolocation.watchPosition(
+            (pos) => {
+                myLat = pos.coords.latitude;
+                myLon = pos.coords.longitude;
+                myBaseName = 'АВТО GPS';
+                if (gpsEl) gpsEl.textContent = `📡 GPS (${myLat.toFixed(2)}, ${myLon.toFixed(2)})`;
+                map.panTo([myLat, myLon]);
+                fetchPlanes(true);
+            },
+            () => alert('GPS не е достъпен. Избери база от бутоните!'),
+            { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
+        );
+    };
+
+    const TOTAL_PIN_SLOTS = 21;
+    const ALL_SLOTS = Array.from({ length: TOTAL_PIN_SLOTS }, (_, i) => i + 1);
+    let pinnedTargets = {};
+    ALL_SLOTS.forEach(s => { pinnedTargets[s] = null; });
+    let highestTrackNumber = 0;
+    let nextSlotCursor = 1;
+    let slotsExpanded = false;
+    let cardSlotsOpen = false;
+    let showTrails = true;
+
+    let swapSourceSlot = null;
+    let slotPressTimer = null;
+    let slotLongPressTriggered = false;
+
+    const planePhotoCache = {};
+    const planeRouteCache = {};
+    const planeAiBriefCache = {};
+    const knownSquawkMemory = {};
+
+    const planeTrails = {};
+    const MAX_TRAIL_POINTS = 80;
+
+    try {
+        const savedPins = localStorage.getItem('radar_pinned_targets_21');
+        const savedCounter = localStorage.getItem('radar_highest_track_num_21');
+        const savedCursor = localStorage.getItem('radar_next_slot_cursor_21');
+        if (savedPins) {
+            const parsed = JSON.parse(savedPins);
+            ALL_SLOTS.forEach(s => {
+                if (parsed[s] && parsed[s].id) {
+                    const tNum = Number(parsed[s].trackNum) || s;
+                    pinnedTargets[s] = {
+                        ...parsed[s],
+                        trackNum: tNum
+                    };
+                    if (tNum > highestTrackNumber) highestTrackNumber = tNum;
+                } else {
+                    pinnedTargets[s] = null;
+                }
+            });
+        }
+        if (savedCounter) {
+            const parsedCounter = parseInt(savedCounter, 10) || 0;
+            if (parsedCounter > highestTrackNumber) highestTrackNumber = parsedCounter;
+        }
+        if (savedCursor) nextSlotCursor = parseInt(savedCursor, 10) || 1;
+    } catch (e) {}
+
+    function savePinState() {
+        try {
+            localStorage.setItem('radar_pinned_targets_21', JSON.stringify(pinnedTargets));
+            localStorage.setItem('radar_highest_track_num_21', String(highestTrackNumber));
+            localStorage.setItem('radar_next_slot_cursor_21', String(nextSlotCursor));
+        } catch (e) {}
+    }
+
+    function checkAutoResetCounter() {
+        const anyActive = ALL_SLOTS.some(s => pinnedTargets[s] !== null);
+        if (!anyActive) {
+            highestTrackNumber = 0;
+            nextSlotCursor = 1;
+        }
+    }
+
+    function getPinDataForPlane(planeId) {
+        if (!planeId) return null;
+        const normId = String(planeId).trim().toLowerCase();
+        for (let slot of ALL_SLOTS) {
+            const item = pinnedTargets[slot];
+            if (item && item.id && String(item.id).trim().toLowerCase() === normId) {
+                const num = Number(item.trackNum) || slot;
+                return { slot: slot, trackNum: num };
+            }
+        }
+        return null;
+    }
+
+    function getNextTrackAssignment() {
+        let maxOccupiedSlot = 0;
+        let maxTrackNum = highestTrackNumber;
+
+        for (let s of ALL_SLOTS) {
+            if (pinnedTargets[s] !== null) {
+                if (s > maxOccupiedSlot) maxOccupiedSlot = s;
+                const tNum = Number(pinnedTargets[s].trackNum) || s;
+                if (tNum > maxTrackNum) maxTrackNum = tNum;
+            }
+        }
+
+        if (maxOccupiedSlot === 0) {
+            return { slot: 1, trackNum: 1 };
+        }
+
+        const nextTrackNum = maxTrackNum + 1;
+
+        if (maxOccupiedSlot < TOTAL_PIN_SLOTS && nextTrackNum <= TOTAL_PIN_SLOTS) {
+            return { slot: maxOccupiedSlot + 1, trackNum: nextTrackNum };
+        }
+
+        const freeSlot = ALL_SLOTS.find(s => pinnedTargets[s] === null);
+        if (freeSlot) {
+            return { slot: freeSlot, trackNum: nextTrackNum };
+        }
+
+        return { slot: nextSlotCursor, trackNum: nextTrackNum };
+    }
+
+    window.toggleExpandSlots = function() {
+        slotsExpanded = !slotsExpanded;
+        document.getElementById('pinnedBarContainer').classList.toggle('expanded', slotsExpanded);
+        document.getElementById('toggleSlotsBtn').innerText = slotsExpanded ? '▲ СКРИЙ (21)' : '▼ ЦЕЛИ (21)';
+    };
+
+    window.toggleCardSlots = function() {
+        cardSlotsOpen = !cardSlotsOpen;
+        const row = document.getElementById('cardSlotsGrid');
+        if (row) row.classList.toggle('open', cardSlotsOpen);
+    };
+
+    function finishPinChange() {
+        checkAutoResetCounter();
+        savePinState();
+        updatePinnedBarUI();
+
+        if (selectedPlaneId) {
+            const sel = planes.find(p => p.id === selectedPlaneId);
+            if (sel) updateInfoPanelHTML(sel);
+        }
+    }
+
+    function chooseFreePinSlot(sourceSlot = null) {
+        const freeSlots = ALL_SLOTS.filter(s =>
+            pinnedTargets[s] === null && s !== sourceSlot
         );
 
-        return $response;
+        if (freeSlots.length === 0) {
+            alert('Няма свободни позиции. Нито един самолет не е преместен.');
+            return null;
+        }
+
+        const answer = prompt(
+            'Избери свободна позиция:\n' +
+            freeSlots.map(s => '#' + s).join(', ') +
+            '\n\nВъведи номер от 1 до 21:'
+        );
+
+        if (answer === null) return null;
+
+        const selected = Number(String(answer).trim());
+        if (!Number.isInteger(selected) || !freeSlots.includes(selected)) {
+            alert('Невалидна или заета позиция. Нищо не е променено.');
+            return null;
+        }
+
+        return selected;
     }
 
-    #[Route('/api/planes', name: 'api_planes')]
-    public function getPlanes(Request $request): JsonResponse
-    {
-        $centerLat = (float) $request->query->get('lat', 43.3664995);
-        $centerLon = (float) $request->query->get('lon', 24.6621337);
-        $force = $request->query->getBoolean('force', false);
+    function movePinToSlot(sourceSlot, targetSlot, newPlaneData = null) {
+        if (!ALL_SLOTS.includes(targetSlot)) return false;
 
-        if (
-            !is_finite($centerLat) ||
-            !is_finite($centerLon) ||
-            $centerLat < -90 || $centerLat > 90 ||
-            $centerLon < -180 || $centerLon > 180
-        ) {
-            return new JsonResponse(['error' => 'Invalid coordinates'], 400);
-        }
+        const movingPlane = sourceSlot !== null
+            ? pinnedTargets[sourceSlot]
+            : newPlaneData;
 
-        $locKey = round($centerLat, 2) . '_' . round($centerLon, 2);
-        $cacheDir = sys_get_temp_dir();
-        $cacheFile = $cacheDir . '/radar_live_buffer_' . $locKey . '.json';
-        $quotaCacheFile = $cacheDir . '/radar_quota_planes_' . $locKey . '.json';
-        $lockFile = $cacheDir . '/radar_live_' . $locKey . '.lock';
-        $now = time();
+        if (!movingPlane) return false;
+        if (sourceSlot === targetSlot) return true;
 
-        if (
-            !$force &&
-            is_file($cacheFile) &&
-            $this->sub($now, (int) @filemtime($cacheFile)) < self::CACHE_TTL
-        ) {
-            $cached = @file_get_contents($cacheFile);
-            $decoded = is_string($cached) ? json_decode($cached, true) : null;
+        let finalSlot = targetSlot;
+        let shouldShift = false;
+        const targetOccupied = pinnedTargets[targetSlot] !== null;
 
-            if (is_array($decoded)) {
-                return new JsonResponse($decoded);
-            }
-        }
-
-        $lockFp = @fopen($lockFile, 'c+');
-        $gotLock = $lockFp && @flock($lockFp, LOCK_EX | LOCK_NB);
-
-        if (!$gotLock) {
-            if ($lockFp) {
-                @fclose($lockFp);
-            }
-
-            $cached = is_file($cacheFile) ? @file_get_contents($cacheFile) : false;
-            $decoded = is_string($cached) ? json_decode($cached, true) : null;
-
-            return new JsonResponse(is_array($decoded) ? $decoded : []);
-        }
-
-        try {
-            $planesMap = [];
-            $providerNamesWithData = [];
-
-            // 1. Основни безлимитни ADS-B v2 потоци + Военни потоци + PIA/LADD
-            // 1. ВСИЧКИ основни потоци (запазени на 100%, но adsb.lol са разпределени да не връщат HTTP 429)
-
-
-            // 1. ВСИЧКИ основни потоци (запазени на 100%, но adsb.lol са разпределени да не връщат HTTP 429)
-            // 1. ВСИЧКИ основни потоци (запазени на 100%, но adsb.lol са разпределени да не връщат HTTP 429)
-            $adsbProviders = [
-                [
-                    'name' => 'adsb.fi',
-                    'base' => 'adsb.fi',
-                    'url'  => "https://opendata.adsb.fi/api/v2/lat/{$centerLat}/lon/{$centerLon}/dist/" . self::SEARCH_RADIUS_NM,
-                    'mil'  => false,
-                ],
-                [
-                    'name' => 'adsb.fi-mil',
-                    'base' => 'adsb.fi-mil',
-                    'url'  => 'https://opendata.adsb.fi/api/v2/mil',
-                    'mil'  => true,
-                ],
-                [
-                    'name' => 'airplanes.live',
-                    'base' => 'airplanes.live',
-                    'url'  => "https://api.airplanes.live/v2/point/{$centerLat}/{$centerLon}/" . self::SEARCH_RADIUS_NM,
-                    'mil'  => false,
-                ],
-                [
-                    'name' => 'airplanes.live-mil',
-                    'base' => 'airplanes.live-mil',
-                    'url'  => 'https://api.airplanes.live/v2/mil',
-                    'mil'  => true,
-                ],
-                [
-                    'name' => 'adsb.lol',
-                    'base' => 'adsb.lol',
-                    'url'  => "https://api.adsb.lol/v2/point/{$centerLat}/{$centerLon}/" . self::SEARCH_RADIUS_NM,
-                    'mil'  => false,
-                ],
-                [
-                    'name' => 'intelsky-mil',
-                    'base' => 'intelsky-mil',
-                    'url'  => 'https://intelsky.org/api/',
-                    'mil'  => true,
-                ],
-            ];
-
-            // СОНДА ЧЕРНО МОРЕ (Център: 43.30, 34.00 - покрива Крим, Одеса, Синоп, Сочи и цялата акватория)
-            $bsLat = 43.30;
-            $bsLon = 34.00;
-            $adsbProviders[] = [
-                'name' => 'adsb.fi-blacksea',
-                'base' => 'adsb.fi-blacksea',
-                'url'  => "https://opendata.adsb.fi/api/v2/lat/{$bsLat}/lon/{$bsLon}/dist/250",
-                'mil'  => false,
-            ];
-            $adsbProviders[] = [
-                'name' => 'adsb.lol-blacksea',
-                'base' => 'adsb.lol-blacksea',
-                'url'  => "https://api.adsb.lol/v2/point/{$bsLat}/{$bsLon}/250",
-                'mil'  => false,
-            ];
-
-            // Редуваме допълнителните потоци на adsb.lol през цикъл...
-            $cycle = (int) floor($now / self::CACHE_TTL);
-            if ($force || ($cycle % 2) === 0) {
-                $adsbProviders[] = [
-                    'name' => 'adsb.lol-mil',
-                    'base' => 'adsb.lol-mil',
-                    'url'  => 'https://api.adsb.lol/v2/mil',
-                    'mil'  => true,
-                ];
-            } else {
-                $adsbProviders[] = [
-                    'name' => 'adsb.lol-ladd',
-                    'base' => 'adsb.lol-ladd',
-                    'url'  => 'https://api.adsb.lol/v2/ladd',
-                    'mil'  => true,
-                ];
-                $adsbProviders[] = [
-                    'name' => 'adsb.lol-pia',
-                    'base' => 'adsb.lol-pia',
-                    'url'  => 'https://api.adsb.lol/v2/pia',
-                    'mil'  => true,
-                ];
-            }
-            //2. FlyItalyADS-B – с делител на честотата за пазене на дневния лимит на ключа
-            $flyItalyKey = $_ENV['FLYITALYADSB_API_KEY']
-                ?? $_SERVER['FLYITALYADSB_API_KEY']
-                ?? getenv('FLYITALYADSB_API_KEY')
-                ?: '';
-
-            $flyItalyKey = trim((string) $flyItalyKey, " \t\n\r\0\x0B\"'");
-            $polledFlyItaly = false;
-
-            if ($flyItalyKey !== '') {
-                $flyHeaders = [
-                    'X-Api-Key: ' . $flyItalyKey,
-                    'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                    'Accept: application/json',
-                ];
-
-
-                if ($force || ($now % 18) < self::CACHE_TTL) {
-                    $polledFlyItaly = true;
-                    $adsbProviders[] = [
-                        'name'    => 'flyitaly',
-                        'base'    => 'flyitaly',
-                        'url'     => sprintf(
-                            'https://api.flyitalyadsb.com/v2/lat/%F/lon/%F/dist/300',
-                            $centerLat,
-                            $centerLon
-                        ),
-                        'mil'     => false,
-                        'headers' => $flyHeaders,
-                    ];
-                }
-
-                if ($force || ($now % 48) < self::CACHE_TTL) {
-                    $adsbProviders[] = [
-                        'name'    => 'flyitaly-mil',
-                        'base'    => 'flyitaly-mil',
-                        'url'     => 'https://api.flyitalyadsb.com/v2/mil',
-                        'mil'     => true,
-                        'headers' => $flyHeaders,
-                    ];
-                }
-            }
-
-            // 3. OpenSky Network – пита се веднъж на 30 сек
-            $openSkyClientId = $_ENV['OPEN_SKY_CLIENT_ID']
-                ?? $_SERVER['OPEN_SKY_CLIENT_ID']
-                ?? getenv('OPEN_SKY_CLIENT_ID')
-                ?: '';
-
-            $openSkyClientSecret = $_ENV['OPEN_SKY_CLIENT_SECRET']
-                ?? $_SERVER['OPEN_SKY_CLIENT_SECRET']
-                ?? getenv('OPEN_SKY_CLIENT_SECRET')
-                ?: '';
-
-            $openSkyClientId = trim((string) $openSkyClientId);
-            $openSkyClientSecret = trim((string) $openSkyClientSecret);
-            $polledOpenSky = false;
-
-            if ($openSkyClientId !== '' && $openSkyClientSecret !== '' && ($force || ($now % 30) < self::CACHE_TTL)) {
-                $tokenFile = $cacheDir . '/radar_opensky_token.json';
-                $openSkyToken = '';
-
-                if (is_file($tokenFile)) {
-                    $cachedToken = json_decode((string) @file_get_contents($tokenFile), true);
-                    if (
-                        is_array($cachedToken) &&
-                        !empty($cachedToken['access_token']) &&
-                        (int) ($cachedToken['expires_at'] ?? 0) > time() + 60
-                    ) {
-                        $openSkyToken = $cachedToken['access_token'];
-                    }
-                }
-
-                if ($openSkyToken === '') {
-                    $tokenCh = curl_init(
-                        'https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token'
-                    );
-
-                    curl_setopt_array($tokenCh, [
-                        CURLOPT_POST           => true,
-                        CURLOPT_POSTFIELDS     => http_build_query([
-                            'grant_type'    => 'client_credentials',
-                            'client_id'     => $openSkyClientId,
-                            'client_secret' => $openSkyClientSecret,
-                        ]),
-                        CURLOPT_HTTPHEADER     => [
-                            'Content-Type: application/x-www-form-urlencoded',
-                            'Accept: application/json',
-                        ],
-                        CURLOPT_RETURNTRANSFER => true,
-                        CURLOPT_CONNECTTIMEOUT => 4,
-                        CURLOPT_TIMEOUT        => 8,
-                    ]);
-
-                    $tokenBody = curl_exec($tokenCh);
-                    $tokenCode = (int) curl_getinfo($tokenCh, CURLINFO_HTTP_CODE);
-                    $tokenError = curl_error($tokenCh);
-                    curl_close($tokenCh);
-
-                    $tokenData = json_decode(is_string($tokenBody) ? $tokenBody : '', true);
-
-                    if ($tokenCode === 200 && is_array($tokenData) && !empty($tokenData['access_token'])) {
-                        $openSkyToken = $tokenData['access_token'];
-                        $expiresIn = (int) ($tokenData['expires_in'] ?? 1800);
-
-                        @file_put_contents(
-                            $tokenFile,
-                            json_encode([
-                                'access_token' => $openSkyToken,
-                                'expires_at'   => (int) $this->sub(time() + $expiresIn, 60),
-                            ]),
-                            LOCK_EX
-                        );
-
-                        error_log('[RADAR PROVIDER] OpenSky OAuth TOKEN REFRESHED');
-                    } else {
-                        error_log('[RADAR PROVIDER] OpenSky TOKEN ERROR HTTP=' . $tokenCode . ' ' . $tokenError);
-                    }
-                }
-
-                if ($openSkyToken !== '') {
-                    $polledOpenSky = true;
-                    $adsbProviders[] = [
-                        'name'    => 'opensky',
-                        'base'    => 'opensky',
-                        'url'     => $this->buildOpenSkyUrl($centerLat, $centerLon, self::SEARCH_RADIUS_NM),
-                        'mil'     => false,
-                        'headers' => [
-                            'Authorization: Bearer ' . $openSkyToken,
-                            'Accept: application/json',
-                            'User-Agent: MilitaryRadar/1.0',
-                        ],
-                    ];
-                }
-            }
-
-            // 3.5. AvioADSB Military – веднъж на 15 мин (900 сек = 96 заявки/ден при лимит 100/ден без ключ)
-            $polledAvio = false;
-            if ($force || ($now % 900) < self::CACHE_TTL) {
-                $polledAvio = true;
-                $adsbProviders[] = [
-                    'name' => 'avioadsb-mil',
-                    'base' => 'avioadsb-mil',
-                    'url'  => 'https://avioadsb.org/v1/mil',
-                    'mil'  => true,
-                ];
-            }
-
-            // 4. Паралелно извличане на всички активни потоци
-            $responses = $this->curlFetchMany($adsbProviders);
-
-            foreach ($adsbProviders as $provider) {
-                $name = $provider['name'];
-                $base = $provider['base'];
-
-                if ($this->providerIsCoolingDown($base)) {
-                    error_log(sprintf('[RADAR PROVIDER] %s STATUS=COOLDOWN', $name));
-                    continue;
-                }
-
-                $res = $responses[$name] ?? ['code' => 0, 'body' => '', 'error' => 'No response', 'time_ms' => 0];
-                $httpCode = (int) ($res['code'] ?? 0);
-                $error = (string) ($res['error'] ?? '');
-
-                if (in_array($httpCode, [403, 429], true)) {
-                    $this->putProviderInCooldown($base);
-                    error_log(sprintf('[RADAR PROVIDER] %s HTTP=%d STATUS=COOLDOWN', $name, $httpCode));
-                    continue;
-                }
-
-                if ($httpCode !== 200 || ($res['body'] ?? '') === '') {
-                    error_log(sprintf('[RADAR PROVIDER] %s HTTP=%d ERROR=%s', $name, $httpCode, $error));
-                    continue;
-                }
-
-                $data = json_decode($res['body'], true);
-                if (!is_array($data)) {
-                    error_log(sprintf('[RADAR PROVIDER] %s HTTP=200 ERROR=INVALID_JSON', $name));
-                    continue;
-                }
-
-                $before = count($planesMap);
-
-                if ($name === 'opensky' || isset($data['states'])) {
-                    $states = is_array($data['states'] ?? null) ? $data['states'] : [];
-                    $rawCount = count($states);
-                    if ($rawCount > 0) {
-                        $this->parseOpenSkyList($states, $planesMap, $centerLat, $centerLon);
-                    }
-                } else {
-                    $list = $data['ac'] ?? $data['aircraft'] ?? [];
-                    if (!is_array($list)) {
-                        $list = [];
-                    }
-                    $rawCount = count($list);
-                    if ($rawCount > 0) {
-                        $this->parseAdsbV2List(
-                            $list,
-                            $planesMap,
-                            $centerLat,
-                            $centerLon,
-                            (bool) $provider['mil'],
-                            $name
-                        );
-                    }
-                }
-
-                $added = (int) $this->sub(count($planesMap), $before);
-
-                error_log(sprintf(
-                    '[RADAR PROVIDER] %s HTTP=%d RAW=%d NEW=%d TIME=%dms',
-                    $name,
-                    $httpCode,
-                    $rawCount,
-                    $added,
-                    (int) ($res['time_ms'] ?? 0)
-                ));
-
-                if ($added > 0) {
-                    $providerNamesWithData[] = $name;
-                }
-            }
-
-            // 5. Запазване и сливане на самолетите от токен провайдърите (OpenSky/FlyItaly/AvioADSB)
-            // 5. Запазване и сливане на самолетите между циклите (без никакво изчезване от екрана)
-            $quotaPlanesBuffer = [];
-            if (is_file($quotaCacheFile) && $this->sub($now, (int) @filemtime($quotaCacheFile)) < 90) {
-                $rawQuota = @file_get_contents($quotaCacheFile);
-                $decodedQuota = is_string($rawQuota) ? json_decode($rawQuota, true) : null;
-                if (is_array($decodedQuota)) {
-                    $quotaPlanesBuffer = $decodedQuota;
-                }
-            }
-
-            $bufferedSources = [
-                'opensky',
-                'flyitaly',
-                'flyitaly-mil',
-                'avioadsb-mil',
-                'adsb.lol-mil',
-                'adsb.lol-ladd',
-                'adsb.lol-pia',
-            ];
-
-            foreach ($planesMap as $id => $p) {
-                $src = $p['_source'] ?? '';
-                if (in_array($src, $bufferedSources, true)) {
-                    $quotaPlanesBuffer[$id] = $p;
-                }
-            }
-
-            $restoredCount = 0;
-            foreach ($quotaPlanesBuffer as $id => $qp) {
-                if (!isset($planesMap[$id])) {
-                    $planesMap[$id] = $qp;
-                    $restoredCount++;
-                } elseif (
-                    str_contains((string) ($planesMap[$id]['callsign'] ?? ''), '[MODE-S]') &&
-                    !str_contains((string) ($qp['callsign'] ?? ''), '[MODE-S]')
-                ) {
-                    $qp['isMilitary'] = !empty($planesMap[$id]['isMilitary']) || !empty($qp['isMilitary']);
-                    $planesMap[$id] = $qp;
-                }
-            }
-            if ($restoredCount > 0) {
-                $providerNamesWithData[] = 'quota-cache';
-            }
-
-            @file_put_contents($quotaCacheFile, json_encode($quotaPlanesBuffer, JSON_UNESCAPED_UNICODE), LOCK_EX);
-
-
-            if (!$this->providerIsCoolingDown('fr24')) {
-                $fr24Url = $this->buildFr24Url($centerLat, $centerLon);
-                $frRes = $this->curlFetch($fr24Url, true);
-
-                if (in_array($frRes['code'], [403, 429], true)) {
-                    $this->putProviderInCooldown('fr24');
-                } elseif ($frRes['code'] === 200 && $frRes['body'] !== '') {
-                    $frData = json_decode($frRes['body'], true);
-                    if (is_array($frData)) {
-                        $before = count($planesMap);
-                        $this->parseFr24Data($frData, $planesMap, $centerLat, $centerLon);
-                        if (count($planesMap) >= $before) {
-                            $providerNamesWithData[] = 'FR24';
-                        }
-                    }
-                }
-            }
-
-            foreach ($planesMap as &$plane) {
-                unset($plane['_source']);
-            }
-            unset($plane);
-
-            $finalPlanes = array_values($planesMap);
-
-            if ($finalPlanes === []) {
-                $old = is_file($cacheFile) ? @file_get_contents($cacheFile) : false;
-                $decoded = is_string($old) ? json_decode($old, true) : null;
-
-                if (is_array($decoded) && $decoded !== []) {
-                    return new JsonResponse($decoded);
-                }
-
-                return new JsonResponse([]);
-            }
-
-            usort($finalPlanes, static fn(array $a, array $b): int => strcmp($a['id'] ?? '', $b['id'] ?? ''));
-
-            $jsonPayload = json_encode(
-                $finalPlanes,
-                JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE
+        if (targetOccupied) {
+            const freeRightSlot = ALL_SLOTS.find(s =>
+                s > targetSlot &&
+                (pinnedTargets[s] === null || s === sourceSlot)
             );
 
-            if (is_string($jsonPayload)) {
-                @file_put_contents($cacheFile, $jsonPayload, LOCK_EX);
-            }
-
-            $this->appendHistorySnapshot($cacheDir, $now, $finalPlanes);
-
-            error_log(sprintf(
-                '[RADAR] FINAL AIRCRAFT=%d SOURCES=%s',
-                count($finalPlanes),
-                implode(',', array_unique($providerNamesWithData))
-            ));
-
-            return new JsonResponse($finalPlanes);
-        } finally {
-            if ($lockFp) {
-                @flock($lockFp, LOCK_UN);
-                @fclose($lockFp);
-            }
-        }
-    }
-
-    #[Route('/api/history', name: 'api_history')]
-    public function getHistory(Request $request): JsonResponse
-    {
-        $cacheDir = sys_get_temp_dir();
-        $indexFile = $cacheDir . '/radar_history_index.json';
-
-        $legacyHugeFile = $cacheDir . '/radar_history_ring.json';
-        if (is_file($legacyHugeFile)) {
-            @unlink($legacyHugeFile);
-        }
-
-        if (!is_file($indexFile)) {
-            return new JsonResponse(['timestamps' => [], 'planes' => [], 'total' => 0]);
-        }
-
-        $rawIndex = @file_get_contents($indexFile);
-        $indexData = is_string($rawIndex) ? json_decode($rawIndex, true) : [];
-
-        if (!is_array($indexData) || $indexData === []) {
-            return new JsonResponse(['timestamps' => [], 'planes' => [], 'total' => 0]);
-        }
-
-        $frameIndex = $request->query->get('index');
-
-        if ($frameIndex !== null) {
-            $idx = (int) $frameIndex;
-            if (isset($indexData[$idx])) {
-                $slotNum = (int) ($indexData[$idx]['slot'] ?? -1);
-                $ts = (int) ($indexData[$idx]['ts'] ?? 0);
-                $slotFile = $cacheDir . '/radar_hist_slot_' . $slotNum . '.json';
-
-                $planes = [];
-                if ($slotNum >= 0 && is_file($slotFile)) {
-                    $rawSlot = @file_get_contents($slotFile);
-                    $decodedSlot = is_string($rawSlot) ? json_decode($rawSlot, true) : [];
-                    if (is_array($decodedSlot)) {
-                        $planes = $decodedSlot;
-                    }
-                }
-
-                return new JsonResponse([
-                    'timestamp' => $ts,
-                    'planes'    => $planes,
-                    'total'     => count($indexData),
-                ]);
-            }
-
-            return new JsonResponse(['timestamp' => null, 'planes' => [], 'total' => count($indexData)]);
-        }
-
-        return new JsonResponse([
-            'timestamps' => array_map(static fn($item) => $item['ts'] ?? null, $indexData),
-            'total'      => count($indexData),
-        ]);
-    }
-
-    #[Route('/api/ai-brief', name: 'api_ai_brief', methods: ['POST'])]
-    public function aiBrief(Request $request): JsonResponse
-    {
-        $rawKey = $_ENV['GEMINI_API_KEY'] ?? $_SERVER['GEMINI_API_KEY'] ?? getenv('GEMINI_API_KEY') ?: '';
-        $apiKey = trim((string) $rawKey, " \t\n\r\0\x0B\"'");
-
-        if ($apiKey === '') {
-            return new JsonResponse([
-                'brief' => '⚠️ Липсва GEMINI_API_KEY в настройките на сървъра (.env или Render Environment).'
-            ]);
-        }
-
-        $payload = json_decode($request->getContent(), true);
-        if (!is_array($payload)) {
-            return new JsonResponse(['error' => 'Invalid payload'], 400);
-        }
-
-        $hex      = strtoupper(trim((string) ($payload['id'] ?? 'НЕИЗВЕСТЕН')));
-        $hexLower = strtolower($hex);
-        $callsign = strtoupper(trim((string) ($payload['callsign'] ?? '')));
-        $squawk   = trim((string) ($payload['squawk'] ?? '----'));
-        $type     = trim((string) ($payload['type'] ?? 'Неизвестен тип'));
-        $operator = trim((string) ($payload['operator'] ?? 'Неизвестен оператор'));
-        $altM     = (int) ($payload['altitude'] ?? 0);
-        $speedKmh = (int) ($payload['speed'] ?? 0);
-        $trackDeg = (int) ($payload['track'] ?? 0);
-        $aziDeg   = (int) ($payload['bearing'] ?? 0);
-        $distKm   = round((float) ($payload['distKm'] ?? 0), 1);
-        $isMil    = !empty($payload['isMilitary']);
-        $route    = trim((string) ($payload['route'] ?? 'Няма данни'));
-        $trailPts = is_array($payload['trail'] ?? null) ? array_slice($payload['trail'], -15) : [];
-
-        $safeHex = preg_replace('/[^a-zA-Z0-9_-]/', '', $hexLower);
-        $aiCacheFile = sys_get_temp_dir() . '/radar_ai_brief_' . $safeHex . '.txt';
-        if ($safeHex !== '' && is_file($aiCacheFile) && $this->sub(time(), (int) @filemtime($aiCacheFile)) < 600) {
-            $cachedBrief = trim((string) @file_get_contents($aiCacheFile));
-            if ($cachedBrief !== '') {
-                return new JsonResponse(['brief' => $cachedBrief, 'cached' => true]);
-            }
-        }
-
-        $lastPt   = !empty($trailPts) ? end($trailPts) : null;
-        $planeLat = (float) ($payload['lat'] ?? ($lastPt['lat'] ?? 43.3665));
-        $planeLon = (float) ($payload['lon'] ?? ($lastPt['lon'] ?? 24.6621));
-
-        $osintQueries = [];
-        if ($hex !== '' && !str_starts_with($hex, 'FR_')) {
-            $osintQueries[] = [
-                'name' => 'adsbdb_ac',
-                'base' => 'adsbdb_ac',
-                'url'  => 'https://api.adsbdb.com/v0/aircraft/' . urlencode($hexLower),
-            ];
-            $osintQueries[] = [
-                'name' => 'hexdb_ac',
-                'base' => 'hexdb_ac',
-                'url'  => 'https://hexdb.io/api/v1/aircraft/' . urlencode($hexLower),
-            ];
-            $osintQueries[] = [
-                'name' => 'live_telemetry',
-                'base' => 'live_telemetry',
-                'url'  => 'https://api.airplanes.live/v2/hex/' . urlencode($hexLower),
-            ];
-        }
-        if ($callsign !== '' && !str_starts_with($callsign, 'FR_')) {
-            $cleanCs = trim((string) preg_replace('/\[.*?\]/', '', $callsign));
-            if ($cleanCs !== '') {
-                $osintQueries[] = [
-                    'name' => 'adsbdb_cs',
-                    'base' => 'adsbdb_cs',
-                    'url'  => 'https://api.adsbdb.com/v0/callsign/' . urlencode($cleanCs),
-                ];
-            }
-        }
-        $osintQueries[] = [
-            'name' => 'meteo_terrain',
-            'base' => 'meteo_terrain',
-            'url'  => sprintf(
-                'https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f&current=temperature_2m,wind_speed_10m,wind_direction_10m&hourly=wind_speed_850hPa,wind_direction_850hPa,wind_speed_300hPa,wind_direction_300hPa,temperature_300hPa&forecast_days=1',
-                $planeLat,
-                $planeLon
-            ),
-        ];
-
-        $osintResponses = $this->curlFetchMany($osintQueries);
-
-        $osintReg      = 'Няма данни';
-        $osintCountry  = 'Няма данни';
-        $osintFullType = $type;
-        $osintRoute    = $route;
-
-        if (($osintResponses['adsbdb_ac']['code'] ?? 0) === 200) {
-            $acObj = json_decode($osintResponses['adsbdb_ac']['body'], true)['response']['aircraft'] ?? null;
-            if (is_array($acObj)) {
-                $osintReg      = (string) ($acObj['registration'] ?? $osintReg);
-                $osintCountry  = (string) ($acObj['registered_owner_country_name'] ?? $osintCountry);
-                $osintFullType = trim(($acObj['manufacturer'] ?? '') . ' ' . ($acObj['type'] ?? $type));
-                if (!empty($acObj['registered_owner'])) {
-                    $operator = (string) $acObj['registered_owner'];
-                }
-            }
-        }
-
-        if (($osintResponses['hexdb_ac']['code'] ?? 0) === 200) {
-            $hxObj = json_decode($osintResponses['hexdb_ac']['body'], true);
-            if (is_array($hxObj)) {
-                if ($osintReg === 'Няма данни' && !empty($hxObj['Registration'])) {
-                    $osintReg = (string) $hxObj['Registration'];
-                }
-                if (($osintFullType === '' || $osintFullType === 'Неизвестен тип') && !empty($hxObj['Type'])) {
-                    $osintFullType = trim(($hxObj['Manufacturer'] ?? '') . ' ' . $hxObj['Type']);
-                }
-                if (($operator === 'Неизвестен оператор' || $operator === 'Граждански полет') && !empty($hxObj['RegisteredOwners'])) {
-                    $operator = (string) $hxObj['RegisteredOwners'];
-                }
-            }
-        }
-
-        if (($osintResponses['adsbdb_cs']['code'] ?? 0) === 200) {
-            $frObj = json_decode($osintResponses['adsbdb_cs']['body'], true)['response']['flightroute'] ?? null;
-            if (is_array($frObj)) {
-                $orig     = $frObj['origin']['municipality'] ?? ($frObj['origin']['name'] ?? '');
-                $origIcao = $frObj['origin']['icao_code'] ?? '';
-                $dest     = $frObj['destination']['municipality'] ?? ($frObj['destination']['name'] ?? '');
-                $destIcao = $frObj['destination']['icao_code'] ?? '';
-                $airline  = $frObj['airline']['name'] ?? '';
-                $osintRoute = "{$orig} ({$origIcao}) -> {$dest} ({$destIcao})" . ($airline ? " | Авиокомпания: {$airline}" : '');
-            }
-        }
-
-        $telemetryNote = 'Стандартно ADS-B излъчване';
-        if (($osintResponses['live_telemetry']['code'] ?? 0) === 200) {
-            $acLive = json_decode($osintResponses['live_telemetry']['body'], true)['ac'][0] ?? null;
-            if (is_array($acLive)) {
-                $tParts = [];
-                if (isset($acLive['baro_rate'])) {
-                    $vRateMps = round($this->mul((float) $acLive['baro_rate'], 0.00508), 1);
-                    $vSign    = $vRateMps > 0 ? '+' : '';
-                    $tParts[] = "Верт. скорост: {$vSign}{$vRateMps} m/s";
-                }
-                if (isset($acLive['nav_altitude_mcp'])) {
-                    $mcpMeters = (int) round($this->mul((float) $acLive['nav_altitude_mcp'], 0.3048));
-                    $tParts[]  = "Зададена височина в автопилота (MCP): {$mcpMeters} м";
-                }
-                if (isset($acLive['mach'])) {
-                    $tParts[] = 'Бордови Mach: ' . round((float) $acLive['mach'], 2);
-                }
-                if (isset($acLive['rssi'])) {
-                    $tParts[] = 'Ниво на сигнала (RSSI): ' . $acLive['rssi'] . ' dBFS';
-                }
-                if (isset($acLive['nic']) && (int) $acLive['nic'] < 5) {
-                    $tParts[] = '⚠️ НИСКА GPS ТОЧНОСТ (NIC=' . $acLive['nic'] . ' - възможни РЕБ/GPS смущения!)';
-                }
-                if (!empty($acLive['r']) && $osintReg === 'Няма данни') {
-                    $osintReg = (string) $acLive['r'];
-                }
-                if ($tParts !== []) {
-                    $telemetryNote = implode(' | ', $tParts);
-                }
-            }
-        }
-
-        $terrainElevationM = 180;
-        $aglMeters         = (int) max(0, $this->sub($altM, $terrainElevationM));
-        $windInfo          = 'Няма данни';
-
-        if (($osintResponses['meteo_terrain']['code'] ?? 0) === 200) {
-            $meteo = json_decode($osintResponses['meteo_terrain']['body'], true);
-            if (is_array($meteo)) {
-                $terrainElevationM = (int) round((float) ($meteo['elevation'] ?? 180));
-                $aglMeters         = (int) max(0, $this->sub($altM, $terrainElevationM));
-
-                $hourIdx = (int) gmdate('G');
-                if ($altM > 5500) {
-                    $wSpd = (float) ($meteo['hourly']['wind_speed_300hPa'][$hourIdx] ?? 0);
-                    $wDir = (float) ($meteo['hourly']['wind_direction_300hPa'][$hourIdx] ?? 0);
-                } elseif ($altM > 1000) {
-                    $wSpd = (float) ($meteo['hourly']['wind_speed_850hPa'][$hourIdx] ?? 0);
-                    $wDir = (float) ($meteo['hourly']['wind_direction_850hPa'][$hourIdx] ?? 0);
-                } else {
-                    $wSpd = (float) ($meteo['current']['wind_speed_10m'] ?? 0);
-                    $wDir = (float) ($meteo['current']['wind_direction_10m'] ?? 0);
-                }
-
-                $angleDiffRad = deg2rad($this->sub($wDir, $trackDeg));
-                $headwindKmh  = (int) round($this->mul($wSpd, cos($angleDiffRad)));
-                $tasKmh       = max(0, $speedKmh + $headwindKmh);
-                $soundSpdKmh  = $altM > 8000 ? 1065 : ($altM > 4000 ? 1140 : 1210);
-                $estMach      = round($tasKmh / $soundSpdKmh, 2);
-
-                $windType = $headwindKmh >= 0 ? "насрещен {$headwindKmh} км/ч" : 'попътен ' . abs($headwindKmh) . ' км/ч';
-                $windInfo = "Вятър на височината: " . round($wSpd) . " км/ч от " . round($wDir) . "° ({$windType}) | Истинска въздушна скорост (TAS): ~{$tasKmh} км/ч (Mach {$estMach})";
-            }
-        }
-
-        $radarHorizonKm = (int) round($this->mul(4.12, sqrt(250) + sqrt(max(10, $altM))));
-        $horizonStatus  = $distKm <= $radarHorizonKm
-            ? "В ПРЯКА РАДИОВИДИМОСТ (Радиохоризонт за тази височина: {$radarHorizonKm} км)"
-            : "На ръба/отвъд стандартния радиохоризонт ({$radarHorizonKm} км) - приема се чрез рефракция/височинен коридор";
-
-        $maneuverProfile = 'Прав курс (Стабилен)';
-        if (count($trailPts) >= 4) {
-            $totalTurnDeg = 0.0;
-            $prevBearing  = null;
-            for ($i = 1, $n = count($trailPts); $i < $n; $i++) {
-                $prevIdx = (int) $this->sub($i, 1);
-                $lat1 = (float) ($trailPts[$prevIdx]['lat'] ?? 0);
-                $lon1 = (float) ($trailPts[$prevIdx]['lon'] ?? 0);
-                $lat2 = (float) ($trailPts[$i]['lat'] ?? 0);
-                $lon2 = (float) ($trailPts[$i]['lon'] ?? 0);
-                $dLon = deg2rad($this->sub($lon2, $lon1));
-                $y = $this->mul(sin($dLon), cos(deg2rad($lat2)));
-                $x = $this->sub(
-                    $this->mul(cos(deg2rad($lat1)), sin(deg2rad($lat2))),
-                    $this->mul($this->mul(sin(deg2rad($lat1)), cos(deg2rad($lat2))), cos($dLon))
+            if (freeRightSlot !== undefined) {
+                const confirmed = confirm(
+                    'Позиция #' + targetSlot + ' вече е заета.\n\n' +
+                    'ДА – постави избрания самолет на #' + targetSlot +
+                    ' и измести заетите позиции след него с едно място надясно.\n\n' +
+                    'НЕ – избери друга свободна позиция.'
                 );
-                $segBrg = fmod(rad2deg(atan2($y, $x)) + 360.0, 360.0);
 
-                if ($prevBearing !== null) {
-                    $diff = abs($this->sub($segBrg, $prevBearing));
-                    if ($diff > 180.0) {
-                        $diff = $this->sub(360.0, $diff);
-                    }
-                    $totalTurnDeg += $diff;
+                if (confirmed) {
+                    shouldShift = true;
+                } else {
+                    finalSlot = chooseFreePinSlot(sourceSlot);
+                    if (finalSlot === null) return false;
                 }
-                $prevBearing = $segBrg;
-            }
-            $roundedTurn = (int) round($totalTurnDeg);
-            if ($roundedTurn >= 135) {
-                $maneuverProfile = "АКТИВНО МАНЕВРИРАНЕ / ОРБИТА (натрупан завой {$roundedTurn}° - зона за патрул, дозареждане или пилотаж)";
-            } elseif ($roundedTurn >= 45) {
-                $maneuverProfile = "Маневра за смяна на курса / Заход ({$roundedTurn}° сумарен завой)";
             } else {
-                $maneuverProfile = "Праволинеен коридор (отклонение само {$roundedTurn}°)";
+                alert(
+                    'Няма свободно място след позиция #' + targetSlot + '.\n' +
+                    'Можеш да избереш друга свободна позиция. Няма да бъде изтрит самолет.'
+                );
+                finalSlot = chooseFreePinSlot(sourceSlot);
+                if (finalSlot === null) return false;
             }
         }
 
-        $squawkNote = 'Стандартен транспондерен код от РВД';
-        if ($squawk === '7700') {
-            $squawkNote = '🚨 АВАРИЯ НА БОРДА (EMERGENCY 7700)!';
-        } elseif ($squawk === '7600') {
-            $squawkNote = '📻 ПЪЛНА ЗАГУБА НА РАДИОВРЪЗКА (NORDO / LOST COMMS 7600)!';
-        } elseif ($squawk === '7500') {
-            $squawkNote = '🚨 НЕЗАКОННА НАМЕСА / ОТВЛИЧАНЕ (HIJACK 7500)!';
-        } elseif ($squawk === '7777') {
-            $squawkNote = '⚔️ ВОЕНЕН ПРЕХВАТ / БОЙНО ДЕЖУРСТВО НА НАТО (MILITARY INTERCEPT 7777)';
-        } elseif ($squawk === '7000' || $squawk === '1200') {
-            $squawkNote = 'Визуален полет (VFR) на малка височина без инструментален план';
-        } elseif ($squawk === '0000' || $squawk === '----' || $squawk === '') {
-            $squawkNote = 'Скрит / Неактивен Mode-S код (чисто MLAT засичане)';
+        if (!shouldShift && pinnedTargets[finalSlot] !== null) {
+            return false;
         }
 
-        $milStatusText = $isMil ? 'ВОЕНЕН / ДЪРЖАВЕН БОРД' : 'Граждански / Търговски';
-        $csDisplay     = $callsign !== '' ? $callsign : 'НЯМА ПОЗИВНА';
+        if (sourceSlot !== null) {
+            pinnedTargets[sourceSlot] = null;
+        }
 
-        $lat1R = deg2rad($planeLat);
-        $lon1R = deg2rad($planeLon);
-        $brgR  = deg2rad($trackDeg);
-
-        $compassDirs = ['Север (С)', 'Североизток (СИ)', 'Изток (И)', 'Югоизток (ЮИ)', 'Юг (Ю)', 'Югозапад (ЮЗ)', 'Запад (З)', 'Северозапад (СЗ)'];
-        $compassDir  = $compassDirs[(int) round(fmod($trackDeg, 360) / 45) % 8];
-
-        $angDist     = $this->mul(15, $speedKmh / 60) / 111.12;
-        $lat2R       = asin($this->mul(sin($lat1R), cos(deg2rad($angDist))) + $this->mul($this->mul(cos($lat1R), sin(deg2rad($angDist))), cos($brgR)));
-        $lon2R       = $lon1R + atan2(
-                $this->mul($this->mul(sin($brgR), sin(deg2rad($angDist))), cos($lat1R)),
-                $this->sub(cos(deg2rad($angDist)), $this->mul(sin($lat1R), sin($lat2R)))
-            );
-        $projLat     = round(rad2deg($lat2R), 4);
-        $projLon     = round(rad2deg($lon2R), 4);
-        $dist15MinKm = round($this->mul($speedKmh / 60, 15));
-
-        $waypoints = [
-            ['name' => 'Плевен / Долна Митрополия (LBPL)', 'lat' => 43.451, 'lon' => 24.503],
-            ['name' => 'Горна Оряховица (LBGO)', 'lat' => 43.151, 'lon' => 25.713],
-            ['name' => 'София (LBSF)', 'lat' => 42.695, 'lon' => 23.406],
-            ['name' => 'Граф Игнатиево / Пловдив (LBPG)', 'lat' => 42.290, 'lon' => 24.714],
-            ['name' => 'Безмер / Ямбол (LBIA)', 'lat' => 42.455, 'lon' => 26.352],
-            ['name' => 'Варна (LBWN)', 'lat' => 43.232, 'lon' => 27.825],
-            ['name' => 'Бургас (LBBG)', 'lat' => 42.570, 'lon' => 27.515],
-            ['name' => 'Букурещ Отопени (LROP)', 'lat' => 44.571, 'lon' => 26.085],
-            ['name' => 'Констанца / М. Когълничану (LRCK)', 'lat' => 44.362, 'lon' => 28.488],
-            ['name' => 'Крайова (LRCV)', 'lat' => 44.318, 'lon' => 23.888],
-            ['name' => 'Белград (LYBE)', 'lat' => 44.818, 'lon' => 20.309],
-            ['name' => 'Истанбул (LTFM)', 'lat' => 41.275, 'lon' => 28.751],
-        ];
-
-        $headingTargets = [];
-        foreach ($waypoints as $wp) {
-            $dLon  = deg2rad($this->sub($wp['lon'], $planeLon));
-            $y     = $this->mul(sin($dLon), cos(deg2rad($wp['lat'])));
-            $x     = $this->sub(
-                $this->mul(cos($lat1R), sin(deg2rad($wp['lat']))),
-                $this->mul($this->mul(sin($lat1R), cos(deg2rad($wp['lat']))), cos($dLon))
-            );
-            $wpBrg = fmod(rad2deg(atan2($y, $x)) + 360.0, 360.0);
-
-            $diff = abs($this->sub($trackDeg, $wpBrg));
-            if ($diff > 180.0) {
-                $diff = $this->sub(360.0, $diff);
+        if (shouldShift) {
+            let freeRightSlot = finalSlot + 1;
+            while (freeRightSlot <= TOTAL_PIN_SLOTS && pinnedTargets[freeRightSlot] !== null) {
+                freeRightSlot++;
             }
 
-            $cosAngle = $this->mul(sin($lat1R), sin(deg2rad($wp['lat']))) + $this->mul($this->mul(cos($lat1R), cos(deg2rad($wp['lat']))), cos($dLon));
-            $wpDistKm = round($this->mul(6371.0, acos(min(1.0, max(-1.0, $cosAngle)))));
+            if (freeRightSlot > TOTAL_PIN_SLOTS) {
+                if (sourceSlot !== null) pinnedTargets[sourceSlot] = movingPlane;
+                finishPinChange();
+                alert('Не може да се пренареди безопасно. Подредбата е възстановена.');
+                return false;
+            }
 
-            if ($diff <= 22.0 && $wpDistKm >= 8 && $wpDistKm <= 450) {
-                $etaMin = $speedKmh > 40 ? (int) round($this->mul($wpDistKm / $speedKmh, 60)) : 0;
-                $headingTargets[] = "{$wp['name']} (на {$wpDistKm} км, след ~{$etaMin} мин)";
+            for (let s = freeRightSlot; s > finalSlot; s--) {
+                pinnedTargets[s] = pinnedTargets[s - 1];
+                if (pinnedTargets[s] && Number(pinnedTargets[s].trackNum) <= TOTAL_PIN_SLOTS) {
+                    pinnedTargets[s].trackNum = s;
+                }
             }
         }
 
-        $vectorSummary = !empty($headingTargets)
-            ? 'Насочен по курс към: ' . implode(' / ', array_slice($headingTargets, 0, 2))
-            : "Транзитен коридор на {$compassDir} (след 15 мин на {$dist15MinKm} км -> коорд. {$projLat}, {$projLon})";
+        if (!movingPlane.trackNum || movingPlane.trackNum <= TOTAL_PIN_SLOTS) {
+            movingPlane.trackNum = finalSlot;
+        }
+        if (movingPlane.trackNum > highestTrackNumber) {
+            highestTrackNumber = movingPlane.trackNum;
+        }
 
-        $promptLines = [
-            "Ти си началник на разузнавателен център за ПВО и OSINT.",
-            "Направи извънземно точен експертен анализ САМО на български език (БЕЗ английски думи и БЕЗ звездички за удебеляване):",
-            "",
-            "[1. ДОСИЕ ОТ РЕГИСТРИТЕ (ADSBdb + HexDB)]",
-            "- Позивна: {$csDisplay} | ICAO HEX: {$hex} | Бордна регистрация: {$osintReg} ({$osintCountry})",
-            "- Тип машина: {$osintFullType} | Оператор: {$operator} | Клас: {$milStatusText}",
-            "- Официален маршрут: {$osintRoute}",
-            "",
-            "[2. КИНЕМАТИКА, РЕЛЕФ И МЕТЕО НА ЕШЕЛОНА (Open-Meteo + Airplanes.live)]",
-            "- Изчислен вектор движение и накъде отива: {$vectorSummary}",
-            "- Барометрична височина: {$altM} м | Надморска височина на терена отдолу: {$terrainElevationM} м -> РЕАЛНА ВИСОЧИНА НАД РЕЛЕФА (AGL): {$aglMeters} м",
-            "- Пътна скорост (GS): {$speedKmh} км/ч, Курс: {$trackDeg}° ({$compassDir}) | {$windInfo}",
-            "- Автопилот и бордова телеметрия: {$telemetryNote}",
-            "- Геометрия на следата: {$maneuverProfile}",
-            "- Радиолокационна видимост: {$horizonStatus}",
-            "- Транспондер (Squawk): {$squawk} ({$squawkNote})",
-            "",
-            "Изведи анализа на български точно в тези 4 кратки и ударни точки:",
-            "1. ИДЕНТИФИКАЦИЯ И МИСИЯ: (Точен борд {$osintReg}, машина, база/оператор и дали полетът \"{$csDisplay}\" е редовен по разписание, чартър, карго или специална/военна задача).",
-            "2. НАКЪДЕ ОТИВА, АЕРОДИНАМИКА И АВТОПИЛОТ: (Кажи ясно откъде и за къде лети самолетът според маршрута \"{$osintRoute}\" и изчисления вектор \"{$vectorSummary}\", коментирай реалната височина над терена AGL {$aglMeters}м, истинската скорост/Mach спрямо вятъра и какво прави автопилотът/следата).",
-            "3. РАДИОЛОКАЦИОНЕН И SQUAWK СТАТУС: (Оцени радиохоризонта, точността на GPS/NIC и кода {$squawk}).",
-            "4. ОПЕРАТИВНА ОЦЕНКА НА ДЕЖУРНИЯ: (1 категорично заключение на български за характера на целта и очакваното ѝ движение)."
-        ];
-        $prompt = implode("\n", $promptLines);
+        pinnedTargets[finalSlot] = movingPlane;
+        finishPinChange();
+        return true;
+    }
 
-        $models = [
-            'gemini-2.5-flash',
-            'gemini-2.5-flash-lite',
-            'gemini-2.0-flash',
-            'gemini-3.5-flash-lite',
-            'gemini-3.0-flash',
-            'gemini-3.5-flash',
-        ];
+    function swapSlots(slotA, slotB) {
+        if (slotA === slotB) return;
+        return movePinToSlot(slotA, slotB);
+    }
 
-        $modelsCacheFile = sys_get_temp_dir() . '/radar_gemini_models_cache.json';
-        $extraModels = [];
-        if (is_file($modelsCacheFile) && $this->sub(time(), (int) @filemtime($modelsCacheFile)) < 21600) {
-            $cachedModels = json_decode((string) @file_get_contents($modelsCacheFile), true);
-            if (is_array($cachedModels)) {
-                $extraModels = $cachedModels;
+    window.startSlotLongPress = function(slot, ev) {
+        slotLongPressTriggered = false;
+        clearTimeout(slotPressTimer);
+        slotPressTimer = setTimeout(() => {
+            slotLongPressTriggered = true;
+            if (swapSourceSlot === slot) {
+                swapSourceSlot = null;
+            } else {
+                swapSourceSlot = slot;
+                if (navigator.vibrate) navigator.vibrate(45);
             }
+            updatePinnedBarUI();
+        }, 480);
+    };
+
+    window.endSlotLongPress = function(slot, ev) {
+        clearTimeout(slotPressTimer);
+
+        if (slotLongPressTriggered) {
+            slotLongPressTriggered = false;
+            return;
+        }
+
+        if (swapSourceSlot !== null) {
+            const sourceSlot = swapSourceSlot;
+            swapSourceSlot = null;
+
+            if (sourceSlot !== slot) {
+                movePinToSlot(sourceSlot, slot);
+            }
+
+            updatePinnedBarUI();
+            return;
+        }
+
+        window.selectPinnedTarget(slot);
+    };
+
+    window.cancelSlotLongPress = function() {
+        clearTimeout(slotPressTimer);
+    };
+
+    window.togglePinSlot = function(slot, planeId) {
+        if (!ALL_SLOTS.includes(slot) || !planeId) return;
+
+        const existing = getPinDataForPlane(planeId);
+
+        if (pinnedTargets[slot] && String(pinnedTargets[slot].id).toLowerCase() === String(planeId).toLowerCase()) {
+            pinnedTargets[slot] = null;
+            finishPinChange();
+            return;
+        }
+
+        if (existing) {
+            movePinToSlot(existing.slot, slot);
+            return;
+        }
+
+        const pl = planes.find(p => String(p.id).toLowerCase() === String(planeId).toLowerCase());
+        const newPlaneData = {
+            id: planeId,
+            trackNum: slot,
+            lastLabel: pl ? getBasePlaneCode(pl) : String(planeId).toUpperCase().slice(0, 6),
+            lastLat: pl ? pl.lat : null,
+            lastLon: pl ? pl.lon : null,
+            lastDistKm: pl ? (pl.distKm || 0) : null,
+            lastBearing: pl ? (pl.bearing || 0) : null
+        };
+
+        if (slot > highestTrackNumber) highestTrackNumber = slot;
+        movePinToSlot(null, slot, newPlaneData);
+    };
+
+    window.autoAssignNextTrack = function(planeId) {
+        const existing = getPinDataForPlane(planeId);
+        if (existing) {
+            pinnedTargets[existing.slot] = null;
+            checkAutoResetCounter();
         } else {
-            $listUrl = 'https://generativelanguage.googleapis.com/v1beta/models?key=' . urlencode($apiKey);
-            $listRes = $this->curlFetch($listUrl);
-            if ($listRes['code'] === 200 && $listRes['body'] !== '') {
-                $listData = json_decode($listRes['body'], true);
-                foreach (($listData['models'] ?? []) as $m) {
-                    $mName   = str_replace('models/', '', (string) ($m['name'] ?? ''));
-                    $methods = (array) ($m['supportedGenerationMethods'] ?? []);
-                    if (
-                        $mName !== '' &&
-                        str_contains($mName, 'gemini') &&
-                        in_array('generateContent', $methods, true)
-                    ) {
-                        $extraModels[] = $mName;
-                    }
+            const nextAssign = getNextTrackAssignment();
+            const targetSlot = nextAssign.slot;
+            const trackNumToUse = nextAssign.trackNum;
+
+            highestTrackNumber = Math.max(highestTrackNumber, trackNumToUse);
+            nextSlotCursor = (targetSlot % TOTAL_PIN_SLOTS) + 1;
+
+            const pl = planes.find(p => String(p.id).toLowerCase() === String(planeId).toLowerCase());
+            pinnedTargets[targetSlot] = {
+                id: planeId,
+                trackNum: trackNumToUse,
+                lastLabel: pl ? getBasePlaneCode(pl) : String(planeId).toUpperCase().slice(0, 6),
+                lastLat: pl ? pl.lat : null,
+                lastLon: pl ? pl.lon : null,
+                lastDistKm: pl ? (pl.distKm || 0) : null,
+                lastBearing: pl ? (pl.bearing || 0) : null
+            };
+        }
+        savePinState();
+        updatePinnedBarUI();
+        if (selectedPlaneId) {
+            const sel = planes.find(p => String(p.id).toLowerCase() === String(selectedPlaneId).toLowerCase());
+            if (sel) updateInfoPanelHTML(sel);
+        }
+    };
+
+    window.resetAllTrackedTargets = function() {
+        ALL_SLOTS.forEach(s => { pinnedTargets[s] = null; });
+        highestTrackNumber = 0;
+        nextSlotCursor = 1;
+        swapSourceSlot = null;
+        savePinState();
+        updatePinnedBarUI();
+        if (selectedPlaneId) {
+            const sel = planes.find(p => p.id === selectedPlaneId);
+            if (sel) updateInfoPanelHTML(sel);
+        }
+    };
+
+    window.selectPinnedTarget = function(slot) {
+        const slotObj = pinnedTargets[slot];
+        if (!slotObj || !slotObj.id) return;
+        const found = planes.find(p => String(p.id).toLowerCase() === String(slotObj.id).toLowerCase());
+        if (found) {
+            selectedPlaneId = found.id;
+            map.panTo([found.lat, found.lon]);
+            updateInfoPanelHTML(found);
+        } else if (slotObj.lastLat && slotObj.lastLon) {
+            map.panTo([slotObj.lastLat, slotObj.lastLon]);
+        }
+    };
+
+    function getBasePlaneCode(plane) {
+        const sqk = String(plane.squawk || '').trim();
+        if (sqk !== '' && sqk !== '----' && sqk !== '0000') {
+            return sqk;
+        }
+        const cs = cleanCallsign(plane.callsign, '');
+        if (cs !== '' && !cs.startsWith('FR_')) {
+            return cs.slice(0, 7);
+        }
+        if (plane.type && plane.type !== 'Няма данни' && plane.type !== 'Въздушна цел') {
+            return String(plane.type).slice(0, 6);
+        }
+        return String(plane.id || '').replace(/^fr_/i, '').toUpperCase().slice(0, 6);
+    }
+
+    function getBestPlaneLabel(plane, includePinNumber = true) {
+        const baseCode = getBasePlaneCode(plane);
+        if (!includePinNumber) return baseCode;
+        const pin = getPinDataForPlane(plane.id);
+        if (pin) {
+            return `${pin.trackNum} ${baseCode}`;
+        }
+        return baseCode;
+    }
+
+    function updatePinnedBarUI() {
+        checkAutoResetCounter();
+        let activePinnedCount = 0;
+        let stateChanged = false;
+
+        for (let slot of ALL_SLOTS) {
+            const btn = document.getElementById(`pin-slot-${slot}`);
+            if (!btn) continue;
+            const slotObj = pinnedTargets[slot];
+            btn.classList.remove('filled', 'alert', 'swap-source');
+            btn.style.opacity = '1';
+
+            if (swapSourceSlot === slot) {
+                btn.classList.add('swap-source');
+            }
+
+            if (slotObj && slotObj.id) {
+                activePinnedCount++;
+                btn.classList.add('filled');
+                const p = planes.find(pl => String(pl.id).toLowerCase() === String(slotObj.id).toLowerCase());
+                const trkNum = Number(slotObj.trackNum) || slot;
+
+                if (p) {
+                    const lbl = getBasePlaneCode(p);
+                    const azi = Math.round(p.bearing || 0);
+                    const dst = Math.round(p.distKm || 0);
+                    slotObj.lastLabel = lbl;
+                    slotObj.lastLat = p.lat;
+                    slotObj.lastLon = p.lon;
+                    slotObj.lastDistKm = dst;
+                    slotObj.lastBearing = azi;
+                    slotObj.trackNum = trkNum;
+                    stateChanged = true;
+                    btn.innerText = `🎯#${trkNum}: ${lbl} ${azi}°/${dst}km`;
+                } else {
+                    const savedLbl = slotObj.lastLabel || String(slotObj.id).toUpperCase().slice(0, 6);
+                    const savedAzi = slotObj.lastBearing !== undefined && slotObj.lastBearing !== null ? `${slotObj.lastBearing}°/` : '';
+                    const savedDst = slotObj.lastDistKm !== undefined && slotObj.lastDistKm !== null ? `${slotObj.lastDistKm}km` : 'ИЗГ.';
+                    btn.style.opacity = '0.72';
+                    btn.innerText = `📡#${trkNum}: ${savedLbl} (${savedAzi}${savedDst})`;
                 }
-                if ($extraModels !== []) {
-                    @file_put_contents($modelsCacheFile, json_encode($extraModels));
-                }
+            } else {
+                btn.innerText = swapSourceSlot === slot ? `⇄ #${slot} (ИЗБРАН)` : `#${slot}: -`;
             }
         }
 
-        foreach ($extraModels as $em) {
-            if (!in_array($em, $models, true)) {
-                $models[] = $em;
+        if (stateChanged) savePinState();
+        const nextAssign = getNextTrackAssignment();
+        const slotSuffix = nextAssign.trackNum !== nextAssign.slot ? ` (С${nextAssign.slot})` : '';
+        const swapHint = swapSourceSlot ? ` | Преместване от слот #${swapSourceSlot}` : ` | Следв: #${nextAssign.trackNum}${slotSuffix}`;
+        document.getElementById('trackCounterInfo').innerText = `🎯 МАРКИРАНИ: ${activePinnedCount}/${TOTAL_PIN_SLOTS}${swapHint}`;
+    }
+
+    const canvas = document.getElementById('radarCanvas');
+    const ctx = canvas.getContext('2d');
+
+    function resizeCanvas() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    let planes = [];
+    let selectedPlaneId = null;
+    let milOnlyFilter = false;
+    let sweepAngle = 0;
+    let isFetchingPlanes = false;
+
+    function isMilitaryPlane(plane) {
+        if (!plane) return false;
+        if (typeof plane.isMilitary === 'boolean') return plane.isMilitary;
+        if (typeof plane.is_military === 'boolean') return plane.is_military;
+        if (typeof plane.military === 'boolean') return plane.military;
+        return /\[ВОЕНЕН\]/i.test(String(plane.callsign || ''));
+    }
+
+    function cleanCallsign(callsign, fallback = '') {
+        return String(callsign || fallback).replace(/\s*\[ВОЕНЕН\]/ig, '').trim();
+    }
+
+    function getVerticalTrendHtml(plane) {
+        const tr = planeTrails[plane.id];
+        if (!tr || !tr.pts || tr.pts.length < 2) {
+            return '<span style="color:#00ff66;" title="Хоризонтален полет">═</span>';
+        }
+        const curAlt = Number(plane.altitude || 0);
+        let prevAlt = curAlt;
+        for (let i = tr.pts.length - 2; i >= 0; i--) {
+            if (tr.pts[i].alt !== undefined && tr.pts[i].alt !== curAlt) {
+                prevAlt = Number(tr.pts[i].alt);
+                break;
+            }
+        }
+        const diff = curAlt - prevAlt;
+        if (diff > 30) return '<span style="color:#00e5ff; font-weight:bold;" title="Набира височина">▲</span>';
+        if (diff < -30) return '<span style="color:#ffaa00; font-weight:bold;" title="Снижава">▼</span>';
+        return '<span style="color:#00ff66;" title="Хоризонтален полет">═</span>';
+    }
+
+    let isReplayMode = false;
+    let historyTimestamps = [];
+    let replayPlaying = false;
+    let replaySpeed = 1;
+    let replayTimer = null;
+
+    function calcDistanceKm(lat1, lon1, lat2, lon2) {
+        const R = 6371;
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    function calcBearing(lat1, lon1, lat2, lon2) {
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const y = Math.sin(dLon) * Math.cos(lat2 * Math.PI / 180);
+        const x = Math.cos(lat1 * Math.PI / 180) * Math.sin(lat2 * Math.PI / 180) - Math.sin(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.cos(dLon);
+        const trueAzi = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+
+        // Базовата поправка от бутона горе (напр. -5.6°)
+        let azi = (trueAzi + getAzimuthCorrectionDeg() + 360) % 360;
+
+        // Секторна калибровка: от 0° до 180° вадим 4°, от 180° до 360° вадим 2°
+        if (azi >= 0 && azi <= 180) {
+            azi = (azi - 4 + 360) % 360;
+        } else {
+            azi = (azi - 2 + 360) % 360;
+        }
+
+        return Math.round(azi) % 360;
+    }
+
+    function getInterpolatedLatLon(plane, nowMs) {
+        if (isReplayMode || !plane.lastUpdateMs || !plane.speed || plane.speed < 25) return { lat: plane.lat, lon: plane.lon };
+        const dtSec = Math.min((nowMs - plane.lastUpdateMs) / 1000, 25.0);
+        const distKm = (plane.speed / 3600) * dtSec;
+        const rad = (plane.track || 0) * Math.PI / 180;
+        const dLat = (distKm * Math.cos(rad)) / 111.32;
+        const dLon = (distKm * Math.sin(rad)) / (111.32 * Math.cos(plane.lat * Math.PI / 180));
+        return { lat: plane.lat + dLat, lon: plane.lon + dLon };
+    }
+
+    function drawPlaneTrail(planeId, currentScreenPt, isMil, isSelected, pinData) {
+        if (!showTrails) return;
+        if (!isSelected && !pinData && !isMil) return;
+
+        const trailObj = planeTrails[planeId];
+        if (!trailObj || trailObj.pts.length === 0) return;
+
+        const pts = trailObj.pts;
+        const strokeColor = isSelected ? '#00ffff' : (pinData ? '#ff00ff' : (isMil ? '#ff3333' : '#00ff66'));
+
+        ctx.save();
+        ctx.beginPath();
+
+        for (let i = 0; i < pts.length; i++) {
+            const pScreen = map.latLngToContainerPoint([pts[i].lat, pts[i].lon]);
+            if (i === 0) ctx.moveTo(pScreen.x, pScreen.y);
+            else ctx.lineTo(pScreen.x, pScreen.y);
+        }
+        ctx.lineTo(currentScreenPt.x, currentScreenPt.y);
+
+        ctx.strokeStyle = strokeColor;
+        ctx.lineWidth = isSelected ? 2.6 : 1.9;
+        ctx.globalAlpha = isSelected ? 0.92 : 0.75;
+        ctx.shadowColor = strokeColor;
+        ctx.shadowBlur = isSelected ? 8 : 4;
+        ctx.stroke();
+
+        if (isSelected || pinData) {
+            ctx.fillStyle = strokeColor;
+            for (let i = 0; i < pts.length; i += 2) {
+                const pScreen = map.latLngToContainerPoint([pts[i].lat, pts[i].lon]);
+                ctx.beginPath();
+                ctx.arc(pScreen.x, pScreen.y, 2.2, 0, Math.PI * 2);
+                ctx.fill();
             }
         }
 
-        $needGoogleSearch = $isMil
-            || $osintRoute === 'Няма данни'
-            || stripos($osintRoute, 'не е публикуван') !== false
-            || stripos($osintRoute, 'Военен') !== false
-            || $osintFullType === 'Неизвестен тип';
+        ctx.restore();
+    }
 
-        $searchModes = $needGoogleSearch ? [true, false] : [false];
+    function drawRealisticPlane(x, y, trackDeg, isMil, isSelected, pinData, nowMs) {
+        const zoom = map.getZoom();
+        let planeScale = 0.50 + (zoom - 6.0) * 0.12;
+        planeScale = Math.max(0.45, Math.min(1.35, planeScale));
 
-        $lastCode = 0;
-        $lastErrorDetail = '';
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.scale(planeScale, planeScale);
 
-        foreach ($models as $model) {
-            $url = "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key=" . urlencode($apiKey);
+        const visualTrack = ((trackDeg || 0) + getAzimuthCorrectionDeg() + 360) % 360;
+        ctx.rotate(visualTrack * Math.PI / 180);
 
-            foreach ($searchModes as $useSearchTool) {
-                $bodyPayload = [
-                    'contents' => [
-                        ['parts' => [['text' => $prompt]]]
-                    ],
-                    'generationConfig' => [
-                        'temperature'     => 0.2,
-                        'maxOutputTokens' => 1024,
-                        'thinkingConfig'  => [
-                            'thinkingBudget' => 0,
-                        ],
-                    ],
-                ];
+        const fillColor = isMil ? '#ff2222' : (pinData ? '#ff55ff' : (isSelected ? '#ffffff' : '#ffdd00'));
 
-                if ($useSearchTool) {
-                    $bodyPayload['tools'] = [
-                        ['google_search' => new \stdClass()]
-                    ];
-                }
+        ctx.fillStyle = fillColor;
+        ctx.strokeStyle = '#111111';
+        ctx.lineWidth = 1.6;
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
+        ctx.shadowBlur = 5;
 
-                $ch = curl_init($url);
-                curl_setopt_array($ch, [
-                    CURLOPT_RETURNTRANSFER => true,
-                    CURLOPT_POST           => true,
-                    CURLOPT_TIMEOUT        => 18,
-                    CURLOPT_CONNECTTIMEOUT => 5,
-                    CURLOPT_SSL_VERIFYPEER => true,
-                    CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
-                    CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
-                    CURLOPT_POSTFIELDS     => json_encode($bodyPayload, JSON_UNESCAPED_UNICODE),
-                ]);
+        ctx.beginPath();
+        if (isMil) {
+            ctx.moveTo(0, -14);
+            ctx.lineTo(3.5, -4);
+            ctx.lineTo(12, 4);
+            ctx.lineTo(12, 7);
+            ctx.lineTo(3.5, 5);
+            ctx.lineTo(5, 12);
+            ctx.lineTo(0, 9.5);
+            ctx.lineTo(-5, 12);
+            ctx.lineTo(-3.5, 5);
+            ctx.lineTo(-12, 7);
+            ctx.lineTo(-12, 4);
+            ctx.lineTo(-3.5, -4);
+        } else {
+            ctx.moveTo(0, -13);
+            ctx.lineTo(2.4, -8);
+            ctx.lineTo(2.4, -2);
+            ctx.lineTo(13, 3);
+            ctx.lineTo(13, 5.5);
+            ctx.lineTo(2.2, 2.5);
+            ctx.lineTo(1.8, 9);
+            ctx.lineTo(6, 11.5);
+            ctx.lineTo(6, 13);
+            ctx.lineTo(0, 11.5);
+            ctx.lineTo(-6, 13);
+            ctx.lineTo(-6, 11.5);
+            ctx.lineTo(-1.8, 9);
+            ctx.lineTo(-2.2, 2.5);
+            ctx.lineTo(-13, 5.5);
+            ctx.lineTo(-13, 3);
+            ctx.lineTo(-2.4, -2);
+            ctx.lineTo(-2.4, -8);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
 
-                $body    = curl_exec($ch);
-                $code    = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                $curlErr = curl_error($ch);
-                curl_close($ch);
+        if (isSelected) {
+            const pulse = 1 + 0.14 * Math.sin(nowMs / 180);
+            const r = 18 * planeScale * pulse;
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.rotate((nowMs / 900) % (Math.PI * 2));
+            ctx.strokeStyle = '#00e5ff';
+            ctx.lineWidth = 1.8;
+            ctx.setLineDash([6, 4]);
+            ctx.shadowColor = '#00e5ff';
+            ctx.shadowBlur = 8;
+            ctx.beginPath();
+            ctx.arc(0, 0, r, 0, Math.PI * 2);
+            ctx.stroke();
 
-                if ($code === 400 && isset($bodyPayload['generationConfig']['thinkingConfig'])) {
-                    unset($bodyPayload['generationConfig']['thinkingConfig']);
-                    $ch = curl_init($url);
-                    curl_setopt_array($ch, [
-                        CURLOPT_RETURNTRANSFER => true,
-                        CURLOPT_POST           => true,
-                        CURLOPT_TIMEOUT        => 18,
-                        CURLOPT_CONNECTTIMEOUT => 5,
-                        CURLOPT_SSL_VERIFYPEER => true,
-                        CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
-                        CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
-                        CURLOPT_POSTFIELDS     => json_encode($bodyPayload, JSON_UNESCAPED_UNICODE),
-                    ]);
-                    $body    = curl_exec($ch);
-                    $code    = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                    $curlErr = curl_error($ch);
-                    curl_close($ch);
-                }
+            ctx.setLineDash([]);
+            const b = r + 3;
+            ctx.beginPath();
+            ctx.moveTo(0, -b); ctx.lineTo(0, -r + 3);
+            ctx.moveTo(0, b);  ctx.lineTo(0, r - 3);
+            ctx.moveTo(-b, 0); ctx.lineTo(-r + 3, 0);
+            ctx.moveTo(b, 0);  ctx.lineTo(r - 3, 0);
+            ctx.stroke();
+            ctx.restore();
+        } else if (pinData) {
+            ctx.save();
+            ctx.strokeStyle = '#ff00ff';
+            ctx.lineWidth = 1.8;
+            ctx.beginPath();
+            ctx.arc(x, y, 16 * planeScale, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+        }
+    }
 
-                $lastCode = $code;
+    function drawRadarGrid(cx, cy) {
+        ctx.save();
+        ctx.translate(cx, cy);
 
-                if ($code === 200 && is_string($body) && $body !== '') {
-                    $decoded = json_decode($body, true);
-                    $parts   = $decoded['candidates'][0]['content']['parts'] ?? [];
-                    $text    = '';
-                    foreach ($parts as $part) {
-                        if (isset($part['text']) && empty($part['thought'])) {
-                            $text .= $part['text'];
-                        }
-                    }
-                    $cleanText = trim($text);
-                    if ($cleanText !== '') {
-                        if ($safeHex !== '') {
-                            @file_put_contents($aiCacheFile, $cleanText);
-                        }
-                        return new JsonResponse(['brief' => $cleanText]);
-                    }
-                }
+        const radius = Math.min(canvas.width, canvas.height) * 0.42;
+        const centerLatLng = map.containerPointToLatLng([cx, cy]);
+        const edgeLatLng = map.containerPointToLatLng([cx + radius, cy]);
+        const rawRadiusKm = map.distance(centerLatLng, edgeLatLng) / 1000;
 
-                if (is_string($body) && $body !== '') {
-                    $errDecoded = json_decode($body, true);
-                    if (!empty($errDecoded['error']['message'])) {
-                        $lastErrorDetail = (string) $errDecoded['error']['message'];
-                    }
-                } elseif ($curlErr !== '') {
-                    $lastErrorDetail = $curlErr;
-                }
-
-                if ($code === 404) {
-                    break;
-                }
-            }
-
-            if (str_contains(strtolower($lastErrorDetail), 'api_key_invalid')) {
+        let maxGridKm = Math.round(rawRadiusKm);
+        for (const rKm of TACTICAL_RANGES_KM) {
+            if (Math.abs(rawRadiusKm - rKm) / rKm < 0.08) {
+                maxGridKm = rKm;
                 break;
             }
         }
 
-        $fallbackBrief = "1. ИДЕНТИФИКАЦИЯ И МИСИЯ: Борд {$osintReg} ({$osintCountry}), машина {$osintFullType}, оператор: {$operator} ({$milStatusText}). Позивна: {$csDisplay}.\n"
-            . "2. НАКЪДЕ ОТИВА, АЕРОДИНАМИКА И АВТОПИЛОТ: Маршрут: {$osintRoute}. {$vectorSummary}. Реална височина над релефа AGL: {$aglMeters} м (барометрична {$altM} м), пътна скорост {$speedKmh} км/ч, курс {$trackDeg}° ({$compassDir}). {$windInfo}. {$telemetryNote}.\n"
-            . "3. РАДИОЛОКАЦИОНЕН И SQUAWK СТАТУС: Транспондер {$squawk} ({$squawkNote}). {$horizonStatus}. Следа: {$maneuverProfile}.\n"
-            . "4. ОПЕРАТИВНА ОЦЕНКА НА ДЕЖУРНИЯ: [Локален OSINT резерв - AI лимитът е временно достигнат (HTTP {$lastCode})] Целта се следи в реално време по данни от 5-те сензора.";
+        let kmStep;
+        if (maxGridKm >= 150) kmStep = 50;
+        else if (maxGridKm === 100) kmStep = 25;
+        else if (maxGridKm === 60) kmStep = 20;
+        else kmStep = maxGridKm / 4;
 
-        return new JsonResponse(['brief' => $fallbackBrief]);
-    }
+        ctx.beginPath();
+        ctx.arc(0, 0, radius, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(150, 0, 0, 0.90)';
+        ctx.lineWidth = 2;
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
+        ctx.shadowBlur = 3;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
 
-    private function appendHistorySnapshot(string $cacheDir, int $timestamp, array $planes): void
-    {
-        $indexFile = $cacheDir . '/radar_history_index.json';
-        $indexData = [];
+        for (let deg = 0; deg < 360; deg += 10) {
+            const angle = (deg - 90) * Math.PI / 180;
+            const isMajor = deg % 30 === 0;
+            const tickLength = isMajor ? 12 : 6;
 
-        if (is_file($indexFile)) {
-            $raw = @file_get_contents($indexFile);
-            $decoded = is_string($raw) ? json_decode($raw, true) : [];
-            if (is_array($decoded)) {
-                $indexData = $decoded;
-            }
-        }
+            const innerRadius = radius - tickLength;
+            const outerRadius = radius;
 
-        $last = end($indexData);
-        if (is_array($last) && isset($last['ts']) && $this->sub($timestamp, (int) $last['ts']) < 15) {
-            return;
-        }
+            const x1 = Math.cos(angle) * innerRadius;
+            const y1 = Math.sin(angle) * innerRadius;
+            const x2 = Math.cos(angle) * outerRadius;
+            const y2 = Math.sin(angle) * outerRadius;
 
-        $nextSlot = is_array($last) && isset($last['slot'])
-            ? (((int) $last['slot'] + 1) % self::MAX_HISTORY_FRAMES)
-            : 0;
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.strokeStyle = isMajor ? 'rgba(155, 0, 0, 0.90)' : 'rgba(130, 0, 0, 0.65)';
+            ctx.lineWidth = isMajor ? 2 : 1;
+            ctx.stroke();
 
-        $compactPlanes = [];
-        foreach ($planes as $p) {
-            $compactPlanes[] = [
-                'id'         => $p['id'] ?? '',
-                'callsign'   => $p['callsign'] ?? '',
-                'lat'        => round((float) ($p['lat'] ?? 0), 4),
-                'lon'        => round((float) ($p['lon'] ?? 0), 4),
-                'track'      => (int) round((float) ($p['track'] ?? 0)),
-                'altitude'   => (int) ($p['altitude'] ?? 0),
-                'speed'      => (int) ($p['speed'] ?? 0),
-                'squawk'     => $p['squawk'] ?? '----',
-                'type'       => $p['type'] ?? '',
-                'operator'   => $p['operator'] ?? '',
-                'isMilitary' => !empty($p['isMilitary']),
-            ];
-        }
+            if (isMajor) {
+                const textRadius = radius - 23;
+                const tx = Math.cos(angle) * textRadius;
+                const ty = Math.sin(angle) * textRadius;
 
-        $slotFile = $cacheDir . '/radar_hist_slot_' . $nextSlot . '.json';
-        $slotJson = json_encode($compactPlanes, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+                ctx.font = 'bold 10px Segoe UI, sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.shadowColor = '#000000';
+                ctx.shadowBlur = 3;
 
-        if (!is_string($slotJson) || @file_put_contents($slotFile, $slotJson, LOCK_EX) === false) {
-            return;
-        }
-
-        $indexData[] = [
-            'ts'   => $timestamp,
-            'slot' => $nextSlot,
-        ];
-
-        if (count($indexData) > self::MAX_HISTORY_FRAMES) {
-            $indexData = array_slice($indexData, -self::MAX_HISTORY_FRAMES);
-        }
-
-        $indexJson = json_encode($indexData, JSON_UNESCAPED_UNICODE);
-        if (is_string($indexJson)) {
-            @file_put_contents($indexFile, $indexJson, LOCK_EX);
-        }
-    }
-
-    private function curlFetchMany(array $providers): array
-    {
-        if (!function_exists('curl_multi_init') || !function_exists('curl_init')) {
-            $results = [];
-            foreach ($providers as $provider) {
-                $results[$provider['name']] = $this->providerIsCoolingDown($provider['base'] ?? $provider['name'])
-                    ? ['code' => 0, 'body' => '', 'error' => 'Cooldown', 'time_ms' => 0]
-                    : $this->curlFetch($provider['url'], false, $provider['headers'] ?? []);
-            }
-            return $results;
-        }
-
-        $multi = curl_multi_init();
-        $handles = [];
-        $results = [];
-
-        foreach ($providers as $provider) {
-            $name = $provider['name'];
-            $base = $provider['base'] ?? $name;
-
-            if ($this->providerIsCoolingDown($base)) {
-                $results[$name] = ['code' => 0, 'body' => '', 'error' => 'Cooldown', 'time_ms' => 0];
-                continue;
-            }
-
-            $defaultHeaders = [
-                'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept: application/json',
-            ];
-            $customHeaders = !empty($provider['headers']) && is_array($provider['headers'])
-                ? $provider['headers']
-                : $defaultHeaders;
-
-            $ch = curl_init($provider['url']);
-            curl_setopt_array($ch, [
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_FOLLOWLOCATION => true,
-                CURLOPT_TIMEOUT        => 4,
-                CURLOPT_CONNECTTIMEOUT => 3,
-                CURLOPT_SSL_VERIFYPEER => true,
-                CURLOPT_SSL_VERIFYHOST => 2,
-                CURLOPT_ENCODING       => '',
-                CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
-                CURLOPT_HTTPHEADER     => $customHeaders,
-            ]);
-
-            $handles[$name] = [
-                'handle' => $ch,
-                'start'  => microtime(true),
-            ];
-            curl_multi_add_handle($multi, $ch);
-        }
-
-        do {
-            $status = curl_multi_exec($multi, $running);
-            if ($running > 0 && $status === CURLM_OK) {
-                $selected = curl_multi_select($multi, 0.5);
-                if ($selected === -1) {
-                    usleep(10000);
+                if (deg === 0) {
+                    ctx.fillStyle = '#00e5ff';
+                    ctx.fillText('0°С', tx, ty);
+                } else {
+                    ctx.fillStyle = '#b82020';
+                    ctx.fillText(`${deg}°`, tx, ty);
                 }
+                ctx.shadowBlur = 0;
             }
-        } while ($running > 0 && $status === CURLM_OK);
-
-        foreach ($handles as $name => $item) {
-            $ch = $item['handle'];
-            $body = curl_multi_getcontent($ch);
-            $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            $error = curl_error($ch);
-
-            $results[$name] = [
-                'code'    => $code,
-                'body'    => is_string($body) ? $body : '',
-                'error'   => $error,
-                'time_ms' => (int) round($this->mul($this->sub(microtime(true), $item['start']), 1000)),
-            ];
-
-            curl_multi_remove_handle($multi, $ch);
-            curl_close($ch);
         }
 
-        curl_multi_close($multi);
-        return $results;
-    }
+        for (let km = kmStep; km <= maxGridKm + 0.1; km += kmStep) {
+            const isOuter = Math.abs(km - maxGridKm) < 0.5;
+            const r = isOuter ? radius : (km / maxGridKm) * radius;
+            const kmVal = Math.round(km * 10) / 10;
 
-    private function curlFetch(string $url, bool $isFr24 = false, array $customHeaders = []): array
-    {
-        if (!function_exists('curl_init')) {
-            return ['code' => 0, 'body' => '', 'error' => 'No cURL', 'time_ms' => 0];
-        }
+            if (!isOuter) {
+                ctx.beginPath();
+                ctx.arc(0, 0, r, 0, Math.PI * 2);
+                ctx.strokeStyle = 'rgba(130, 0, 0, 0.55)';
+                ctx.lineWidth = 1;
+                ctx.stroke();
 
-        $headers = $customHeaders !== [] ? $customHeaders : [
-            'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            'Accept: application/json, text/javascript, */*; q=0.01',
-        ];
-
-        if ($isFr24) {
-            $headers[] = 'Origin: https://www.flightradar24.com';
-            $headers[] = 'Referer: https://www.flightradar24.com/';
-        }
-
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_TIMEOUT        => 4,
-            CURLOPT_CONNECTTIMEOUT => 3,
-            CURLOPT_SSL_VERIFYPEER => true,
-            CURLOPT_SSL_VERIFYHOST => 2,
-            CURLOPT_ENCODING       => '',
-            CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
-            CURLOPT_HTTPHEADER     => $headers,
-        ]);
-
-        $start = microtime(true);
-        $body = curl_exec($ch);
-        $elapsed = (int) round($this->mul($this->sub(microtime(true), $start), 1000));
-        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $error = curl_error($ch);
-        curl_close($ch);
-
-        return [
-            'code'    => $code,
-            'body'    => is_string($body) ? $body : '',
-            'error'   => $error,
-            'time_ms' => $elapsed,
-        ];
-    }
-
-    private function buildFr24Url(float $lat, float $lon): string
-    {
-        $north = min(90.0, round($lat + 5.5, 2));
-        $south = max(-90.0, round($this->sub($lat, 5.5), 2));
-        $west  = max(-180.0, round($this->sub($lon, 6.5), 2));
-        // Разширяваме на изток с +16.0 градуса (до 40.6° И.Д. - покрива 100% от Черно море, Крим и Турция!)
-        $east  = min(180.0, round($lon + 16.0, 2));
-
-        return "https://data-cloud.flightradar24.com/zones/fcgi/feed.js?bounds={$north},{$south},{$west},{$east}&faa=1&satellite=1&mlat=1&flarm=1&adsb=1&gnd=1&air=1&vehicles=0&estimated=1&maxage=120&gliders=1&stats=0";
-    }
-
-    private function buildOpenSkyUrl(float $lat, float $lon, float $radiusNm): string
-    {
-        $latDelta = $radiusNm / 60.0;
-        $cosLat = max(0.15, abs(cos(deg2rad($lat))));
-        $lonDelta = min(180.0, $radiusNm / $this->mul(60.0, $cosLat));
-
-        $lamin = max(-90.0, round($this->sub($lat, $latDelta), 2));
-        $lamax = min(90.0, round($lat + $latDelta + 2.0, 2));
-        $lomin = max(-180.0, round($this->sub($lon, $lonDelta), 2));
-        // Покриваме цялото Черно море на изток до 41.0° И.Д.
-        $lomax = min(180.0, round($lon + 16.0, 2));
-
-        return 'https://opensky-network.org/api/states/all?' . http_build_query([
-                'lamin' => $lamin,
-                'lomin' => $lomin,
-                'lamax' => $lamax,
-                'lomax' => $lomax,
-            ]);
-    }
-
-    private function providerIsCoolingDown(string $provider): bool
-    {
-        $file = sys_get_temp_dir() . '/radar_provider_' . md5($provider) . '.cooldown';
-
-        if (!is_file($file)) {
-            return false;
-        }
-
-        $timestamp = (int) @file_get_contents($file);
-        if ($timestamp <= 0 || $this->sub(time(), $timestamp) > self::PROVIDER_COOLDOWN) {
-            @unlink($file);
-            return false;
-        }
-
-        return true;
-    }
-
-    private function putProviderInCooldown(string $provider): void
-    {
-        $file = sys_get_temp_dir() . '/radar_provider_' . md5($provider) . '.cooldown';
-        @file_put_contents($file, (string) time(), LOCK_EX);
-    }
-
-    private function parseAdsbV2List(
-        array $aircraftList,
-        array &$planesMap,
-        float $centerLat,
-        float $centerLon,
-        bool $isMilitaryFeed,
-        string $source
-    ): void {
-        foreach ($aircraftList as $ac) {
-            if (!is_array($ac)) {
-                continue;
+                ctx.beginPath();
+                ctx.moveTo(r, -5); ctx.lineTo(r, 5);
+                ctx.moveTo(-r, -5); ctx.lineTo(-r, 5);
+                ctx.moveTo(-5, -r); ctx.lineTo(5, -r);
+                ctx.moveTo(-5, r); ctx.lineTo(5, r);
+                ctx.strokeStyle = '#a80000';
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
             }
 
-            $id = strtolower(trim((string) ($ac['hex'] ?? $ac['icao24'] ?? '')));
-            if ($id === '' || str_starts_with($id, '~')) {
-                continue;
+            const kmText = `${kmVal} km`;
+
+            ctx.font = 'bold 11px Segoe UI, sans-serif';
+            ctx.fillStyle = '#7DF9FF';
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.98)';
+            ctx.lineWidth = 3;
+            ctx.shadowColor = '#000000';
+            ctx.shadowBlur = 3;
+
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            ctx.strokeText(kmText, r + 6, 14);
+            ctx.fillText(kmText, r + 6, 14);
+
+            ctx.textAlign = 'right';
+            ctx.textBaseline = 'middle';
+            ctx.strokeText(kmText, -r - 6, 14);
+            ctx.fillText(kmText, -r - 6, 14);
+
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+            const topY = isOuter ? (-r - 4) : (-r + 4);
+            ctx.strokeText(kmText, 0, topY);
+            ctx.fillText(kmText, 0, topY);
+
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+            const bottomY = isOuter ? (r + 6) : (r + 6);
+            ctx.strokeText(kmText, 0, bottomY);
+            ctx.fillText(kmText, 0, bottomY);
+
+            ctx.shadowBlur = 0;
+        }
+
+        ctx.strokeStyle = 'rgba(120, 0, 0, 0.45)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(-radius, 0); ctx.lineTo(radius, 0);
+        ctx.moveTo(0, -radius); ctx.lineTo(0, radius);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(0, 0, 3, 0, Math.PI * 2);
+        ctx.fillStyle = '#b82020';
+        ctx.fill();
+
+        ctx.restore();
+    }
+
+    function renderLoop() {
+        const nowMs = Date.now();
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        const myScreenPt = map.latLngToContainerPoint([myLat, myLon]);
+        drawRadarGrid(myScreenPt.x, myScreenPt.y);
+
+        ctx.save();
+        ctx.fillStyle = '#00e5ff';
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(myScreenPt.x, myScreenPt.y, 7, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.font = 'bold 11px Segoe UI, sans-serif';
+        ctx.fillStyle = '#00e5ff';
+        ctx.fillText(`📍 ${myBaseName}`, myScreenPt.x + 10, myScreenPt.y + 4);
+        ctx.restore();
+
+        const sweepRadius = Math.min(canvas.width, canvas.height) * 0.42;
+        sweepAngle = (sweepAngle + 0.032) % (Math.PI * 2);
+
+        ctx.save();
+        ctx.translate(myScreenPt.x, myScreenPt.y);
+        ctx.rotate(sweepAngle);
+
+        const grad = ctx.createConicGradient(-0.55, 0, 0);
+        grad.addColorStop(0, 'rgba(255, 20, 20, 0)');
+        grad.addColorStop(0.08, 'rgba(255, 30, 30, 0.32)');
+        grad.addColorStop(0.14, 'rgba(255, 45, 20, 0.72)');
+        grad.addColorStop(0.16, 'rgba(255, 90, 50, 0.96)');
+        grad.addColorStop(0.165, 'rgba(255, 20, 20, 0)');
+
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(0, 0, sweepRadius, -0.55, 0);
+        ctx.lineTo(0, 0);
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(sweepRadius, 0);
+        ctx.strokeStyle = '#ff3322';
+        ctx.shadowColor = '#ff0000';
+        ctx.shadowBlur = 12;
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        ctx.restore();
+
+        let totalCount = 0;
+        let milCount = 0;
+
+        planes.forEach(plane => {
+            const isMil = isMilitaryPlane(plane);
+            const pinData = getPinDataForPlane(plane.id);
+
+            if (milOnlyFilter && !isMil && !pinData) return;
+
+            totalCount++;
+            if (isMil) milCount++;
+
+            const interp = getInterpolatedLatLon(plane, nowMs);
+            const screenPt = map.latLngToContainerPoint([interp.lat, interp.lon]);
+
+            plane.distKm = calcDistanceKm(myLat, myLon, interp.lat, interp.lon);
+            plane.bearing = calcBearing(myLat, myLon, interp.lat, interp.lon);
+
+            plane.screenX = screenPt.x;
+            plane.screenY = screenPt.y;
+
+            const isSelected = plane.id === selectedPlaneId;
+
+            drawPlaneTrail(plane.id, screenPt, isMil, isSelected, pinData);
+
+            if (isSelected || pinData) {
+                ctx.save();
+                ctx.beginPath();
+                ctx.setLineDash([5, 4]);
+                ctx.moveTo(myScreenPt.x, myScreenPt.y);
+                ctx.lineTo(screenPt.x, screenPt.y);
+                ctx.strokeStyle = pinData ? '#ff00ff' : '#00ff66';
+                ctx.lineWidth = 1.6;
+                ctx.stroke();
+                ctx.restore();
             }
 
-            $rawCallsign = trim((string) ($ac['flight'] ?? $ac['call'] ?? $ac['callsign'] ?? ''));
-            $squawk = trim((string) ($ac['squawk'] ?? '----'));
-            $aircraftType = trim((string) ($ac['t'] ?? $ac['type'] ?? ''));
-            $desc = trim((string) ($ac['desc'] ?? ''));
-            $operator = trim((string) ($ac['ownOp'] ?? $ac['op'] ?? $ac['operator'] ?? ''));
-            $reg = trim((string) ($ac['r'] ?? ''));
+            drawRealisticPlane(screenPt.x, screenPt.y, plane.track, isMil, isSelected, pinData, nowMs);
 
-            $isStrictMilFeed = in_array(
-                $source,
-                ['airplanes.live-mil', 'adsb.lol-mil', 'adsb.fi-mil', 'intelsky-mil', 'flyitaly-mil', 'avioadsb-mil'],
-                true
+            const labelText = getBestPlaneLabel(plane, true);
+
+            ctx.save();
+            ctx.font = 'bold 10.5px Segoe UI, sans-serif';
+            const textWidth = ctx.measureText(labelText).width;
+            const boxW = textWidth + 8;
+            const boxH = 16;
+
+            ctx.fillStyle = pinData ? 'rgba(65, 0, 85, 0.94)' : 'rgba(0, 10, 4, 0.82)';
+            if (isMil) ctx.strokeStyle = '#ff2222';
+            else if (pinData) ctx.strokeStyle = '#ff00ff';
+            else ctx.strokeStyle = 'rgba(0, 255, 102, 0.75)';
+
+            ctx.lineWidth = pinData ? 1.5 : 1;
+            ctx.fillRect(screenPt.x + 13, screenPt.y - 9, boxW, boxH);
+            ctx.strokeRect(screenPt.x + 13, screenPt.y - 9, boxW, boxH);
+
+            // Запазваме ширината на етикета, за да може да се цъка и директно върху номера!
+            plane.boxW = boxW;
+
+            if (pinData) ctx.fillStyle = '#ffffff';
+            else if (isMil) ctx.fillStyle = '#ff5555';
+            else ctx.fillStyle = '#ffdd00';
+
+            ctx.fillText(labelText, screenPt.x + 17, screenPt.y + 2.5);
+            ctx.restore();
+        });
+
+        document.getElementById('planesCount').textContent = totalCount;
+        document.getElementById('milCount').textContent = milCount;
+
+        requestAnimationFrame(renderLoop);
+    }
+
+    window.closeTimeMachine = function() {
+        const dock = document.getElementById('timeMachineDock');
+        if (dock && dock.style.display === 'block') {
+            dock.style.display = 'none';
+            document.getElementById('btnHistory').classList.remove('active');
+        }
+    };
+
+    function handleRadarTap(clickX, clickY) {
+        closeTimeMachine();
+        let closest = null;
+        let minDist = 55; // Широк обхват за пръст на телефон
+
+        planes.forEach(p => {
+            const isMil = isMilitaryPlane(p);
+            const pinData = getPinDataForPlane(p.id);
+            if (milOnlyFilter && !isMil && !pinData) return;
+
+            const px = p.screenX || 0;
+            const py = p.screenY || 0;
+            const bw = p.boxW || 44;
+
+            // Проверка дали пръстът е попаднал върху черната табелка с номера (с 10px буфер)
+            const hitLabelBox = (
+                clickX >= (px + 4) &&
+                clickX <= (px + 22 + bw) &&
+                clickY >= (py - 18) &&
+                clickY <= (py + 18)
             );
 
-            $dbFlags = (int) ($ac['dbFlags'] ?? 0);
-            $isMil = $isStrictMilFeed
-                || (($dbFlags & 1) === 1)
-                || (($dbFlags & 2) === 2)
-                || $this->isKnownMilitary($id, $rawCallsign, $squawk, $aircraftType, $operator, $desc, $reg);
+            const distPlane = Math.hypot(px - clickX, py - clickY);
+            const distLabel = Math.hypot((px + 13 + bw / 2) - clickX, py - clickY);
+            const d = hitLabelBox ? Math.min(distPlane, distLabel) * 0.35 : Math.min(distPlane, distLabel);
 
-            $hasLiveLatLon = isset($ac['lat'], $ac['lon']) || isset($ac['latitude'], $ac['longitude']);
-
-            // ВНИМАНИЕ: НЕ ползваме rr_lat/rr_lon, защото това са координатите на антената на брега и бъгват Mode-S целите!
-            $lat = $ac['lat'] ?? $ac['latitude'] ?? ($ac['lastPosition']['lat'] ?? null);
-            $lon = $ac['lon'] ?? $ac['longitude'] ?? ($ac['lastPosition']['lon'] ?? null);
-
-            if (!is_numeric($lat) || !is_numeric($lon)) {
-                continue;
+            if (d < minDist) {
+                minDist = d;
+                closest = p;
             }
+        });
 
-            $lat = (float) $lat;
-            $lon = (float) $lon;
-
-            if ($hasLiveLatLon) {
-                $seenPos = (float) ($ac['seen_pos'] ?? ($ac['seen'] ?? 0.5));
-            } else {
-                $seenPos = (float) ($ac['lastPosition']['seen_pos'] ?? 999.0);
-            }
-
-            // За военни в Mode-S над Черно море позволяваме до 600 сек (10 мин) екстраполация по курс и скорост
-            $maxAllowedAge = $isMil ? 600.0 : self::MAX_POS_AGE_SEC;
-            if ($seenPos > $maxAllowedAge) {
-                continue;
-            }
-
-            $isModeSApproximate = !$hasLiveLatLon;
-
-            $altBaro = $ac['alt_baro'] ?? null;
-            $altGeom = $ac['alt_geom'] ?? $ac['alt'] ?? ($ac['lastPosition']['alt_baro'] ?? 0);
-            $isOnGroundFlag = ($altBaro === 'ground' || !empty($ac['ground']));
-
-            $numericAltFeet = is_numeric($altBaro) ? (float) $altBaro : (is_numeric($altGeom) ? (float) $altGeom : 0.0);
-            $altitudeMeters = max(0, (int) round($this->mul($numericAltFeet, 0.3048)));
-
-            $speedKnots = (float) ($ac['gs'] ?? $ac['spd'] ?? $ac['tas'] ?? $ac['ias'] ?? 0);
-            $speedKmh = (int) round($this->mul($speedKnots, 1.852));
-            $track = (float) ($ac['track'] ?? $ac['true_heading'] ?? $ac['mag_heading'] ?? $ac['calc_track'] ?? 0);
-
-            // Ако военният самолет е без скорост в Mode-S, но е във въздуха (>2000м), задаваме крейсерска скорост за екстраполация
-            if ($isModeSApproximate && $isMil && $speedKmh === 0 && $altitudeMeters > 2000) {
-                $speedKmh = 650;
-            }
-
-            // СЪЖИВЯВАНЕ НА MODE-S: Ако позицията е стара (seenPos > 5 сек), но имаме скорост и курс,
-            // изчисляваме математически къде точно е прелетял самолетът през тези секунди (Dead Reckoning)!
-            if ($isModeSApproximate && $seenPos > 5.0 && $seenPos <= 600.0 && $speedKmh > 60) {
-                $distMeters = $this->mul($speedKmh / 3.6, min($seenPos, 300.0));
-                $trackRad = deg2rad($track);
-                $latRad = deg2rad($lat);
-                $lat += $this->mul($distMeters, cos($trackRad)) / 111320.0;
-                $lon += $this->mul($distMeters, sin($trackRad)) / $this->mul(111320.0, max(0.15, abs(cos($latRad))));
-            }
-
-            // Разширена географска рамка: покрива от Сърбия (-7.5°) до края на Черно море/Грузия (+16.5° на изток!)
-            $lonDiff = $this->sub($lon, $centerLon);
-            if (abs($this->sub($lat, $centerLat)) > 6.5 || $lonDiff < -7.5 || $lonDiff > 16.5) {
-                continue;
-            }
-
-            if (!$isMil && ($isOnGroundFlag || $altitudeMeters <= 0) && $speedKmh < 30) {
-                continue;
-            }
-
-            $existing = $planesMap[$id] ?? null;
-            if (is_array($existing)) {
-                if (!empty($existing['isMilitary'])) {
-                    $isMil = true;
-                }
-                $existingIsModeS = str_contains((string) ($existing['callsign'] ?? ''), '[MODE-S]');
-
-                // 1. Никога не презаписваме жива координата с приблизителна [MODE-S]
-                if ($isModeSApproximate && !$existingIsModeS) {
-                    continue;
-                }
-                // 2. Ако и двете са живи (или и двете са Mode-S), пазим по-прясната
-                if ($isModeSApproximate === $existingIsModeS && ($existing['age'] ?? 999.0) <= $seenPos) {
-                    continue;
-                }
-            }
-
-            $isMlat = !empty($ac['mlat']) || (($ac['type'] ?? '') === 'mlat');
-
-            $displayCallsign = $rawCallsign !== '' ? $rawCallsign : ($reg !== '' ? $reg : strtoupper($id));
-            if ($isModeSApproximate && !str_contains($displayCallsign, 'MODE-S')) {
-                $displayCallsign .= ' [MODE-S]';
-            } elseif ($isMlat && !str_contains($displayCallsign, '[MLAT]')) {
-                $displayCallsign .= ' [MLAT]';
-            }
-            if ($isMil && !str_contains($displayCallsign, '[ВОЕНЕН]')) {
-                $displayCallsign .= ' [ВОЕНЕН]';
-            }
-
-            $roll = isset($ac['roll']) ? (float) $ac['roll'] : null;
-            $mach = isset($ac['mach']) ? (float) $ac['mach'] : null;
-            $baroRate = isset($ac['baro_rate']) ? (int) $ac['baro_rate'] : 0;
-            $nic = isset($ac['nic']) ? (int) $ac['nic'] : 99;
-            $nacP = isset($ac['nac_p']) ? (int) $ac['nac_p'] : 99;
-            $sil = isset($ac['sil']) ? (int) $ac['sil'] : 99;
-
-            $altMismatch = is_numeric($altBaro) && is_numeric($altGeom) && abs($this->sub((float) $altBaro, (float) $altGeom)) > 1000.0;
-            $gpsJammed = ($nic >= 0 && $nic < 5) || ($nacP >= 0 && $nacP < 6) || ($sil >= 0 && $sil < 2) || $altMismatch;
-
-            if ($gpsJammed && !str_contains($displayCallsign, '[РЕБ/GPS!]')) {
-                $displayCallsign .= ' [РЕБ/GPS!]';
-            }
-
-            $planesMap[$id] = [
-                'id'         => $id,
-                'callsign'   => $displayCallsign,
-                'lat'        => round($lat, 5),
-                'lon'        => round($lon, 5),
-                'track'      => $track,
-                'altitude'   => $altitudeMeters,
-                'speed'      => $speedKmh,
-                'squawk'     => $squawk !== '' ? $squawk : ($existing['squawk'] ?? '----'),
-                'type'       => $desc !== '' ? $desc : ($aircraftType !== '' ? $aircraftType : ($existing['type'] ?? 'Няма данни')),
-                'operator'   => $operator !== '' ? $operator : ($existing['operator'] ?? ($isMil ? 'Военновъздушни сили (ВВС)' : 'Граждански полет')),
-                'age'        => round($seenPos, 1),
-                'isMilitary' => $isMil,
-                'roll'       => $roll,
-                'mach'       => $mach,
-                'baroRate'   => $baroRate,
-                'gpsJammed'  => $gpsJammed,
-                '_source'    => $source,
-            ];
+        if (closest) {
+            selectedPlaneId = closest.id;
+            updateInfoPanelHTML(closest);
+        } else {
+            closeInfoPanel();
         }
     }
 
-    private function parseFr24Data(
-        array $frData,
-        array &$planesMap,
-        float $centerLat,
-        float $centerLon
-    ): void {
-        $now = time();
+    // 1. За компютър с мишка:
+    let lastTouchTime = 0;
+    map.on('click', function(e) {
+        if (Date.now() - lastTouchTime < 500) return; // Предотвратява двойно сработване на телефон
+        handleRadarTap(e.containerPoint.x, e.containerPoint.y);
+    });
 
-        foreach ($frData as $key => $val) {
-            if (!is_array($val) || count($val) < 15) {
-                continue;
+    // 2. Директно прихващане за тъчскрийн на телефон (Android / iPhone):
+    const mapEl = document.getElementById('terrainMap');
+    let touchStartX = 0, touchStartY = 0, touchMoved = false;
+
+    mapEl.addEventListener('touchstart', function(e) {
+        if (e.touches.length === 1) {
+            touchStartX = e.touches[0].clientX;
+            touchStartY = e.touches[0].clientY;
+            touchMoved = false;
+        } else {
+            touchMoved = true; // Игнорираме при зуум с два пръста (pinch-to-zoom)
+        }
+    }, { passive: true });
+
+    mapEl.addEventListener('touchmove', function(e) {
+        if (e.touches.length === 1) {
+            const dx = e.touches[0].clientX - touchStartX;
+            const dy = e.touches[0].clientY - touchStartY;
+            // Ако пръстът се мръдне под 14 пиксела, пак го броим за цъкане, а не за местене!
+            if (Math.hypot(dx, dy) > 14) {
+                touchMoved = true;
+            }
+        }
+    }, { passive: true });
+
+    mapEl.addEventListener('touchend', function(e) {
+        if (!touchMoved && e.changedTouches.length === 1) {
+            lastTouchTime = Date.now();
+            const rect = mapEl.getBoundingClientRect();
+            const x = e.changedTouches[0].clientX - rect.left;
+            const y = e.changedTouches[0].clientY - rect.top;
+            handleRadarTap(x, y);
+        }
+    }, { passive: true });
+
+    async function fetchRealPlanePhoto(planeId) {
+        if (!planeId || String(planeId).startsWith('fr_')) {
+            planePhotoCache[planeId] = null;
+            return;
+        }
+        if (planePhotoCache[planeId] !== undefined) { applyPhotoToBox(planePhotoCache[planeId]); return; }
+        try {
+            const res = await fetch(`https://api.planespotters.net/pub/photos/hex/${planeId.toLowerCase()}`);
+            const data = await res.json();
+            if (data && data.photos && data.photos.length > 0) {
+                const imgUrl = data.photos[0].thumbnail_large ? data.photos[0].thumbnail_large.src : data.photos[0].thumbnail.src;
+                planePhotoCache[planeId] = imgUrl;
+                if (selectedPlaneId === planeId) applyPhotoToBox(imgUrl);
+            } else planePhotoCache[planeId] = null;
+        } catch (err) { planePhotoCache[planeId] = null; }
+    }
+
+    function applyPhotoToBox(imgUrl) {
+        const imgEl = document.getElementById('realPlaneImg');
+        const svgEl = document.getElementById('fallbackPlaneSvg');
+        if (imgEl && imgUrl) { imgEl.src = imgUrl; imgEl.style.display = 'block'; if (svgEl) svgEl.style.display = 'none'; }
+    }
+
+    async function fetchFlightRoute(plane) {
+        if (!plane || !cleanCallsign(plane.callsign)) return;
+        const cleanCs = cleanCallsign(plane.callsign);
+        const isMil = isMilitaryPlane(plane);
+        if (planeRouteCache[plane.id] !== undefined) {
+            const routeEl = document.getElementById('planeRouteText');
+            if (routeEl) routeEl.innerText = planeRouteCache[plane.id]; return;
+        }
+        try {
+            const res = await fetch(`https://api.adsbdb.com/v0/callsign/${encodeURIComponent(cleanCs)}`);
+            if (res.ok) {
+                const d = await res.json();
+                const fr = d?.response?.flightroute;
+                if (fr && fr.origin && fr.destination) planeRouteCache[plane.id] = `🛫 ${fr.origin.iata_code || fr.origin.municipality} ➔ 🛬 ${fr.destination.iata_code || fr.destination.municipality}`;
+                else planeRouteCache[plane.id] = isMil ? '🔒 Военен / Тактически полет' : 'Маршрутът не е публикуван';
+            } else planeRouteCache[plane.id] = isMil ? '🔒 Военен / Тактически полет' : 'Маршрутът не е публикуван';
+        } catch (e) { planeRouteCache[plane.id] = 'Няма данни за маршрута'; }
+        const routeEl = document.getElementById('planeRouteText');
+        if (routeEl && selectedPlaneId === plane.id) routeEl.innerText = planeRouteCache[plane.id];
+    }
+
+    function formatAiHtml(rawText) {
+        if (!rawText) return '';
+        let safe = String(rawText)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/\*\*(.*?)\*\*/g, '<span class="ai-sec-title">$1</span>')
+            .replace(/\*(.*?)\*/g, '$1')
+            .replace(/`(.*?)`/g, '<span class="ai-hl-code">$1</span>');
+
+        safe = safe.replace(/^(\d+\.\s+[^\(:]+:)/gm, '<span class="ai-sec-title">$1</span>');
+        safe = safe.replace(/(\b\d+(?:\.\d+)?\s*(?:км\/ч|км|м|°|мин)\b)/g, '<span class="ai-hl-num">$1</span>');
+
+        return safe;
+    }
+
+    window.requestAiBrief = async function(planeId) {
+        const p = planes.find(pl => pl.id === planeId);
+        const box = document.getElementById('aiBriefBox');
+        if (!p || !box) return;
+
+        box.style.display = 'block';
+
+        if (planeAiBriefCache[planeId]) {
+            box.innerHTML = formatAiHtml(planeAiBriefCache[planeId]);
+            setTimeout(() => { box.scrollTop = 0; }, 10);
+            return;
+        }
+
+        box.innerHTML = '<span style="color:#00e5ff;">🧠 Събиране на данни и генериране на тактически анализ...</span>';
+        box.scrollTop = 0;
+
+        try {
+            const trailPts = planeTrails[planeId] ? planeTrails[planeId].pts : [];
+            const res = await fetch('/api/ai-brief', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    id: p.id,
+                    lat: p.lat,
+                    lon: p.lon,
+                    callsign: cleanCallsign(p.callsign, ''),
+                    squawk: p.squawk,
+                    type: p.type,
+                    operator: p.operator,
+                    altitude: p.altitude,
+                    speed: p.speed,
+                    track: p.track,
+                    bearing: p.bearing,
+                    distKm: p.distKm,
+                    isMilitary: isMilitaryPlane(p),
+                    route: planeRouteCache[p.id] || '',
+                    trail: trailPts
+                })
+            });
+            const data = await res.json();
+            let text = data.brief || 'Няма данни от AI анализатора.';
+
+            if (!text.startsWith('⚠️')) {
+                planeAiBriefCache[planeId] = text;
             }
 
-            $lat = $val[1] ?? null;
-            $lon = $val[2] ?? null;
-            if (!is_numeric($lat) || !is_numeric($lon)) {
-                continue;
+            if (selectedPlaneId === planeId && document.getElementById('aiBriefBox')) {
+                const activeBox = document.getElementById('aiBriefBox');
+                activeBox.style.display = 'block';
+                activeBox.innerHTML = formatAiHtml(text);
+                setTimeout(() => { activeBox.scrollTop = 0; }, 10);
+            }
+        } catch (e) {
+            box.innerHTML = '<span style="color:#ff4444;">⚠️ Грешка при заявката към AI сървъра.</span>';
+            box.scrollTop = 0;
+        }
+    };
+
+    function updateInfoPanelHTML(p) {
+        const panel = document.getElementById('infoPanel');
+
+        const oldAiBox = panel.querySelector('#aiBriefBox');
+        const savedAiScrollTop = oldAiBox ? oldAiBox.scrollTop : 0;
+        const savedAiWasVisible = oldAiBox
+            ? oldAiBox.style.display !== 'none'
+            : false;
+
+        const isMilitary = isMilitaryPlane(p);
+        panel.style.display = 'block';
+        panel.classList.toggle('mil-panel', isMilitary);
+
+        const color = isMilitary ? '#ff3333' : '#ffcc00';
+        const badgeText = isMilitary ? 'ВОЕНЕН ОБЕКТ' : 'ГРАЖДАНСКИ ПОЛЕТ';
+        const trackDeg = Math.round(p.track || 0);
+
+        const cachedPhoto = planePhotoCache[p.id];
+        const showImg = cachedPhoto ? 'display:block;' : 'display:none;';
+        const showSvg = cachedPhoto ? 'display:none;' : 'display:block;';
+
+        const pinData = getPinDataForPlane(p.id);
+        const currentPinSlot = pinData ? pinData.slot : null;
+        const nextAssign = getNextTrackAssignment();
+        const slotHint = nextAssign.trackNum !== nextAssign.slot ? ` (С${nextAssign.slot})` : '';
+
+        const autoBtnText = pinData
+            ? `🎯 ЦЕЛ #${pinData.trackNum} (С${pinData.slot}) [МАХНИ]`
+            : `📌 МАРКИРАЙ КАТО ЦЕЛ #${nextAssign.trackNum}${slotHint}`;
+
+        let slotButtonsHtml = '';
+
+        for (let s of ALL_SLOTS) {
+            const slotObj = pinnedTargets[s];
+            const isThisPlane = (currentPinSlot === s);
+            let btnLabel = `С${s}`;
+            let extraClass = '';
+
+            if (isThisPlane && slotObj) {
+                btnLabel = `✓#${slotObj.trackNum}`;
+                extraClass = 'active';
+            } else if (slotObj) {
+                btnLabel = `${s}:#${slotObj.trackNum}`;
+                extraClass = 'occupied';
             }
 
-            $lat = (float) $lat;
-            $lon = (float) $lon;
+            slotButtonsHtml += `<button class="mark-btn ${extraClass}" onclick="togglePinSlot(${s}, '${p.id}')">${btnLabel}</button>`;
+        }
 
-            $lonDiff = $this->sub($lon, $centerLon);
-            if (abs($this->sub($lat, $centerLat)) > 6.5 || $lonDiff < -7.5 || $lonDiff > 16.5) {
-                continue;
-            }
+        const currentRoute = planeRouteCache[p.id] || 'Проверка на маршрут...';
+        const sqkDisplay = (p.squawk && p.squawk !== '----' && p.squawk !== '0000')
+            ? p.squawk
+            : 'Няма (MLAT)';
 
-            $hex = strtolower(trim((string) ($val[0] ?? '')));
-            $id = $hex !== '' ? $hex : 'fr_' . strtolower(trim((string) $key));
+        const aziLabel = azimuthOffsetDeg !== 0
+            ? (azimuthOffsetDeg > 0 ? '+' : '') + azimuthOffsetDeg + '°'
+            : 'ИСТ.';
 
-            $track        = (float) ($val[3] ?? 0);
-            $altFeet      = (float) ($val[4] ?? 0);
-            $speedKnots   = (float) ($val[5] ?? 0);
-            $squawk       = trim((string) ($val[6] ?? '----'));
-            $aircraftType = trim((string) ($val[8] ?? ''));
-            $reg          = trim((string) ($val[9] ?? ''));
-            $ts           = (int) ($val[10] ?? 0);
-            $onGround     = (int) ($val[14] ?? 0);
-            $rawCallsign  = trim((string) ($val[16] ?? $val[13] ?? ''));
-            $operator     = trim((string) ($val[18] ?? ''));
+        const cachedAi = planeAiBriefCache[p.id];
+        const vTrendHtml = getVerticalTrendHtml(p);
 
-            if ($aircraftType === 'GRND' || str_starts_with(strtoupper($rawCallsign), 'GND')) {
-                continue;
-            }
+        panel.innerHTML = `
+        <div class="panel-top-actions">
+            <button class="action-btn" onclick="closeInfoPanel()">✕</button>
+        </div>
 
-            $isMil = $this->isKnownMilitary($hex, $rawCallsign, $squawk, $aircraftType, $operator, '', $reg);
+        <div class="plane-card-header">
+            <div class="plane-photo-box">
+                <img id="realPlaneImg" src="${cachedPhoto || ''}" style="${showImg}" alt="Снимка" />
+                <svg id="fallbackPlaneSvg" viewBox="0 0 64 64" width="36" height="36" style="${showSvg} transform: rotate(${trackDeg}deg);">
+                    <path fill="${color}" d="M32 4 L36 18 L58 30 L58 35 L36 31 L35 48 L45 55 L45 59 L32 56 L19 59 L19 55 L29 48 L28 31 L6 35 L6 30 L28 18 Z"/>
+                </svg>
+            </div>
+            <div>
+                <div style="font-size: 9.5px; color: ${color}; font-weight: bold;">● ${badgeText} ${pinData ? `| 🎯 ЦЕЛ #${pinData.trackNum}` : ''}</div>
+                <div style="font-weight: bold; font-size: 12.5px; color: #fff; margin: 1px 0;">
+                    SQK: <span style="color:#00ffff;">${sqkDisplay}</span> | ✈ ${cleanCallsign(p.callsign, p.id)}
+                </div>
+                <div style="font-size: 10px; color: #00ffcc; font-weight: bold;">HEX: ${p.id.toUpperCase()} | ${p.type || 'Няма данни'}</div>
+                <div style="font-size: 9.5px; color: #88ff88;">${p.operator || 'Неизвестен оператор'}</div>
+            </div>
+        </div>
 
-            $age = $ts > 0 ? max(0.0, $this->sub($now, $ts)) : 2.0;
-            $maxAllowedAge = $isMil ? 180.0 : self::MAX_POS_AGE_SEC;
-            if ($age > $maxAllowedAge) {
-                continue;
-            }
+        <div class="route-banner">
+            <span id="planeRouteText">${currentRoute}</span>
+        </div>
 
-            $altitudeMeters = max(0, (int) round($this->mul($altFeet, 0.3048)));
-            $speedKmh       = (int) round($this->mul($speedKnots, 1.852));
+        <div id="aiBriefBox" class="ai-brief-box" style="${cachedAi ? 'display:block;' : 'display:none;'}">${cachedAi ? formatAiHtml(cachedAi) : ''}</div>
 
-            if (!$isMil && ($onGround === 1 || $altitudeMeters <= 0) && $speedKmh < 30) {
-                continue;
-            }
+        <div class="info-grid">
+            <div class="info-item">
+                <span class="info-label">АЗИМУТ (${aziLabel}) / РАЗСТ.</span>
+                <span class="info-val" style="color:#00ff66;">AZ: ${p.bearing}° / ${(p.distKm || 0).toFixed(1)} км</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">КУРС / ВИСОЧИНА / СКОРОСТ</span>
+                <span class="info-val">${trackDeg}° | ${p.altitude || 0} м ${vTrendHtml} | ${p.speed || 0} км/ч</span>
+            </div>
+        </div>
 
-            $existing = $planesMap[$id] ?? null;
-            if (is_array($existing)) {
-                $existingIsModeS = str_contains((string) ($existing['callsign'] ?? ''), '[MODE-S]');
-                $frHasBetterPos  = $existingIsModeS || (($existing['speed'] ?? 0) === 0 && $speedKmh > 0);
+        <div class="card-actions-row">
+            <button class="auto-track-btn ${pinData ? 'active' : ''}" onclick="autoAssignNextTrack('${p.id}')">${autoBtnText}</button>
+            <button class="ai-intel-btn" onclick="requestAiBrief('${p.id}')">АИ АНАЛИЗ</button>
+            <button class="toggle-card-slots-btn" onclick="toggleCardSlots()">🎛️ СЛОТОВЕ</button>
+        </div>
 
-                if ($frHasBetterPos) {
-                    $existing['lat']      = $lat;
-                    $existing['lon']      = $lon;
-                    $existing['track']    = $track;
-                    $existing['speed']    = $speedKmh;
-                    $existing['age']      = round($age, 1);
-                    if ($altitudeMeters > 0) {
-                        $existing['altitude'] = $altitudeMeters;
-                    }
-                    $cleanCs = trim(str_replace('[MODE-S]', '', (string) $existing['callsign']));
-                    if ($rawCallsign !== '' && str_starts_with($cleanCs, strtoupper($id))) {
-                        $cleanCs = $rawCallsign . (!empty($existing['isMilitary']) || $isMil ? ' [ВОЕНЕН]' : '');
-                    }
-                    $existing['callsign'] = trim((string) preg_replace('/\s+/', ' ', $cleanCs));
-                }
+        <div id="cardSlotsGrid" class="mark-targets-row ${cardSlotsOpen ? 'open' : ''}">${slotButtonsHtml}</div>
+    `;
 
-                if ($isMil && empty($existing['isMilitary'])) {
-                    $existing['isMilitary'] = true;
-                    if (!str_contains($existing['callsign'], '[ВОЕНЕН]')) {
-                        $existing['callsign'] .= ' [ВОЕНЕН]';
-                    }
-                    if ($existing['operator'] === 'Граждански полет') {
-                        $existing['operator'] = 'Военновъздушни сили (ВВС)';
-                    }
-                }
-                if (($existing['type'] === 'Няма данни' || $existing['type'] === '') && $aircraftType !== '') {
-                    $existing['type'] = $aircraftType;
-                }
-                if (($existing['squawk'] === '----' || $existing['squawk'] === '') && $squawk !== '' && $squawk !== '0000') {
-                    $existing['squawk'] = $squawk;
-                }
-                $planesMap[$id] = $existing;
-                continue;
-            }
+        const newAiBox = panel.querySelector('#aiBriefBox');
 
-            $displayCallsign = $rawCallsign !== '' ? $rawCallsign : ($reg !== '' ? $reg : ($aircraftType !== '' ? $aircraftType : strtoupper($id)));
-            if ($isMil && !str_contains($displayCallsign, '[ВОЕНЕН]')) {
-                $displayCallsign .= ' [ВОЕНЕН]';
-            }
+        if (newAiBox && cachedAi && savedAiWasVisible) {
+            newAiBox.style.display = 'block';
+            newAiBox.scrollTop = savedAiScrollTop;
+        }
 
-            $planesMap[$id] = [
-                'id'         => $id,
-                'callsign'   => $displayCallsign,
-                'lat'        => $lat,
-                'lon'        => $lon,
-                'track'      => $track,
-                'altitude'   => $altitudeMeters,
-                'speed'      => $speedKmh,
-                'squawk'     => ($squawk !== '' && $squawk !== '0000') ? $squawk : '----',
-                'type'       => $aircraftType !== '' ? $aircraftType : 'Няма данни',
-                'operator'   => $operator !== '' ? $operator : ($isMil ? 'Военновъздушни сили (ВВС)' : 'Граждански полет'),
-                'age'        => round($age, 1),
-                'isMilitary' => $isMil,
-                '_source'    => 'FR24',
-            ];
+        if (cachedPhoto === undefined) fetchRealPlanePhoto(p.id);
+        if (planeRouteCache[p.id] === undefined) fetchFlightRoute(p);
+    }
+
+    window.closeInfoPanel = function() { selectedPlaneId = null; document.getElementById('infoPanel').style.display = 'none'; };
+
+    function recordPlaneTrailPoint(id, lat, lon, alt, now) {
+        if (!planeTrails[id]) {
+            planeTrails[id] = { pts: [{ lat, lon, alt: Number(alt || 0) }], lastSeen: now };
+            return;
+        }
+        const entry = planeTrails[id];
+        entry.lastSeen = now;
+        const lastPt = entry.pts[entry.pts.length - 1];
+        if (!lastPt) {
+            entry.pts.push({ lat, lon, alt: Number(alt || 0) });
+            return;
+        }
+        const movedKm = calcDistanceKm(lastPt.lat, lastPt.lon, lat, lon);
+        if (movedKm >= 0.15 && movedKm < 80) {
+            entry.pts.push({ lat, lon, alt: Number(alt || 0) });
+            if (entry.pts.length > MAX_TRAIL_POINTS) entry.pts.shift();
         }
     }
 
-    private function parseOpenSkyList(
-        array $states,
-        array &$planesMap,
-        float $centerLat,
-        float $centerLon
-    ): void {
-        $now = time();
-
-        foreach ($states as $st) {
-            if (!is_array($st)) {
-                continue;
-            }
-
-            $id = strtolower(trim((string) ($st[0] ?? '')));
-            $rawCallsign = trim((string) ($st[1] ?? ''));
-            $originCountry = trim((string) ($st[2] ?? 'Граждански полет'));
-            $posTime = (int) ($st[3] ?? $st[4] ?? 0);
-            $lon = $st[5] ?? null;
-            $lat = $st[6] ?? null;
-            $altMeters = $st[7] ?? $st[13] ?? 0;
-            $onGround = !empty($st[8]);
-            $velocityMs = (float) ($st[9] ?? 0);
-            $track = (float) ($st[10] ?? 0);
-            $squawk = trim((string) ($st[14] ?? '----'));
-
-            if ($id === '' || !is_numeric($lat) || !is_numeric($lon)) {
-                continue;
-            }
-
-            $lat = (float) $lat;
-            $lon = (float) $lon;
-
-            if (abs($this->sub($lat, $centerLat)) > 5.5 || abs($this->sub($lon, $centerLon)) > 7.5) {
-                continue;
-            }
-
-            $isMil = $this->isKnownMilitary($id, $rawCallsign, $squawk, '', $originCountry);
-            $maxAllowedAge = $isMil ? 180.0 : self::MAX_POS_AGE_SEC;
-
-            if ($posTime > 0 && $this->sub($now, $posTime) > $maxAllowedAge) {
-                continue;
-            }
-
-            $existing = $planesMap[$id] ?? null;
-            if (is_array($existing)) {
-                $existingIsModeS = str_contains((string) ($existing['callsign'] ?? ''), '[MODE-S]');
-                if (!$existingIsModeS) {
-                    continue;
-                }
-                if (!empty($existing['isMilitary'])) {
-                    $isMil = true;
-                }
-            }
-
-            $speedKmh = (int) round($this->mul($velocityMs, 3.6));
-            $altitudeMeters = is_numeric($altMeters) ? max(0, (int) round((float) $altMeters)) : 0;
-
-            if (!$isMil && ($onGround || $altitudeMeters <= 0) && $speedKmh < 30) {
-                continue;
-            }
-
-            $displayCallsign = $rawCallsign !== '' ? $rawCallsign : strtoupper($id);
-
-            if ($isMil && !str_contains($displayCallsign, '[ВОЕНЕН]')) {
-                $displayCallsign .= ' [ВОЕНЕН]';
-            }
-
-            $planesMap[$id] = [
-                'id'         => $id,
-                'callsign'   => $displayCallsign,
-                'lat'        => $lat,
-                'lon'        => $lon,
-                'track'      => $track,
-                'altitude'   => $altitudeMeters,
-                'speed'      => $speedKmh,
-                'squawk'     => $squawk !== '' ? $squawk : ($existing['squawk'] ?? '----'),
-                'type'       => $existing['type'] ?? ($isMil ? 'Военен борд' : 'Въздушна цел'),
-                'operator'   => $originCountry,
-                'age'        => $posTime > 0 ? round(max(0.0, $this->sub($now, $posTime)), 1) : 1.0,
-                'isMilitary' => $isMil,
-                '_source'    => 'opensky',
-            ];
+    function cleanupOldTrails(now) {
+        for (const id in planeTrails) {
+            if (now - planeTrails[id].lastSeen > 600000) delete planeTrails[id];
         }
     }
 
-    private function isKnownMilitary(
-        string $hex,
-        string $callsign,
-        string $squawk,
-        string $type,
-        string $operator,
-        string $description = '',
-        string $reg = ''
-    ): bool {
-        $hex = strtolower(trim($hex));
-        $cs = strtoupper(trim($callsign));
-        $squawk = trim($squawk);
-        $type = strtoupper(str_replace(['-', ' '], '', trim($type)));
-        $op = strtoupper(trim($operator));
-        $desc = strtoupper(trim($description));
-        $regClean = strtoupper(trim($reg));
+    function ingestPlanesData(data) {
+        const now = Date.now();
+        planes = data
+            .filter(item => item && Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lon)))
+            .map(item => {
+                const normalized = { ...item };
+                const latNum = Number(item.lat);
+                const lonNum = Number(item.lon);
 
-        $civilCallsigns = [
-            'THY', 'WZZ', 'WMT', 'RYR', 'RYS', 'DLH', 'LZB', 'AUA', 'BAW',
-            'AFR', 'KLM', 'SWR', 'EZY', 'EJU', 'TAR', 'ROT', 'ASL', 'AEE',
-            'PGT', 'SXS', 'CAI', 'LOT', 'TVS', 'BTI', 'ELAL', 'ELY', 'QTR',
-            'UAE', 'ETD', 'FDB', 'TUK', 'BGH', 'VBB', 'LAZ',
-        ];
-        foreach ($civilCallsigns as $civ) {
-            if ($cs !== '' && str_starts_with($cs, $civ)) {
-                return false;
-            }
+                normalized.isMilitary = isMilitaryPlane(item);
+
+                const incomingSqk = String(normalized.squawk || '').trim();
+                if (incomingSqk !== '' && incomingSqk !== '----' && incomingSqk !== '0000') {
+                    knownSquawkMemory[normalized.id] = incomingSqk;
+                } else if (knownSquawkMemory[normalized.id]) {
+                    normalized.squawk = knownSquawkMemory[normalized.id];
+                }
+
+                if (normalized.isMilitary && !/\[ВОЕНЕН\]/i.test(String(normalized.callsign || ''))) {
+                    normalized.callsign = `${normalized.callsign || normalized.id || ''} [ВОЕНЕН]`.trim();
+                }
+
+                recordPlaneTrailPoint(normalized.id, latNum, lonNum, normalized.altitude, now);
+
+                const distKm = calcDistanceKm(myLat, myLon, latNum, lonNum);
+                const bearing = calcBearing(myLat, myLon, latNum, lonNum);
+                return { ...normalized, lat: latNum, lon: lonNum, distKm, bearing, lastUpdateMs: now };
+            });
+
+        cleanupOldTrails(now);
+        updatePinnedBarUI();
+        if (selectedPlaneId) {
+            const sel = planes.find(p => p.id === selectedPlaneId);
+            if (sel) updateInfoPanelHTML(sel);
         }
-
-        if ($hex !== '') {
-            if (
-                str_starts_with($hex, '45f4') ||
-                str_starts_with($hex, 'ae') ||
-                str_starts_with($hex, 'af') ||
-                str_starts_with($hex, '43c') ||
-                str_starts_with($hex, '4d03') ||
-                preg_match('/^3f[4-9a-b]/', $hex)
-            ) {
-                return true;
-            }
-        }
-
-        if ($squawk === '7777') {
-            return true;
-        }
-
-        if ($regClean !== '' && preg_match('/^(66\d|07[123]|11\d|20\d)$/', $regClean)) {
-            return true;
-        }
-
-        $milPrefixes = [
-            'BAF', 'BULAF', 'BGF', 'NATO', 'FORTE', 'LAGR', 'NCHO',
-            'JAKE', 'RCH', 'RRR', 'ASCOT', 'DUKE', 'VIPER', 'COBRA',
-            'HAWK', 'GAF', 'FAF', 'TUAF', 'HAF', 'ROAF', 'PLF',
-            'SAM', 'SPAR', 'IAM', 'CNV', 'MMF', 'IAF', 'USAF',
-            'HOMER', 'OLIVE', 'SNTRY', 'MAGIC', 'HOBO', 'GOLD',
-            'CLEAN', 'PACK', 'PYTHON', 'REDEYE', 'BRK', 'BART',
-        ];
-
-        foreach ($milPrefixes as $prefix) {
-            if ($cs !== '' && str_starts_with($cs, $prefix)) {
-                return true;
-            }
-        }
-
-        $milTypes = [
-            'F16', 'C27J', 'C130', 'C30J', 'PC9', 'PC7', 'L39', 'MIG29',
-            'SU25', 'UH60', 'CH47', 'MI8', 'MI17', 'MI24', 'AS32', 'AS532',
-            'KC135', 'K35R', 'A332', 'E3TF', 'E3CF', 'E737', 'C17', 'A400',
-            'P8', 'POSEIDON', 'RQ4', 'MQ9', 'B52', 'R135', 'RC135', 'EP3',
-            'F15', 'F18', 'F35', 'TYPH', 'EUFI', 'RAFL', 'PILATUS',
-            'TB2', 'ANKA', 'AKINCI', 'GLEX', 'E6', 'U2', 'V22',
-        ];
-
-        foreach ($milTypes as $milType) {
-            if (($type !== '' && str_contains($type, $milType)) ||
-                ($desc !== '' && str_contains($desc, $milType))) {
-                return true;
-            }
-        }
-
-        $milKeywords = [
-            'AIR FORCE', 'MILITARY', 'NAVY', 'ARMY', 'NATO',
-            'DEFENCE', 'DEFENSE', 'LUFTWAFFE', 'GUARD', 'COAST GUARD',
-            'ВОЕННОВЪЗДУШ', 'ВВС', 'BULGARIA - AIR FORCE', 'ROYAL AIR FORCE',
-        ];
-
-        foreach ($milKeywords as $keyword) {
-            if (($op !== '' && str_contains($op, $keyword)) ||
-                ($desc !== '' && str_contains($desc, $keyword))) {
-                return true;
-            }
-        }
-
-        return false;
     }
-}
+
+    async function fetchPlanes(force = false) {
+        if (isReplayMode || (isFetchingPlanes && !force)) return;
+        isFetchingPlanes = true;
+        try {
+            const res = await fetch(`/api/planes?lat=${myLat.toFixed(6)}&lon=${myLon.toFixed(6)}${force ? '&force=1' : ''}`);
+            if (res.ok) {
+                const data = await res.json();
+                if (Array.isArray(data)) ingestPlanesData(data);
+            }
+        } catch (e) {} finally { isFetchingPlanes = false; }
+    }
+
+    async function syncHistoryMeta() {
+        try {
+            const res = await fetch('/api/history');
+            if (!res.ok) return;
+            const data = await res.json();
+            if (Array.isArray(data.timestamps) && data.timestamps.length > 0) {
+                historyTimestamps = data.timestamps;
+                const slider = document.getElementById('historySlider');
+                const atEnd = Number(slider.value) >= Number(slider.max) - 1;
+                slider.max = historyTimestamps.length - 1;
+                if (!isReplayMode || atEnd) slider.value = slider.max;
+                document.getElementById('tmFramesCount').textContent = `Записи: ${historyTimestamps.length}`;
+            }
+        } catch (e) {}
+    }
+
+    async function loadHistoryFrame(idx) {
+        try {
+            const res = await fetch(`/api/history?index=${idx}`);
+            if (!res.ok) return;
+            const frame = await res.json();
+            if (frame && Array.isArray(frame.planes)) {
+                isReplayMode = true;
+                document.getElementById('modeBadge').classList.add('replay');
+                document.getElementById('modeText').textContent = '⏪ REPLAY';
+                const dt = new Date(frame.timestamp * 1000);
+                document.getElementById('tmTimestampLabel').textContent = dt.toLocaleTimeString('bg-BG');
+                ingestPlanesData(frame.planes);
+            }
+        } catch (e) {}
+    }
+
+    function stopReplay() {
+        replayPlaying = false;
+        document.getElementById('btnPlayHistory').textContent = '▶ ПУСНИ';
+        if (replayTimer) {
+            clearInterval(replayTimer);
+            replayTimer = null;
+        }
+    }
+
+    document.getElementById('btnHistory').onclick = function() {
+        const dock = document.getElementById('timeMachineDock');
+        const isOpen = dock.style.display === 'block';
+        dock.style.display = isOpen ? 'none' : 'block';
+        this.classList.toggle('active', !isOpen);
+        if (!isOpen) syncHistoryMeta();
+    };
+
+    let sliderDebounceTimer = null;
+    document.getElementById('historySlider').oninput = function() {
+        stopReplay();
+        const idx = Number(this.value);
+        if (historyTimestamps[idx]) {
+            const dt = new Date(historyTimestamps[idx] * 1000);
+            document.getElementById('tmTimestampLabel').textContent = dt.toLocaleTimeString('bg-BG');
+        }
+        clearTimeout(sliderDebounceTimer);
+        sliderDebounceTimer = setTimeout(() => { loadHistoryFrame(idx); }, 80);
+    };
+
+    document.getElementById('btnPlayHistory').onclick = function() {
+        if (historyTimestamps.length === 0) return;
+        if (replayPlaying) {
+            stopReplay();
+            return;
+        }
+        replayPlaying = true;
+        this.textContent = '⏸ ПАУЗА';
+        const slider = document.getElementById('historySlider');
+        if (Number(slider.value) >= Number(slider.max)) slider.value = 0;
+
+        replayTimer = setInterval(() => {
+            let next = Number(slider.value) + 1;
+            if (next > Number(slider.max)) {
+                stopReplay();
+                return;
+            }
+            slider.value = next;
+            loadHistoryFrame(next);
+        }, Math.round(1000 / replaySpeed));
+    };
+
+    document.getElementById('btnSpeedHistory').onclick = function() {
+        const speeds = [1, 2, 5];
+        replaySpeed = speeds[(speeds.indexOf(replaySpeed) + 1) % speeds.length];
+        this.textContent = `${replaySpeed}x`;
+    };
+
+    document.getElementById('btnBackToLive').onclick = () => {
+        stopReplay();
+        isReplayMode = false;
+        document.getElementById('modeBadge').classList.remove('replay');
+        document.getElementById('modeText').textContent = 'LIVE';
+        document.getElementById('tmTimestampLabel').textContent = 'НА ЖИВО';
+        const slider = document.getElementById('historySlider');
+        slider.value = slider.max;
+        fetchPlanes(true);
+    };
+
+    document.getElementById('btnZoomIn').onclick = () => {
+        if (currentRangeIdx > 0) currentRangeIdx--;
+        setRadarRangeKm(TACTICAL_RANGES_KM[currentRangeIdx]);
+    };
+    document.getElementById('btnZoomOut').onclick = () => {
+        if (currentRangeIdx < TACTICAL_RANGES_KM.length - 1) currentRangeIdx++;
+        setRadarRangeKm(TACTICAL_RANGES_KM[currentRangeIdx]);
+    };
+    document.getElementById('btnMyLoc').onclick = () => {
+        currentRangeIdx = 3;
+        map.setView([myLat, myLon], map.getZoom(), { animate: false });
+        setRadarRangeKm(80);
+    };
+
+    setTimeout(() => setRadarRangeKm(80), 100);
+
+    document.getElementById('btnMilOnly').onclick = function() { milOnlyFilter = !milOnlyFilter; this.classList.toggle('active', milOnlyFilter); };
+    document.getElementById('btnTrails').onclick = function() { showTrails = !showTrails; this.classList.toggle('active', showTrails); };
+    document.getElementById('btnMapStyle').onclick = function() {
+        currentMapMode = (currentMapMode + 1) % 3;
+        map.removeLayer(googleTerrainLayer); map.removeLayer(googleHybridLayer); map.removeLayer(openTopoLayer);
+        if (currentMapMode === 0) { googleTerrainLayer.addTo(map); this.textContent = '🗺️ РЕЛЕФ'; }
+        else if (currentMapMode === 1) { googleHybridLayer.addTo(map); this.textContent = '🛰️ САТЕЛИТ'; }
+        else { openTopoLayer.addTo(map); this.textContent = '⛰️ ТОПО'; }
+    };
+
+    setInterval(() => {
+        document.getElementById('clockDisplay').textContent = new Date().toLocaleTimeString('bg-BG');
+    }, 1000);
+
+    updatePinnedBarUI();
+    requestAnimationFrame(renderLoop);
+    fetchPlanes(true);
+    syncHistoryMeta();
+    setInterval(() => fetchPlanes(false), 5000);
+    setInterval(syncHistoryMeta, 15000);
+    // === АВТОМАТИЧЕН SMOOTH INTERPOLATOR (DEAD RECKONING ВСЯКА СЕКУНДА) ===
+    (function () {
+        const trackedVectors = new Map(); // id -> { lat, lon, speed, track, isModeS }
+        const coordIndex = [];
+
+        // 1. Прихващаме всяко получаване на /api/planes, за да си запишем скоростта и курса
+        const origFetch = window.fetch;
+        window.fetch = async function (...args) {
+            const response = await origFetch.apply(this, args);
+            try {
+                const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
+                if (url.includes('/api/planes')) {
+                    response.clone().json().then(planes => {
+                        if (!Array.isArray(planes)) return;
+                        coordIndex.length = 0;
+                        planes.forEach(p => {
+                            const lat = parseFloat(p.lat);
+                            const lon = parseFloat(p.lon);
+                            if (!isFinite(lat) || !isFinite(lon)) return;
+                            const state = {
+                                id: p.id,
+                                lat: lat,
+                                lon: lon,
+                                speed: parseFloat(p.speed) || 0,
+                                track: parseFloat(p.track) || 0,
+                                isModeS: String(p.callsign || '').includes('[MODE-S]')
+                            };
+                            trackedVectors.set(p.id, state);
+                            coordIndex.push(state);
+                        });
+                    }).catch(() => {});
+                }
+            } catch (e) {}
+            return response;
+        };
+
+        // 2. Връзваме всеки Leaflet маркер със самолета му по координати при setLatLng / създаване
+        function bindMarkerToPlane(marker, latlng) {
+            const ll = L.latLng(latlng);
+            for (let i = 0; i < coordIndex.length; i++) {
+                const p = coordIndex[i];
+                if (Math.abs(p.lat - ll.lat) < 0.0002 && Math.abs(p.lon - ll.lng) < 0.0002) {
+                    marker._radarPlaneId = p.id;
+                    break;
+                }
+            }
+        }
+
+        if (typeof L !== 'undefined' && L.Marker) {
+            const origOnAdd = L.Marker.prototype.onAdd;
+            L.Marker.prototype.onAdd = function (map) {
+                window._radarLeafletMap = map;
+                bindMarkerToPlane(this, this.getLatLng());
+                return origOnAdd.call(this, map);
+            };
+
+            const origSetLatLng = L.Marker.prototype.setLatLng;
+            L.Marker.prototype.setLatLng = function (latlng) {
+                if (!this._isSmoothStep) {
+                    bindMarkerToPlane(this, latlng);
+                }
+                return origSetLatLng.call(this, latlng);
+            };
+        }
+
+        // 3. Таймер на всяка 1 секунда: мести всички самолети плавно по курса и скоростта им
+        setInterval(() => {
+            const map = window._radarLeafletMap || window.map;
+            if (!map || (typeof isHistoryMode !== 'undefined' && isHistoryMode)) return;
+
+            map.eachLayer(layer => {
+                if (!(layer instanceof L.Marker) || !layer._radarPlaneId) return;
+                const vec = trackedVectors.get(layer._radarPlaneId);
+                if (!vec || vec.speed < 40) return;
+
+                // Изминато разстояние за 1 секунда (в метри)
+                const distMeters = vec.speed / 3.6;
+                const trackRad = (vec.track * Math.PI) / 180;
+                const latRad = (vec.lat * Math.PI) / 180;
+
+                vec.lat += (distMeters * Math.cos(trackRad)) / 111320;
+                vec.lon += (distMeters * Math.sin(trackRad)) / (111320 * Math.max(0.15, Math.abs(Math.cos(latRad))));
+
+                layer._isSmoothStep = true;
+                layer.setLatLng([vec.lat, vec.lon]);
+                layer._isSmoothStep = false;
+            });
+        }, 1000);
+    })();
+    // === PLANESPOTTERS.NET СНИМКИ И РЕБ ТЕЛЕМЕТРИЯ В ИНФО ПАНЕЛА ===
+    document.addEventListener('DOMContentLoaded', () => {
+        // Наблюдаваме промените в долния инфо панел при клик на самолет
+        const observer = new MutationObserver(async (mutations) => {
+            const infoPanel = document.querySelector('.plane-info-panel, #info-panel, .info-box'); // Нагоди селектора според твоя HTML клас
+            if (!infoPanel) return;
+
+            // Намираме HEX кода или регистрацията от активния панел
+            const hexElement = infoPanel.querySelector('.plane-hex, [data-hex], .hex-code');
+            if (!hexElement) return;
+
+            const hex = hexElement.textContent.trim().toLowerCase().replace('hex:', '').trim();
+            if (!hex || hex.length < 4 || hex.startsWith('fr_')) return;
+
+            // Създаваме контейнер за снимка, ако още го няма в панела
+            let imgContainer = infoPanel.querySelector('.planespotters-photo-container');
+            if (!imgContainer) {
+                imgContainer = document.createElement('div');
+                imgContainer.className = 'planespotters-photo-container';
+                imgContainer.style.cssText = 'margin-top: 10px; text-align: center; border-radius: 6px; overflow: hidden; background: #111; padding: 4px;';
+                infoPanel.appendChild(imgContainer);
+            }
+
+            imgContainer.innerHTML = '<span style="color: #aaa; font-size: 11px;">Зареждане на снимка от базата...</span>';
+
+            try {
+                const res = await fetch(`https://api.planespotters.net/pub/photos/hex/${hex}`);
+                const data = await res.json();
+
+                if (data && data.photos && data.photos.length > 0) {
+                    const photo = data.photos[0];
+                    imgContainer.innerHTML = `
+                    <a href="${photo.link}" target="_blank" title="Виж в Planespotters.net">
+                        <img src="${photo.thumbnail_large.src}" style="width: 100%; height: 120px; object-fit: cover; border-radius: 4px;" alt="Aircraft Photo">
+                    </a>
+                    <div style="font-size: 10px; color: #888; margin-top: 2px;">© ${photo.photographer || 'Planespotters'}</div>
+                `;
+                } else {
+                    imgContainer.innerHTML = '<span style="color: #666; font-size: 10px;">Няма налична снимка за този борд</span>';
+                }
+            } catch (e) {
+                imgContainer.innerHTML = '';
+            }
+        });
+
+        const targetNode = document.body;
+        observer.observe(targetNode, { childList: true, subtree: true });
+    });
+</script>
+</body>
+</html>
