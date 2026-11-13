@@ -100,6 +100,9 @@ class RadarController extends AbstractController
 
             // 1. Основни безлимитни ADS-B v2 потоци + Военни потоци + PIA/LADD
             // 1. ВСИЧКИ основни потоци (запазени на 100%, но adsb.lol са разпределени да не връщат HTTP 429)
+
+
+            // 1. ВСИЧКИ основни потоци (запазени на 100%, но adsb.lol са разпределени да не връщат HTTP 429)
             // 1. ВСИЧКИ основни потоци (запазени на 100%, но adsb.lol са разпределени да не връщат HTTP 429)
             $adsbProviders = [
                 [
@@ -140,11 +143,25 @@ class RadarController extends AbstractController
                 ],
             ];
 
-            // Редуваме допълнителните потоци на adsb.lol през 6 сек, за да правим макс 2 заявки наведнъж към api.adsb.lol
-            $cycle = (int) floor($now / self::CACHE_TTL);
+            // СОНДА ЧЕРНО МОРЕ (Център: 43.30, 34.00 - покрива Крим, Одеса, Синоп, Сочи и цялата акватория)
+            $bsLat = 43.30;
+            $bsLon = 34.00;
+            $adsbProviders[] = [
+                'name' => 'adsb.fi-blacksea',
+                'base' => 'adsb.fi-blacksea',
+                'url'  => "https://opendata.adsb.fi/api/v2/lat/{$bsLat}/lon/{$bsLon}/dist/250",
+                'mil'  => false,
+            ];
+            $adsbProviders[] = [
+                'name' => 'adsb.lol-blacksea',
+                'base' => 'adsb.lol-blacksea',
+                'url'  => "https://api.adsb.lol/v2/point/{$bsLat}/{$bsLon}/250",
+                'mil'  => false,
+            ];
 
+            // Редуваме допълнителните потоци на adsb.lol през цикъл...
+            $cycle = (int) floor($now / self::CACHE_TTL);
             if ($force || ($cycle % 2) === 0) {
-                // На четен цикъл (0, 12, 24 сек) теглим военните от adsb.lol-mil
                 $adsbProviders[] = [
                     'name' => 'adsb.lol-mil',
                     'base' => 'adsb.lol-mil',
@@ -152,7 +169,6 @@ class RadarController extends AbstractController
                     'mil'  => true,
                 ];
             } else {
-                // На нечетен цикъл (6, 18, 30 сек) теглим LADD и PIA от adsb.lol
                 $adsbProviders[] = [
                     'name' => 'adsb.lol-ladd',
                     'base' => 'adsb.lol-ladd',
@@ -166,7 +182,7 @@ class RadarController extends AbstractController
                     'mil'  => true,
                 ];
             }
-            // 2. FlyItalyADS-B – с делител на честотата за пазене на дневния лимит на ключа
+            //2. FlyItalyADS-B – с делител на честотата за пазене на дневния лимит на ключа
             $flyItalyKey = $_ENV['FLYITALYADSB_API_KEY']
                 ?? $_SERVER['FLYITALYADSB_API_KEY']
                 ?? getenv('FLYITALYADSB_API_KEY')
@@ -181,6 +197,7 @@ class RadarController extends AbstractController
                     'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                     'Accept: application/json',
                 ];
+
 
                 if ($force || ($now % 18) < self::CACHE_TTL) {
                     $polledFlyItaly = true;
@@ -1248,12 +1265,13 @@ class RadarController extends AbstractController
 
     private function buildFr24Url(float $lat, float $lon): string
     {
-        $north = min(90.0, round($lat + 4.5, 2));
-        $south = max(-90.0, round($this->sub($lat, 4.5), 2));
+        $north = min(90.0, round($lat + 5.5, 2));
+        $south = max(-90.0, round($this->sub($lat, 5.5), 2));
         $west  = max(-180.0, round($this->sub($lon, 6.5), 2));
-        $east  = min(180.0, round($lon + 6.5, 2));
+        // Разширяваме на изток с +16.0 градуса (до 40.6° И.Д. - покрива 100% от Черно море, Крим и Турция!)
+        $east  = min(180.0, round($lon + 16.0, 2));
 
-        return "https://data-cloud.flightradar24.com/zones/fcgi/feed.js?bounds={$north},{$south},{$west},{$east}&faa=1&satellite=1&mlat=1&flarm=1&adsb=1&gnd=1&air=1&vehicles=0&estimated=1&maxage=90&gliders=1&stats=0";
+        return "https://data-cloud.flightradar24.com/zones/fcgi/feed.js?bounds={$north},{$south},{$west},{$east}&faa=1&satellite=1&mlat=1&flarm=1&adsb=1&gnd=1&air=1&vehicles=0&estimated=1&maxage=120&gliders=1&stats=0";
     }
 
     private function buildOpenSkyUrl(float $lat, float $lon, float $radiusNm): string
@@ -1263,9 +1281,10 @@ class RadarController extends AbstractController
         $lonDelta = min(180.0, $radiusNm / $this->mul(60.0, $cosLat));
 
         $lamin = max(-90.0, round($this->sub($lat, $latDelta), 2));
-        $lamax = min(90.0, round($lat + $latDelta, 2));
+        $lamax = min(90.0, round($lat + $latDelta + 2.0, 2));
         $lomin = max(-180.0, round($this->sub($lon, $lonDelta), 2));
-        $lomax = min(180.0, round($lon + $lonDelta, 2));
+        // Покриваме цялото Черно море на изток до 41.0° И.Д.
+        $lomax = min(180.0, round($lon + 16.0, 2));
 
         return 'https://opensky-network.org/api/states/all?' . http_build_query([
                 'lamin' => $lamin,
@@ -1329,7 +1348,6 @@ class RadarController extends AbstractController
                 true
             );
 
-            // Бит 1 = Military, Бит 2 = Interesting (VIP/Правителствени/Специални контрактори)
             $dbFlags = (int) ($ac['dbFlags'] ?? 0);
             $isMil = $isStrictMilFeed
                 || (($dbFlags & 1) === 1)
@@ -1338,30 +1356,9 @@ class RadarController extends AbstractController
 
             $hasLiveLatLon = isset($ac['lat'], $ac['lon']) || isset($ac['latitude'], $ac['longitude']);
 
-            if ($hasLiveLatLon) {
-                $seenPos = (float) ($ac['seen_pos'] ?? ($ac['seen'] ?? 0.5));
-            } elseif (isset($ac['lastPosition']['lat'], $ac['lastPosition']['lon'])) {
-                $seenPos = (float) ($ac['lastPosition']['seen_pos'] ?? 999.0);
-            } else {
-                $seenPos = 120.0 + (float) ($ac['seen'] ?? 0.5);
-            }
-
-            $maxAllowedAge = $isMil ? 180.0 : self::MAX_POS_AGE_SEC;
-            if ($seenPos > $maxAllowedAge) {
-                continue;
-            }
-
-            $lat = $ac['lat']
-                ?? $ac['latitude']
-                ?? ($ac['lastPosition']['lat'] ?? null)
-                ?? ($isMil ? ($ac['rr_lat'] ?? null) : null);
-
-            $lon = $ac['lon']
-                ?? $ac['longitude']
-                ?? ($ac['lastPosition']['lon'] ?? null)
-                ?? ($isMil ? ($ac['rr_lon'] ?? null) : null);
-
-            $isModeSApproximate = !$hasLiveLatLon && isset($lat, $lon);
+            // ВНИМАНИЕ: НЕ ползваме rr_lat/rr_lon, защото това са координатите на антената на брега и бъгват Mode-S целите!
+            $lat = $ac['lat'] ?? $ac['latitude'] ?? ($ac['lastPosition']['lat'] ?? null);
+            $lon = $ac['lon'] ?? $ac['longitude'] ?? ($ac['lastPosition']['lon'] ?? null);
 
             if (!is_numeric($lat) || !is_numeric($lon)) {
                 continue;
@@ -1370,9 +1367,19 @@ class RadarController extends AbstractController
             $lat = (float) $lat;
             $lon = (float) $lon;
 
-            if (abs($this->sub($lat, $centerLat)) > 5.5 || abs($this->sub($lon, $centerLon)) > 7.5) {
+            if ($hasLiveLatLon) {
+                $seenPos = (float) ($ac['seen_pos'] ?? ($ac['seen'] ?? 0.5));
+            } else {
+                $seenPos = (float) ($ac['lastPosition']['seen_pos'] ?? 999.0);
+            }
+
+            // За военни в Mode-S над Черно море позволяваме до 600 сек (10 мин) екстраполация по курс и скорост
+            $maxAllowedAge = $isMil ? 600.0 : self::MAX_POS_AGE_SEC;
+            if ($seenPos > $maxAllowedAge) {
                 continue;
             }
+
+            $isModeSApproximate = !$hasLiveLatLon;
 
             $altBaro = $ac['alt_baro'] ?? null;
             $altGeom = $ac['alt_geom'] ?? $ac['alt'] ?? ($ac['lastPosition']['alt_baro'] ?? 0);
@@ -1383,6 +1390,28 @@ class RadarController extends AbstractController
 
             $speedKnots = (float) ($ac['gs'] ?? $ac['spd'] ?? $ac['tas'] ?? $ac['ias'] ?? 0);
             $speedKmh = (int) round($this->mul($speedKnots, 1.852));
+            $track = (float) ($ac['track'] ?? $ac['true_heading'] ?? $ac['mag_heading'] ?? $ac['calc_track'] ?? 0);
+
+            // Ако военният самолет е без скорост в Mode-S, но е във въздуха (>2000м), задаваме крейсерска скорост за екстраполация
+            if ($isModeSApproximate && $isMil && $speedKmh === 0 && $altitudeMeters > 2000) {
+                $speedKmh = 650;
+            }
+
+            // СЪЖИВЯВАНЕ НА MODE-S: Ако позицията е стара (seenPos > 5 сек), но имаме скорост и курс,
+            // изчисляваме математически къде точно е прелетял самолетът през тези секунди (Dead Reckoning)!
+            if ($isModeSApproximate && $seenPos > 5.0 && $seenPos <= 600.0 && $speedKmh > 60) {
+                $distMeters = $this->mul($speedKmh / 3.6, min($seenPos, 300.0));
+                $trackRad = deg2rad($track);
+                $latRad = deg2rad($lat);
+                $lat += $this->mul($distMeters, cos($trackRad)) / 111320.0;
+                $lon += $this->mul($distMeters, sin($trackRad)) / $this->mul(111320.0, max(0.15, abs(cos($latRad))));
+            }
+
+            // Разширена географска рамка: покрива от Сърбия (-7.5°) до края на Черно море/Грузия (+16.5° на изток!)
+            $lonDiff = $this->sub($lon, $centerLon);
+            if (abs($this->sub($lat, $centerLat)) > 6.5 || $lonDiff < -7.5 || $lonDiff > 16.5) {
+                continue;
+            }
 
             if (!$isMil && ($isOnGroundFlag || $altitudeMeters <= 0) && $speedKmh < 30) {
                 continue;
@@ -1395,10 +1424,12 @@ class RadarController extends AbstractController
                 }
                 $existingIsModeS = str_contains((string) ($existing['callsign'] ?? ''), '[MODE-S]');
 
+                // 1. Никога не презаписваме жива координата с приблизителна [MODE-S]
                 if ($isModeSApproximate && !$existingIsModeS) {
                     continue;
                 }
-                if (!$existingIsModeS && ($existing['age'] ?? 99.0) < $seenPos && (!empty($existing['isMilitary']) || !$isMil)) {
+                // 2. Ако и двете са живи (или и двете са Mode-S), пазим по-прясната
+                if ($isModeSApproximate === $existingIsModeS && ($existing['age'] ?? 999.0) <= $seenPos) {
                     continue;
                 }
             }
@@ -1415,8 +1446,6 @@ class RadarController extends AbstractController
                 $displayCallsign .= ' [ВОЕНЕН]';
             }
 
-            $track = (float) ($ac['track'] ?? $ac['true_heading'] ?? $ac['mag_heading'] ?? $ac['calc_track'] ?? 0);
-
             $roll = isset($ac['roll']) ? (float) $ac['roll'] : null;
             $mach = isset($ac['mach']) ? (float) $ac['mach'] : null;
             $baroRate = isset($ac['baro_rate']) ? (int) $ac['baro_rate'] : 0;
@@ -1424,7 +1453,6 @@ class RadarController extends AbstractController
             $nacP = isset($ac['nac_p']) ? (int) $ac['nac_p'] : 99;
             $sil = isset($ac['sil']) ? (int) $ac['sil'] : 99;
 
-            // Детекция за GPS Jamming (нисък NIC/NACp/SIL) или GPS Spoofing (>1000 ft разлика между баро и GPS височина)
             $altMismatch = is_numeric($altBaro) && is_numeric($altGeom) && abs($this->sub((float) $altBaro, (float) $altGeom)) > 1000.0;
             $gpsJammed = ($nic >= 0 && $nic < 5) || ($nacP >= 0 && $nacP < 6) || ($sil >= 0 && $sil < 2) || $altMismatch;
 
@@ -1435,8 +1463,8 @@ class RadarController extends AbstractController
             $planesMap[$id] = [
                 'id'         => $id,
                 'callsign'   => $displayCallsign,
-                'lat'        => $lat,
-                'lon'        => $lon,
+                'lat'        => round($lat, 5),
+                'lon'        => round($lon, 5),
                 'track'      => $track,
                 'altitude'   => $altitudeMeters,
                 'speed'      => $speedKmh,
@@ -1476,7 +1504,8 @@ class RadarController extends AbstractController
             $lat = (float) $lat;
             $lon = (float) $lon;
 
-            if (abs($this->sub($lat, $centerLat)) > 5.5 || abs($this->sub($lon, $centerLon)) > 7.5) {
+            $lonDiff = $this->sub($lon, $centerLon);
+            if (abs($this->sub($lat, $centerLat)) > 6.5 || $lonDiff < -7.5 || $lonDiff > 16.5) {
                 continue;
             }
 
