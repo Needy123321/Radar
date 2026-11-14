@@ -612,23 +612,48 @@
 <canvas id="radarCanvas"></canvas>
 
 <!-- КОМПАКТЕН ГОРЕН ТАКТИЧЕСКИ ПАНЕЛ -->
-<div class="top-hud">
+<div class="top-hud" id="topHudContainer">
     <div class="hud-row">
-        <div class="status-header">
+        <div class="status-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
             <div class="status-left">
                 <span id="modeBadge" class="live-badge">
                     <span class="live-dot"></span>
                     <span id="modeText">LIVE</span>
                 </span>
             </div>
-            <div class="status-right">
+            <div class="status-right" style="display:flex; align-items:center; gap:8px; font-size:11px;">
                 <span>ЦЕЛИ: <strong id="planesCount" style="color:#ffdd00;">0</strong></span>
                 <span>ВОЕННИ: <strong id="milCount" style="color:#ff4444;">0</strong></span>
+
+                <!-- ГОЛЯМ БУТОН ЗА ТЕЛЕФОН: Цялата му площ отваря/прибира чекмеджето -->
+                <button type="button" id="osintBadgeBtn" onclick="toggleOsintDrawer(event)" style="
+                    display:inline-flex;
+                    align-items:center;
+                    gap:5px;
+                    min-height:28px;
+                    padding:4px 10px;
+                    border-radius:6px;
+                    border:1.5px solid #ef4444;
+                    background:rgba(185, 28, 28, 0.55);
+                    color:#ffffff;
+                    font-family:monospace;
+                    font-size:12px;
+                    font-weight:bold;
+                    cursor:pointer;
+                    touch-action:manipulation;
+                    user-select:none;
+                    -webkit-tap-highlight-color:transparent;
+                ">
+                    <span>📡 ДРОН:</span>
+                    <strong id="osintCount" style="color:#fde047; font-size:13px;">0</strong>
+                    <span id="osintArrow">▼</span>
+                </button>
+
                 <span id="clockDisplay">--:--:--</span>
             </div>
         </div>
 
-        <div class="controls-compact-bar">
+        <div class="controls-compact-bar" style="overflow-x:auto; white-space:nowrap; -webkit-overflow-scrolling:touch; scrollbar-width:none;">
             <button class="radar-btn loc-btn" id="locGps" onclick="activateRealGps()">📡 GPS</button>
             <button class="radar-btn loc-btn" id="locManual" onclick="promptManualCoords()">✍️ КООРД.</button>
             <button class="radar-btn" id="btn-gyro" onclick="toggleGyroCompass()">3.3° АЗИМ.</button>
@@ -638,6 +663,21 @@
             <button class="radar-btn" id="btnMapStyle">🗺️ РЕЛЕФ</button>
         </div>
     </div>
+
+    <!-- Чекмедже със сводките -->
+    <div id="osintMobileDrawer" style="
+        display:none;
+        flex-direction:column;
+        gap:6px;
+        background:rgba(15, 23, 42, 0.98);
+        border:1.5px solid #ef4444;
+        border-radius:8px;
+        padding:8px;
+        margin-top:6px;
+        max-height:220px;
+        overflow-y:auto;
+        box-shadow:0 8px 25px rgba(0,0,0,0.85);
+    "></div>
 
     <div class="pinned-header">
         <span id="trackCounterInfo">🎯 МАРКИРАНИ: 0/21 | Следв: #1</span>
@@ -657,7 +697,6 @@
         {% endfor %}
     </div>
 </div>
-
 <div class="map-side-controls">
     <button class="circle-btn" id="btnZoomIn">+</button>
     <button class="circle-btn" id="btnZoomOut">−</button>
@@ -2441,67 +2480,152 @@
         }, 1000);
     })();
     // === PLANESPOTTERS.NET СНИМКИ И РЕБ ТЕЛЕМЕТРИЯ В ИНФО ПАНЕЛА ===
-    document.addEventListener('DOMContentLoaded', () => {
-        // Наблюдаваме промените в долния инфо панел при клик на самолет
-        const observer = new MutationObserver(async (mutations) => {
-            const infoPanel = document.querySelector('.plane-info-panel, #info-panel, .info-box'); // Нагоди селектора според твоя HTML клас
-            if (!infoPanel) return;
-
-            // Намираме HEX кода или регистрацията от активния панел
-            const hexElement = infoPanel.querySelector('.plane-hex, [data-hex], .hex-code');
-            if (!hexElement) return;
-
-            const hex = hexElement.textContent.trim().toLowerCase().replace('hex:', '').trim();
-            if (!hex || hex.length < 4 || hex.startsWith('fr_')) return;
-
-            // Създаваме контейнер за снимка, ако още го няма в панела
-            let imgContainer = infoPanel.querySelector('.planespotters-photo-container');
-            if (!imgContainer) {
-                imgContainer = document.createElement('div');
-                imgContainer.className = 'planespotters-photo-container';
-                imgContainer.style.cssText = 'margin-top: 10px; text-align: center; border-radius: 6px; overflow: hidden; background: #111; padding: 4px;';
-                infoPanel.appendChild(imgContainer);
-            }
-
-            imgContainer.innerHTML = '<span style="color: #aaa; font-size: 11px;">Зареждане на снимка от базата...</span>';
-
+    // === ЖИВ OSINT РАДИОПРИХВАТ (ФИКС ЗА POINTER-EVENTS И МИГНОВЕН СКОК) ===
+    function resolveLeafletMap() {
+        if (typeof map !== 'undefined' && map && typeof map.setView === 'function') return map;
+        if (window.map && typeof window.map.setView === 'function') return window.map;
+        for (const key of Object.keys(window)) {
             try {
-                const res = await fetch(`https://api.planespotters.net/pub/photos/hex/${hex}`);
-                const data = await res.json();
-
-                if (data && data.photos && data.photos.length > 0) {
-                    const photo = data.photos[0];
-                    imgContainer.innerHTML = `
-                    <a href="${photo.link}" target="_blank" title="Виж в Planespotters.net">
-                        <img src="${photo.thumbnail_large.src}" style="width: 100%; height: 120px; object-fit: cover; border-radius: 4px;" alt="Aircraft Photo">
-                    </a>
-                    <div style="font-size: 10px; color: #888; margin-top: 2px;">© ${photo.photographer || 'Planespotters'}</div>
-                `;
-                } else {
-                    imgContainer.innerHTML = '<span style="color: #666; font-size: 10px;">Няма налична снимка за този борд</span>';
+                const val = window[key];
+                if (val && typeof val === 'object' && typeof val.setView === 'function' && typeof val.flyTo === 'function' && val._container) {
+                    return val;
                 }
-            } catch (e) {
-                imgContainer.innerHTML = '';
-            }
-        });
+            } catch (e) {}
+        }
+        return null;
+    }
 
-        const targetNode = document.body;
-        observer.observe(targetNode, { childList: true, subtree: true });
-    });
-    // === ЖИВ OSINT РАДИОПРИХВАТ НА ЦЕЛИ БЕЗ ТРАНСПОНДЕР ВЪРХУ ЧЕРНО МОРЕ ===
-    const osintMarkersLayer = L.layerGroup().addTo(map);
+    const activeRadarMap = resolveLeafletMap();
+    const osintMarkersLayer = activeRadarMap ? L.layerGroup().addTo(activeRadarMap) : null;
+    window.osintMarkersList = [];
+    let osintDrawerOpen = false;
+
+    // Принудително активираме кликовете върху бутона и чекмеджето (прескача pointer-events: none на .top-hud)
+    const badgeBtnInit = document.getElementById('osintBadgeBtn');
+    if (badgeBtnInit) {
+        badgeBtnInit.style.pointerEvents = 'auto';
+        badgeBtnInit.style.position = 'relative';
+        badgeBtnInit.style.zIndex = '99999';
+    }
+    const drawerInit = document.getElementById('osintMobileDrawer');
+    if (drawerInit) {
+        drawerInit.style.pointerEvents = 'auto';
+        drawerInit.style.position = 'relative';
+        drawerInit.style.zIndex = '99999';
+    }
+
+    window.setOsintDrawerState = function(open) {
+        const drawer = document.getElementById('osintMobileDrawer');
+        const arrow = document.getElementById('osintArrow');
+        if (!drawer) return;
+        osintDrawerOpen = open;
+        drawer.style.display = osintDrawerOpen ? 'flex' : 'none';
+        drawer.style.pointerEvents = 'auto';
+        if (arrow) {
+            arrow.textContent = osintDrawerOpen ? '▲' : '▼';
+        }
+    };
+
+    window.toggleOsintDrawer = function(e) {
+        if (e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+        window.setOsintDrawerState(!osintDrawerOpen);
+    };
+
+    window.jumpToOsintTarget = function(lat, lon, idx, e) {
+        if (e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        const targetLat = parseFloat(lat);
+        const targetLon = parseFloat(lon);
+        console.log('%c[OSINT JUMP] СКОК КЪМ ЦЕЛ #' + idx + ':', 'background:#16a34a; color:#fff; font-weight:bold; padding:2px 6px;', targetLat, targetLon);
+
+        const targetMap = resolveLeafletMap();
+        if (!targetMap || isNaN(targetLat) || isNaN(targetLon)) return;
+
+        // 1. Затваряме списъка
+        window.setOsintDrawerState(false);
+
+        // 2. Изключваме евентуално автоматично връщане към GPS
+        if (typeof followGps !== 'undefined') followGps = false;
+        if (typeof autoCenter !== 'undefined') autoCenter = false;
+        if (typeof isTrackingGps !== 'undefined') isTrackingGps = false;
+
+        // 3. Прелитаме до координатите в Черно море и отваряме балона
+        targetMap.stop();
+        targetMap.flyTo([targetLat, targetLon], 8, { animate: true, duration: 0.8 });
+
+        setTimeout(() => {
+            const m = window.osintMarkersList[idx];
+            if (m && typeof m.openPopup === 'function') {
+                m.openPopup();
+            }
+        }, 850);
+    };
 
     async function fetchAndRenderOsintAlerts() {
         try {
+            if (osintDrawerOpen && window.osintMarkersList.length > 0) return;
+
             const res = await fetch('/api/osint-feed');
             if (!res.ok) return;
             const data = await res.json();
             if (!data || !Array.isArray(data.alerts)) return;
 
-            osintMarkersLayer.clearLayers();
+            const osintCountEl = document.getElementById('osintCount');
+            const osintBadgeBtn = document.getElementById('osintBadgeBtn');
+            const drawer = document.getElementById('osintMobileDrawer');
 
-            data.alerts.forEach((alert) => {
-                if (!alert.lat || !alert.lon) return;
+            if (osintMarkersLayer) osintMarkersLayer.clearLayers();
+            window.osintMarkersList = [];
+
+            if (osintCountEl) {
+                osintCountEl.textContent = data.alerts.length;
+                osintCountEl.style.color = data.alerts.length > 0 ? '#fde047' : '#4ade80';
+            }
+            if (osintBadgeBtn) {
+                osintBadgeBtn.style.pointerEvents = 'auto';
+                osintBadgeBtn.style.borderColor = data.alerts.length > 0 ? '#ef4444' : '#22c55e';
+                osintBadgeBtn.style.background = data.alerts.length > 0 ? 'rgba(185, 28, 28, 0.75)' : 'rgba(21, 128, 61, 0.45)';
+            }
+
+            if (!drawer) return;
+            drawer.style.pointerEvents = 'auto';
+            drawer.innerHTML = '';
+
+            // Бутон за прибиране на списъка
+            const closeBtn = document.createElement('button');
+            closeBtn.type = 'button';
+            closeBtn.style.cssText = `
+                width:100%; padding:8px; background:rgba(51,65,85,0.98);
+                border:1px solid #64748b; border-radius:5px; color:#f8fafc;
+                font-family:monospace; font-size:11px; font-weight:bold;
+                cursor:pointer; pointer-events:auto !important; position:relative; z-index:100000;
+            `;
+            closeBtn.textContent = '▲ ПРИБЕРИ OSINT СПИСЪКА ▲';
+            closeBtn.onpointerdown = function(ev) {
+                ev.preventDefault();
+                ev.stopPropagation();
+                window.setOsintDrawerState(false);
+            };
+            drawer.appendChild(closeBtn);
+
+            if (data.alerts.length === 0) {
+                const empty = document.createElement('div');
+                empty.style.cssText = 'color:#4ade80; font-size:12px; font-family:monospace; padding:8px; text-align:center;';
+                empty.textContent = '📡 ЧЕРНО МОРЕ: Чисто (няма цели без транспондер в последните 90 мин).';
+                drawer.appendChild(empty);
+                return;
+            }
+
+            data.alerts.forEach((alert, idx) => {
+                const lat = parseFloat(alert.lat);
+                const lon = parseFloat(alert.lon);
+                if (isNaN(lat) || isNaN(lon)) return;
 
                 const iconHtml = `
                     <div style="
@@ -2516,7 +2640,6 @@
                         font-weight:bold;
                         white-space:nowrap;
                         box-shadow:0 0 12px rgba(239,68,68,0.9);
-                        animation: pulse 1.5s infinite;
                     ">
                         <span>⚠️ OSINT</span>
                         <span style="color:#fde047;">${alert.time_ago}</span>
@@ -2530,28 +2653,56 @@
                     iconAnchor: [55, 11]
                 });
 
-                const marker = L.marker([alert.lat, alert.lon], { icon: osintIcon, zIndexOffset: 2500 });
-                marker.bindPopup(`
-                    <div style="background:#0f172a;color:#f8fafc;padding:10px;border-radius:6px;border:1px solid #ef4444;min-width:240px;font-family:monospace;">
-                        <div style="color:#f87171;font-weight:bold;font-size:12px;margin-bottom:4px;">
-                            📡 РАДИОПРИХВАТ / ЦЕЛ БЕЗ ТРАНСПОНДЕР
+                if (osintMarkersLayer) {
+                    const marker = L.marker([lat, lon], { icon: osintIcon, zIndexOffset: 2500 });
+                    marker.bindPopup(`
+                        <div style="background:#0f172a;color:#f8fafc;padding:10px;border-radius:6px;border:1px solid #ef4444;min-width:220px;font-family:monospace;">
+                            <div style="color:#f87171;font-weight:bold;font-size:12px;margin-bottom:4px;">
+                                📡 РАДИОПРИХВАТ / ДРОН
+                            </div>
+                            <div style="color:#fde047;font-size:11px;margin-bottom:6px;">
+                                📍 ${alert.zone} (${alert.time_ago})
+                            </div>
+                            <div style="font-size:12px;line-height:1.4;color:#e2e8f0;margin-bottom:6px;">
+                                ${alert.text}
+                            </div>
+                            <div style="font-size:10px;color:#94a3b8;border-top:1px solid #334155;padding-top:4px;">
+                                Източник: ${alert.source} | ${lat}, ${lon}
+                            </div>
                         </div>
-                        <div style="color:#fde047;font-size:11px;margin-bottom:6px;">
-                            📍 ${alert.zone} (${alert.time_ago})
-                        </div>
-                        <div style="font-size:12px;line-height:1.4;color:#e2e8f0;margin-bottom:6px;">
-                            ${alert.text}
-                        </div>
-                        <div style="font-size:10px;color:#94a3b8;border-top:1px solid #334155;padding-top:4px;">
-                            Източник: ${alert.source} | Коорд: ${alert.lat}, ${alert.lon}
-                        </div>
-                    </div>
-                `);
+                    `);
+                    osintMarkersLayer.addLayer(marker);
+                    window.osintMarkersList[idx] = marker;
+                }
 
-                osintMarkersLayer.addLayer(marker);
+                // Бутон за всяка сводка с изричен pointer-events: auto !important и onpointerdown
+                const cardBtn = document.createElement('button');
+                cardBtn.type = 'button';
+                cardBtn.style.cssText = `
+                    width:100%; box-sizing:border-box; text-align:left;
+                    background:rgba(30,41,59,0.98); border:1px solid #475569;
+                    border-left:4px solid #ef4444; border-radius:6px;
+                    padding:8px 10px; font-family:monospace; font-size:12px;
+                    color:#f8fafc; cursor:pointer; line-height:1.35;
+                    user-select:none; pointer-events:auto !important;
+                    position:relative; z-index:100000;
+                `;
+                cardBtn.innerHTML = `
+                    <div style="display:flex; justify-content:space-between; align-items:center; color:#fde047; font-weight:bold; margin-bottom:4px; pointer-events:none;">
+                        <span>🎯 ${alert.zone} (${lat}, ${lon})</span>
+                        <span style="background:#991b1b; color:#fff; padding:2px 7px; border-radius:4px; font-size:10px;">${alert.time_ago} ➔ КАРТА</span>
+                    </div>
+                    <div style="color:#e2e8f0; white-space:normal; pointer-events:none;">${alert.text}</div>
+                `;
+
+                cardBtn.onpointerdown = function(ev) {
+                    window.jumpToOsintTarget(lat, lon, idx, ev);
+                };
+
+                drawer.appendChild(cardBtn);
             });
         } catch (err) {
-            console.warn('OSINT Feed Error:', err);
+            console.error('[OSINT ERROR]:', err);
         }
     }
 
