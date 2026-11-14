@@ -2481,6 +2481,7 @@
     })();
     // === PLANESPOTTERS.NET СНИМКИ И РЕБ ТЕЛЕМЕТРИЯ В ИНФО ПАНЕЛА ===
     // === ЖИВ OSINT РАДИОПРИХВАТ (ФИКС ЗА POINTER-EVENTS И МИГНОВЕН СКОК) ===
+    // === ПЪЛЕН ТАКТИЧЕСКИ OSINT МОДУЛ (ВЕКТОРИ + ЗВУК + СНИМКИ НА САМОЛЕТИ) ===
     function resolveLeafletMap() {
         if (typeof map !== 'undefined' && map && typeof map.setView === 'function') return map;
         if (window.map && typeof window.map.setView === 'function') return window.map;
@@ -2499,8 +2500,73 @@
     const osintMarkersLayer = activeRadarMap ? L.layerGroup().addTo(activeRadarMap) : null;
     window.osintMarkersList = [];
     let osintDrawerOpen = false;
+    let lastKnownOsintTs = 0;
 
-    // Принудително активираме кликовете върху бутона и чекмеджето (прескача pointer-events: none на .top-hud)
+    // 1. Синтезиран тактически радарен бийп (без външни аудио файлове)
+    function playTacticalRadarBeep() {
+        try {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            if (!AudioCtx) return;
+            const ctx = new AudioCtx();
+            [880, 1320].forEach((freq, i) => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(freq, ctx.currentTime + i * 0.14);
+                gain.gain.setValueAtTime(0.12, ctx.currentTime + i * 0.14);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.14 + 0.12);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start(ctx.currentTime + i * 0.14);
+                osc.stop(ctx.currentTime + i * 0.14 + 0.12);
+            });
+        } catch (e) {}
+    }
+
+    // 2. Изчисляване на крайна точка за 25 km векторна стрелка по азимут
+    function computeVectorEndpoint(lat, lon, headingDeg, distKm = 25) {
+        const rad = (headingDeg * Math.PI) / 180;
+        const dLat = (distKm / 111.32) * Math.cos(rad);
+        const dLon = (distKm / (111.32 * Math.cos((lat * Math.PI) / 180))) * Math.sin(rad);
+        return [lat + dLat, lon + dLon];
+    }
+
+    // 3. Автоматично зареждане на реална снимка от Planespotters при клик на самолет
+    if (activeRadarMap) {
+        activeRadarMap.on('popupopen', async (e) => {
+            const popupEl = e.popup && e.popup.getElement ? e.popup.getElement() : null;
+            if (!popupEl || popupEl.querySelector('.ps-photo-box')) return;
+
+            const contentHtml = popupEl.innerHTML || '';
+            // Търсим 6-символен ICAO Hex код в балона на самолета (или от selectedHex)
+            const hexMatch = contentHtml.match(/\b([0-9A-Fa-f]{6})\b/);
+            const hex = (typeof selectedHex !== 'undefined' && selectedHex) ? selectedHex : (hexMatch ? hexMatch[1] : null);
+            if (!hex || contentHtml.includes('РАДИОПРИХВАТ')) return;
+
+            const photoBox = document.createElement('div');
+            photoBox.className = 'ps-photo-box';
+            photoBox.style.cssText = 'margin-top:6px; text-align:center;';
+            const contentNode = popupEl.querySelector('.leaflet-popup-content');
+            if (!contentNode) return;
+            contentNode.appendChild(photoBox);
+
+            try {
+                const r = await fetch(`https://api.planespotters.net/pub/production/hex/${hex.toLowerCase()}`);
+                if (!r.ok) return;
+                const pData = await r.json();
+                const photo = pData && pData.photos && pData.photos[0] ? pData.photos[0] : null;
+                if (photo && photo.thumbnail_large && photo.thumbnail_large.src) {
+                    photoBox.innerHTML = `
+                        <a href="${photo.link || '#'}" target="_blank" rel="noopener" style="display:block; text-decoration:none;">
+                            <img src="${photo.thumbnail_large.src}" alt="Aircraft" style="width:100%; max-width:220px; border-radius:4px; border:1px solid #38bdf8; display:block; margin:0 auto;">
+                            <span style="font-size:9px; color:#94a3b8; font-family:monospace;">📸 ${photo.photographer || 'Planespotters.net'}</span>
+                        </a>
+                    `;
+                }
+            } catch (err) {}
+        });
+    }
+
     const badgeBtnInit = document.getElementById('osintBadgeBtn');
     if (badgeBtnInit) {
         badgeBtnInit.style.pointerEvents = 'auto';
@@ -2521,9 +2587,7 @@
         osintDrawerOpen = open;
         drawer.style.display = osintDrawerOpen ? 'flex' : 'none';
         drawer.style.pointerEvents = 'auto';
-        if (arrow) {
-            arrow.textContent = osintDrawerOpen ? '▲' : '▼';
-        }
+        if (arrow) arrow.textContent = osintDrawerOpen ? '▲' : '▼';
     };
 
     window.toggleOsintDrawer = function(e) {
@@ -2539,23 +2603,17 @@
             e.preventDefault();
             e.stopPropagation();
         }
-
         const targetLat = parseFloat(lat);
         const targetLon = parseFloat(lon);
-        console.log('%c[OSINT JUMP] СКОК КЪМ ЦЕЛ #' + idx + ':', 'background:#16a34a; color:#fff; font-weight:bold; padding:2px 6px;', targetLat, targetLon);
-
         const targetMap = resolveLeafletMap();
         if (!targetMap || isNaN(targetLat) || isNaN(targetLon)) return;
 
-        // 1. Затваряме списъка
         window.setOsintDrawerState(false);
 
-        // 2. Изключваме евентуално автоматично връщане към GPS
         if (typeof followGps !== 'undefined') followGps = false;
         if (typeof autoCenter !== 'undefined') autoCenter = false;
         if (typeof isTrackingGps !== 'undefined') isTrackingGps = false;
 
-        // 3. Прелитаме до координатите в Черно море и отваряме балона
         targetMap.stop();
         targetMap.flyTo([targetLat, targetLon], 8, { animate: true, duration: 0.8 });
 
@@ -2583,6 +2641,15 @@
             if (osintMarkersLayer) osintMarkersLayer.clearLayers();
             window.osintMarkersList = [];
 
+            // Проверка за НОВА цел -> звуков сигнал
+            const newestTs = data.alerts.reduce((max, a) => Math.max(max, parseInt(a.ts || 0, 10)), 0);
+            if (lastKnownOsintTs > 0 && newestTs > lastKnownOsintTs) {
+                playTacticalRadarBeep();
+            }
+            if (newestTs > lastKnownOsintTs) {
+                lastKnownOsintTs = newestTs;
+            }
+
             if (osintCountEl) {
                 osintCountEl.textContent = data.alerts.length;
                 osintCountEl.style.color = data.alerts.length > 0 ? '#fde047' : '#4ade80';
@@ -2597,7 +2664,6 @@
             drawer.style.pointerEvents = 'auto';
             drawer.innerHTML = '';
 
-            // Бутон за прибиране на списъка
             const closeBtn = document.createElement('button');
             closeBtn.type = 'button';
             closeBtn.style.cssText = `
@@ -2627,6 +2693,29 @@
                 const lon = parseFloat(alert.lon);
                 if (isNaN(lat) || isNaN(lon)) return;
 
+                const hasHeading = alert.heading !== null && alert.heading !== undefined && !isNaN(parseFloat(alert.heading));
+                const headingDeg = hasHeading ? parseFloat(alert.heading) : null;
+
+                // Ако има засечен курс в текста -> чертаем 25 km пунктиран вектор на движение + стрелка
+                if (osintMarkersLayer && headingDeg !== null) {
+                    const [endLat, endLon] = computeVectorEndpoint(lat, lon, headingDeg, 26);
+                    const vectorLine = L.polyline([[lat, lon], [endLat, endLon]], {
+                        color: '#ef4444',
+                        weight: 2.5,
+                        dashArray: '6, 6',
+                        opacity: 0.9
+                    });
+                    osintMarkersLayer.addLayer(vectorLine);
+
+                    const arrowIcon = L.divIcon({
+                        className: 'osint-vector-arrow',
+                        html: `<div style="transform:rotate(${headingDeg}deg); color:#fde047; font-size:14px; font-weight:bold; text-shadow:0 0 6px #ef4444; line-height:1;">▲</div>`,
+                        iconSize: [16, 16],
+                        iconAnchor: [8, 8]
+                    });
+                    osintMarkersLayer.addLayer(L.marker([endLat, endLon], { icon: arrowIcon, interactive: false }));
+                }
+
                 const iconHtml = `
                     <div style="
                         display:flex;align-items:center;gap:4px;
@@ -2643,14 +2732,15 @@
                     ">
                         <span>⚠️ OSINT</span>
                         <span style="color:#fde047;">${alert.time_ago}</span>
+                        ${headingDeg !== null ? `<span style="color:#38bdf8;">${headingDeg}°</span>` : ''}
                     </div>
                 `;
 
                 const osintIcon = L.divIcon({
                     className: 'osint-tactical-marker',
                     html: iconHtml,
-                    iconSize: [110, 22],
-                    iconAnchor: [55, 11]
+                    iconSize: null, // <-- null кара рамката сама да се разтяга точно по текста!
+                    iconAnchor: [65, 11]
                 });
 
                 if (osintMarkersLayer) {
@@ -2658,7 +2748,7 @@
                     marker.bindPopup(`
                         <div style="background:#0f172a;color:#f8fafc;padding:10px;border-radius:6px;border:1px solid #ef4444;min-width:220px;font-family:monospace;">
                             <div style="color:#f87171;font-weight:bold;font-size:12px;margin-bottom:4px;">
-                                📡 РАДИОПРИХВАТ / ДРОН
+                                📡 РАДИОПРИХВАТ / ДРОН ${headingDeg !== null ? `(КУРС ~${headingDeg}°)` : ''}
                             </div>
                             <div style="color:#fde047;font-size:11px;margin-bottom:6px;">
                                 📍 ${alert.zone} (${alert.time_ago})
@@ -2675,7 +2765,6 @@
                     window.osintMarkersList[idx] = marker;
                 }
 
-                // Бутон за всяка сводка с изричен pointer-events: auto !important и onpointerdown
                 const cardBtn = document.createElement('button');
                 cardBtn.type = 'button';
                 cardBtn.style.cssText = `
@@ -2689,7 +2778,7 @@
                 `;
                 cardBtn.innerHTML = `
                     <div style="display:flex; justify-content:space-between; align-items:center; color:#fde047; font-weight:bold; margin-bottom:4px; pointer-events:none;">
-                        <span>🎯 ${alert.zone} (${lat}, ${lon})</span>
+                        <span>🎯 ${alert.zone} ${headingDeg !== null ? `[Курс ${headingDeg}°]` : ''}</span>
                         <span style="background:#991b1b; color:#fff; padding:2px 7px; border-radius:4px; font-size:10px;">${alert.time_ago} ➔ КАРТА</span>
                     </div>
                     <div style="color:#e2e8f0; white-space:normal; pointer-events:none;">${alert.text}</div>
