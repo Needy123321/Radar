@@ -18,12 +18,12 @@ class RadarController extends AbstractController
 
     private function sub(float|int $a, float|int $b): float
     {
-        return (float) $a - (float) $b;
+        return (float)$a - (float)$b;
     }
 
     private function mul(float|int $a, float|int $b): float
     {
-        return (float) $a * (float) $b;
+        return (float)$a * (float)$b;
     }
 
     #[Route('/', name: 'app_home')]
@@ -47,8 +47,8 @@ class RadarController extends AbstractController
     #[Route('/api/planes', name: 'api_planes')]
     public function getPlanes(Request $request): JsonResponse
     {
-        $centerLat = (float) $request->query->get('lat', 43.3664995);
-        $centerLon = (float) $request->query->get('lon', 24.6621337);
+        $centerLat = (float)$request->query->get('lat', 43.3664995);
+        $centerLon = (float)$request->query->get('lon', 24.6621337);
         $force = $request->query->getBoolean('force', false);
 
         if (
@@ -70,7 +70,7 @@ class RadarController extends AbstractController
         if (
             !$force &&
             is_file($cacheFile) &&
-            $this->sub($now, (int) @filemtime($cacheFile)) < self::CACHE_TTL
+            $this->sub($now, (int)@filemtime($cacheFile)) < self::CACHE_TTL
         ) {
             $cached = @file_get_contents($cacheFile);
             $decoded = is_string($cached) ? json_decode($cached, true) : null;
@@ -98,98 +98,78 @@ class RadarController extends AbstractController
             $planesMap = [];
             $providerNamesWithData = [];
 
-            // 1. Основни безлимитни ADS-B v2 потоци + Военни потоци + PIA/LADD
-            // 1. ВСИЧКИ основни потоци (запазени на 100%, но adsb.lol са разпределени да не връщат HTTP 429)
+            $bsLat = 43.30;
+            $bsLon = 34.00;
+            $fr24Headers = [
+                'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                'Accept: application/json, text/javascript, */*; q=0.01',
+                'Origin: https://www.flightradar24.com',
+                'Referer: https://www.flightradar24.com/',
+            ];
 
-
-            // 1. ВСИЧКИ основни потоци (запазени на 100%, но adsb.lol са разпределени да не връщат HTTP 429)
-            // 1. ВСИЧКИ основни потоци (запазени на 100%, но adsb.lol са разпределени да не връщат HTTP 429)
             $adsbProviders = [
-                [
-                    'name' => 'adsb.fi',
-                    'base' => 'adsb.fi',
-                    'url'  => "https://opendata.adsb.fi/api/v2/lat/{$centerLat}/lon/{$centerLon}/dist/" . self::SEARCH_RADIUS_NM,
-                    'mil'  => false,
-                ],
-                [
-                    'name' => 'adsb.fi-mil',
-                    'base' => 'adsb.fi-mil',
-                    'url'  => 'https://opendata.adsb.fi/api/v2/mil',
-                    'mil'  => true,
-                ],
-                [
-                    'name' => 'airplanes.live',
-                    'base' => 'airplanes.live',
-                    'url'  => "https://api.airplanes.live/v2/point/{$centerLat}/{$centerLon}/" . self::SEARCH_RADIUS_NM,
-                    'mil'  => false,
-                ],
-                [
-                    'name' => 'airplanes.live-mil',
-                    'base' => 'airplanes.live-mil',
-                    'url'  => 'https://api.airplanes.live/v2/mil',
-                    'mil'  => true,
-                ],
-                [
-                    'name' => 'adsb.lol',
-                    'base' => 'adsb.lol',
-                    'url'  => "https://api.adsb.lol/v2/point/{$centerLat}/{$centerLon}/" . self::SEARCH_RADIUS_NM,
-                    'mil'  => false,
-                ],
                 [
                     'name' => 'intelsky-mil',
                     'base' => 'intelsky-mil',
                     'url'  => 'https://intelsky.org/api/',
                     'mil'  => true,
                 ],
+                [
+                    'name'    => 'fr24-balkans',
+                    'base'    => 'fr24-balkans',
+                    'url'     => $this->buildFr24Url($centerLat, $centerLon),
+                    'mil'     => false,
+                    'headers' => $fr24Headers,
+                ],
+                [
+                    'name'    => 'fr24-blacksea',
+                    'base'    => 'fr24-blacksea',
+                    'url'     => $this->buildFr24Url($bsLat, $bsLon),
+                    'mil'     => false,
+                    'headers' => $fr24Headers,
+                ],
             ];
 
-            // СОНДА ЧЕРНО МОРЕ (Център: 43.30, 34.00 - покрива Крим, Одеса, Синоп, Сочи и цялата акватория)
-            $bsLat = 43.30;
-            $bsLon = 34.00;
-            $adsbProviders[] = [
-                'name' => 'adsb.fi-blacksea',
-                'base' => 'adsb.fi-blacksea',
-                'url'  => "https://opendata.adsb.fi/api/v2/lat/{$bsLat}/lon/{$bsLon}/dist/250",
-                'mil'  => false,
-            ];
-            $adsbProviders[] = [
-                'name' => 'adsb.lol-blacksea',
-                'base' => 'adsb.lol-blacksea',
-                'url'  => "https://api.adsb.lol/v2/point/{$bsLat}/{$bsLon}/250",
-                'mil'  => false,
-            ];
+            $slot3 = ((int) floor($now / self::CACHE_TTL)) % 3;
 
-            // Редуваме допълнителните потоци на adsb.lol през цикъл...
-            $cycle = (int) floor($now / self::CACHE_TTL);
-            if ($force || ($cycle % 2) === 0) {
+            if ($slot3 === 0) {
                 $adsbProviders[] = [
-                    'name' => 'adsb.lol-mil',
-                    'base' => 'adsb.lol-mil',
-                    'url'  => 'https://api.adsb.lol/v2/mil',
-                    'mil'  => true,
+                    'name' => 'adsb.fi',
+                    'base' => 'adsb.fi',
+                    'url'  => "https://opendata.adsb.fi/api/v2/lat/{$centerLat}/lon/{$centerLon}/dist/" . self::SEARCH_RADIUS_NM,
+                    'mil'  => false,
+                ];
+                if (!$force && ($now % 18) < self::CACHE_TTL) {
+                    $adsbProviders[] = [
+                        'name' => 'airplanes.live-mil',
+                        'base' => 'airplanes.live-mil',
+                        'url'  => 'https://api.airplanes.live/v2/mil',
+                        'mil'  => true,
+                    ];
+                }
+            } elseif ($slot3 === 1) {
+                $adsbProviders[] = [
+                    'name' => 'adsb.fi-blacksea',
+                    'base' => 'adsb.fi-blacksea',
+                    'url'  => "https://opendata.adsb.fi/api/v2/lat/{$bsLat}/lon/{$bsLon}/dist/250",
+                    'mil'  => false,
                 ];
             } else {
                 $adsbProviders[] = [
-                    'name' => 'adsb.lol-ladd',
-                    'base' => 'adsb.lol-ladd',
-                    'url'  => 'https://api.adsb.lol/v2/ladd',
-                    'mil'  => true,
-                ];
-                $adsbProviders[] = [
-                    'name' => 'adsb.lol-pia',
-                    'base' => 'adsb.lol-pia',
-                    'url'  => 'https://api.adsb.lol/v2/pia',
+                    'name' => 'adsb.fi-mil',
+                    'base' => 'adsb.fi-mil',
+                    'url'  => 'https://opendata.adsb.fi/api/v2/mil',
                     'mil'  => true,
                 ];
             }
-            //2. FlyItalyADS-B – с делител на честотата за пазене на дневния лимит на ключа
+
+            // 2. FlyItalyADS-B
             $flyItalyKey = $_ENV['FLYITALYADSB_API_KEY']
                 ?? $_SERVER['FLYITALYADSB_API_KEY']
                 ?? getenv('FLYITALYADSB_API_KEY')
                 ?: '';
 
-            $flyItalyKey = trim((string) $flyItalyKey, " \t\n\r\0\x0B\"'");
-            $polledFlyItaly = false;
+            $flyItalyKey = trim((string)$flyItalyKey, " \t\n\r\0\x0B\"'");
 
             if ($flyItalyKey !== '') {
                 $flyHeaders = [
@@ -198,34 +178,32 @@ class RadarController extends AbstractController
                     'Accept: application/json',
                 ];
 
-
                 if ($force || ($now % 18) < self::CACHE_TTL) {
-                    $polledFlyItaly = true;
                     $adsbProviders[] = [
-                        'name'    => 'flyitaly',
-                        'base'    => 'flyitaly',
-                        'url'     => sprintf(
+                        'name' => 'flyitaly',
+                        'base' => 'flyitaly',
+                        'url' => sprintf(
                             'https://api.flyitalyadsb.com/v2/lat/%F/lon/%F/dist/300',
                             $centerLat,
                             $centerLon
                         ),
-                        'mil'     => false,
+                        'mil' => false,
                         'headers' => $flyHeaders,
                     ];
                 }
 
                 if ($force || ($now % 48) < self::CACHE_TTL) {
                     $adsbProviders[] = [
-                        'name'    => 'flyitaly-mil',
-                        'base'    => 'flyitaly-mil',
-                        'url'     => 'https://api.flyitalyadsb.com/v2/mil',
-                        'mil'     => true,
+                        'name' => 'flyitaly-mil',
+                        'base' => 'flyitaly-mil',
+                        'url' => 'https://api.flyitalyadsb.com/v2/mil',
+                        'mil' => true,
                         'headers' => $flyHeaders,
                     ];
                 }
             }
 
-            // 3. OpenSky Network – пита се веднъж на 30 сек
+            // 3. OpenSky Network
             $openSkyClientId = $_ENV['OPEN_SKY_CLIENT_ID']
                 ?? $_SERVER['OPEN_SKY_CLIENT_ID']
                 ?? getenv('OPEN_SKY_CLIENT_ID')
@@ -236,20 +214,19 @@ class RadarController extends AbstractController
                 ?? getenv('OPEN_SKY_CLIENT_SECRET')
                 ?: '';
 
-            $openSkyClientId = trim((string) $openSkyClientId);
-            $openSkyClientSecret = trim((string) $openSkyClientSecret);
-            $polledOpenSky = false;
+            $openSkyClientId = trim((string)$openSkyClientId);
+            $openSkyClientSecret = trim((string)$openSkyClientSecret);
 
             if ($openSkyClientId !== '' && $openSkyClientSecret !== '' && ($force || ($now % 30) < self::CACHE_TTL)) {
                 $tokenFile = $cacheDir . '/radar_opensky_token.json';
                 $openSkyToken = '';
 
                 if (is_file($tokenFile)) {
-                    $cachedToken = json_decode((string) @file_get_contents($tokenFile), true);
+                    $cachedToken = json_decode((string)@file_get_contents($tokenFile), true);
                     if (
                         is_array($cachedToken) &&
                         !empty($cachedToken['access_token']) &&
-                        (int) ($cachedToken['expires_at'] ?? 0) > time() + 60
+                        (int)($cachedToken['expires_at'] ?? 0) > time() + 60
                     ) {
                         $openSkyToken = $cachedToken['access_token'];
                     }
@@ -261,23 +238,23 @@ class RadarController extends AbstractController
                     );
 
                     curl_setopt_array($tokenCh, [
-                        CURLOPT_POST           => true,
-                        CURLOPT_POSTFIELDS     => http_build_query([
-                            'grant_type'    => 'client_credentials',
-                            'client_id'     => $openSkyClientId,
+                        CURLOPT_POST => true,
+                        CURLOPT_POSTFIELDS => http_build_query([
+                            'grant_type' => 'client_credentials',
+                            'client_id' => $openSkyClientId,
                             'client_secret' => $openSkyClientSecret,
                         ]),
-                        CURLOPT_HTTPHEADER     => [
+                        CURLOPT_HTTPHEADER => [
                             'Content-Type: application/x-www-form-urlencoded',
                             'Accept: application/json',
                         ],
                         CURLOPT_RETURNTRANSFER => true,
-                        CURLOPT_CONNECTTIMEOUT => 4,
-                        CURLOPT_TIMEOUT        => 8,
+                        CURLOPT_CONNECTTIMEOUT => 5,
+                        CURLOPT_TIMEOUT => 6,
                     ]);
 
                     $tokenBody = curl_exec($tokenCh);
-                    $tokenCode = (int) curl_getinfo($tokenCh, CURLINFO_HTTP_CODE);
+                    $tokenCode = (int)curl_getinfo($tokenCh, CURLINFO_HTTP_CODE);
                     $tokenError = curl_error($tokenCh);
                     curl_close($tokenCh);
 
@@ -285,13 +262,13 @@ class RadarController extends AbstractController
 
                     if ($tokenCode === 200 && is_array($tokenData) && !empty($tokenData['access_token'])) {
                         $openSkyToken = $tokenData['access_token'];
-                        $expiresIn = (int) ($tokenData['expires_in'] ?? 1800);
+                        $expiresIn = (int)($tokenData['expires_in'] ?? 1800);
 
                         @file_put_contents(
                             $tokenFile,
                             json_encode([
                                 'access_token' => $openSkyToken,
-                                'expires_at'   => (int) $this->sub(time() + $expiresIn, 60),
+                                'expires_at' => (int)$this->sub(time() + $expiresIn, 60),
                             ]),
                             LOCK_EX
                         );
@@ -303,12 +280,11 @@ class RadarController extends AbstractController
                 }
 
                 if ($openSkyToken !== '') {
-                    $polledOpenSky = true;
                     $adsbProviders[] = [
-                        'name'    => 'opensky',
-                        'base'    => 'opensky',
-                        'url'     => $this->buildOpenSkyUrl($centerLat, $centerLon, self::SEARCH_RADIUS_NM),
-                        'mil'     => false,
+                        'name' => 'opensky',
+                        'base' => 'opensky',
+                        'url' => $this->buildOpenSkyUrl($centerLat, $centerLon, self::SEARCH_RADIUS_NM),
+                        'mil' => false,
                         'headers' => [
                             'Authorization: Bearer ' . $openSkyToken,
                             'Accept: application/json',
@@ -318,15 +294,13 @@ class RadarController extends AbstractController
                 }
             }
 
-            // 3.5. AvioADSB Military – веднъж на 15 мин (900 сек = 96 заявки/ден при лимит 100/ден без ключ)
-            $polledAvio = false;
+            // 3.5. AvioADSB Military
             if ($force || ($now % 900) < self::CACHE_TTL) {
-                $polledAvio = true;
                 $adsbProviders[] = [
                     'name' => 'avioadsb-mil',
                     'base' => 'avioadsb-mil',
-                    'url'  => 'https://avioadsb.org/v1/mil',
-                    'mil'  => true,
+                    'url' => 'https://avioadsb.org/v1/mil',
+                    'mil' => true,
                 ];
             }
 
@@ -343,8 +317,8 @@ class RadarController extends AbstractController
                 }
 
                 $res = $responses[$name] ?? ['code' => 0, 'body' => '', 'error' => 'No response', 'time_ms' => 0];
-                $httpCode = (int) ($res['code'] ?? 0);
-                $error = (string) ($res['error'] ?? '');
+                $httpCode = (int)($res['code'] ?? 0);
+                $error = (string)($res['error'] ?? '');
 
                 if (in_array($httpCode, [403, 429], true)) {
                     $this->putProviderInCooldown($base);
@@ -365,7 +339,10 @@ class RadarController extends AbstractController
 
                 $before = count($planesMap);
 
-                if ($name === 'opensky' || isset($data['states'])) {
+                if (str_starts_with($name, 'fr24-')) {
+                    $rawCount = count($data);
+                    $this->parseFr24Data($data, $planesMap, $centerLat, $centerLon);
+                } elseif ($name === 'opensky' || isset($data['states'])) {
                     $states = is_array($data['states'] ?? null) ? $data['states'] : [];
                     $rawCount = count($states);
                     if ($rawCount > 0) {
@@ -383,13 +360,13 @@ class RadarController extends AbstractController
                             $planesMap,
                             $centerLat,
                             $centerLon,
-                            (bool) $provider['mil'],
+                            (bool)$provider['mil'],
                             $name
                         );
                     }
                 }
 
-                $added = (int) $this->sub(count($planesMap), $before);
+                $added = (int)$this->sub(count($planesMap), $before);
 
                 error_log(sprintf(
                     '[RADAR PROVIDER] %s HTTP=%d RAW=%d NEW=%d TIME=%dms',
@@ -397,7 +374,7 @@ class RadarController extends AbstractController
                     $httpCode,
                     $rawCount,
                     $added,
-                    (int) ($res['time_ms'] ?? 0)
+                    (int)($res['time_ms'] ?? 0)
                 ));
 
                 if ($added > 0) {
@@ -405,8 +382,7 @@ class RadarController extends AbstractController
                 }
             }
 
-            // 5. Запазване и сливане на самолетите от токен провайдърите (OpenSky/FlyItaly/AvioADSB)
-            // 5. Запазване и сливане на самолетите между циклите (без никакво изчезване от екрана)
+            // 5. Запазване и сливане на самолетите между ротациите
             $quotaPlanesBuffer = [];
             if (is_file($quotaCacheFile) && $this->sub($now, (int) @filemtime($quotaCacheFile)) < 90) {
                 $rawQuota = @file_get_contents($quotaCacheFile);
@@ -417,24 +393,32 @@ class RadarController extends AbstractController
             }
 
             $bufferedSources = [
+                'adsb.fi',
+                'adsb.fi-blacksea',
+                'adsb.fi-mil',
+                'adsb.lol',
+                'adsb.lol-mil',
+                'adsb.lol-ladd',
                 'opensky',
                 'flyitaly',
                 'flyitaly-mil',
                 'avioadsb-mil',
-                'adsb.lol-mil',
-                'adsb.lol-ladd',
-                'adsb.lol-pia',
             ];
 
             foreach ($planesMap as $id => $p) {
                 $src = $p['_source'] ?? '';
                 if (in_array($src, $bufferedSources, true)) {
+                    $p['_bufferedAt'] = $now;
                     $quotaPlanesBuffer[$id] = $p;
                 }
             }
 
             $restoredCount = 0;
             foreach ($quotaPlanesBuffer as $id => $qp) {
+                if ($this->sub($now, (int) ($qp['_bufferedAt'] ?? $now)) > 60) {
+                    unset($quotaPlanesBuffer[$id]);
+                    continue;
+                }
                 if (!isset($planesMap[$id])) {
                     $planesMap[$id] = $qp;
                     $restoredCount++;
@@ -452,27 +436,8 @@ class RadarController extends AbstractController
 
             @file_put_contents($quotaCacheFile, json_encode($quotaPlanesBuffer, JSON_UNESCAPED_UNICODE), LOCK_EX);
 
-
-            if (!$this->providerIsCoolingDown('fr24')) {
-                $fr24Url = $this->buildFr24Url($centerLat, $centerLon);
-                $frRes = $this->curlFetch($fr24Url, true);
-
-                if (in_array($frRes['code'], [403, 429], true)) {
-                    $this->putProviderInCooldown('fr24');
-                } elseif ($frRes['code'] === 200 && $frRes['body'] !== '') {
-                    $frData = json_decode($frRes['body'], true);
-                    if (is_array($frData)) {
-                        $before = count($planesMap);
-                        $this->parseFr24Data($frData, $planesMap, $centerLat, $centerLon);
-                        if (count($planesMap) >= $before) {
-                            $providerNamesWithData[] = 'FR24';
-                        }
-                    }
-                }
-            }
-
             foreach ($planesMap as &$plane) {
-                unset($plane['_source']);
+                unset($plane['_source'], $plane['_bufferedAt']);
             }
             unset($plane);
 
@@ -542,10 +507,10 @@ class RadarController extends AbstractController
         $frameIndex = $request->query->get('index');
 
         if ($frameIndex !== null) {
-            $idx = (int) $frameIndex;
+            $idx = (int)$frameIndex;
             if (isset($indexData[$idx])) {
-                $slotNum = (int) ($indexData[$idx]['slot'] ?? -1);
-                $ts = (int) ($indexData[$idx]['ts'] ?? 0);
+                $slotNum = (int)($indexData[$idx]['slot'] ?? -1);
+                $ts = (int)($indexData[$idx]['ts'] ?? 0);
                 $slotFile = $cacheDir . '/radar_hist_slot_' . $slotNum . '.json';
 
                 $planes = [];
@@ -559,8 +524,8 @@ class RadarController extends AbstractController
 
                 return new JsonResponse([
                     'timestamp' => $ts,
-                    'planes'    => $planes,
-                    'total'     => count($indexData),
+                    'planes' => $planes,
+                    'total' => count($indexData),
                 ]);
             }
 
@@ -569,7 +534,7 @@ class RadarController extends AbstractController
 
         return new JsonResponse([
             'timestamps' => array_map(static fn($item) => $item['ts'] ?? null, $indexData),
-            'total'      => count($indexData),
+            'total' => count($indexData),
         ]);
     }
 
@@ -577,7 +542,7 @@ class RadarController extends AbstractController
     public function aiBrief(Request $request): JsonResponse
     {
         $rawKey = $_ENV['GEMINI_API_KEY'] ?? $_SERVER['GEMINI_API_KEY'] ?? getenv('GEMINI_API_KEY') ?: '';
-        $apiKey = trim((string) $rawKey, " \t\n\r\0\x0B\"'");
+        $apiKey = trim((string)$rawKey, " \t\n\r\0\x0B\"'");
 
         if ($apiKey === '') {
             return new JsonResponse([
@@ -590,66 +555,66 @@ class RadarController extends AbstractController
             return new JsonResponse(['error' => 'Invalid payload'], 400);
         }
 
-        $hex      = strtoupper(trim((string) ($payload['id'] ?? 'НЕИЗВЕСТЕН')));
+        $hex = strtoupper(trim((string)($payload['id'] ?? 'НЕИЗВЕСТЕН')));
         $hexLower = strtolower($hex);
-        $callsign = strtoupper(trim((string) ($payload['callsign'] ?? '')));
-        $squawk   = trim((string) ($payload['squawk'] ?? '----'));
-        $type     = trim((string) ($payload['type'] ?? 'Неизвестен тип'));
-        $operator = trim((string) ($payload['operator'] ?? 'Неизвестен оператор'));
-        $altM     = (int) ($payload['altitude'] ?? 0);
-        $speedKmh = (int) ($payload['speed'] ?? 0);
-        $trackDeg = (int) ($payload['track'] ?? 0);
-        $aziDeg   = (int) ($payload['bearing'] ?? 0);
-        $distKm   = round((float) ($payload['distKm'] ?? 0), 1);
-        $isMil    = !empty($payload['isMilitary']);
-        $route    = trim((string) ($payload['route'] ?? 'Няма данни'));
+        $callsign = strtoupper(trim((string)($payload['callsign'] ?? '')));
+        $squawk = trim((string)($payload['squawk'] ?? '----'));
+        $type = trim((string)($payload['type'] ?? 'Неизвестен тип'));
+        $operator = trim((string)($payload['operator'] ?? 'Неизвестен оператор'));
+        $altM = (int)($payload['altitude'] ?? 0);
+        $speedKmh = (int)($payload['speed'] ?? 0);
+        $trackDeg = (int)($payload['track'] ?? 0);
+        $aziDeg = (int)($payload['bearing'] ?? 0);
+        $distKm = round((float)($payload['distKm'] ?? 0), 1);
+        $isMil = !empty($payload['isMilitary']);
+        $route = trim((string)($payload['route'] ?? 'Няма данни'));
         $trailPts = is_array($payload['trail'] ?? null) ? array_slice($payload['trail'], -15) : [];
 
         $safeHex = preg_replace('/[^a-zA-Z0-9_-]/', '', $hexLower);
         $aiCacheFile = sys_get_temp_dir() . '/radar_ai_brief_' . $safeHex . '.txt';
-        if ($safeHex !== '' && is_file($aiCacheFile) && $this->sub(time(), (int) @filemtime($aiCacheFile)) < 600) {
-            $cachedBrief = trim((string) @file_get_contents($aiCacheFile));
+        if ($safeHex !== '' && is_file($aiCacheFile) && $this->sub(time(), (int)@filemtime($aiCacheFile)) < 600) {
+            $cachedBrief = trim((string)@file_get_contents($aiCacheFile));
             if ($cachedBrief !== '') {
                 return new JsonResponse(['brief' => $cachedBrief, 'cached' => true]);
             }
         }
 
-        $lastPt   = !empty($trailPts) ? end($trailPts) : null;
-        $planeLat = (float) ($payload['lat'] ?? ($lastPt['lat'] ?? 43.3665));
-        $planeLon = (float) ($payload['lon'] ?? ($lastPt['lon'] ?? 24.6621));
+        $lastPt = !empty($trailPts) ? end($trailPts) : null;
+        $planeLat = (float)($payload['lat'] ?? ($lastPt['lat'] ?? 43.3665));
+        $planeLon = (float)($payload['lon'] ?? ($lastPt['lon'] ?? 24.6621));
 
         $osintQueries = [];
         if ($hex !== '' && !str_starts_with($hex, 'FR_')) {
             $osintQueries[] = [
                 'name' => 'adsbdb_ac',
                 'base' => 'adsbdb_ac',
-                'url'  => 'https://api.adsbdb.com/v0/aircraft/' . urlencode($hexLower),
+                'url' => 'https://api.adsbdb.com/v0/aircraft/' . urlencode($hexLower),
             ];
             $osintQueries[] = [
                 'name' => 'hexdb_ac',
                 'base' => 'hexdb_ac',
-                'url'  => 'https://hexdb.io/api/v1/aircraft/' . urlencode($hexLower),
+                'url' => 'https://hexdb.io/api/v1/aircraft/' . urlencode($hexLower),
             ];
             $osintQueries[] = [
                 'name' => 'live_telemetry',
                 'base' => 'live_telemetry',
-                'url'  => 'https://api.airplanes.live/v2/hex/' . urlencode($hexLower),
+                'url' => 'https://api.adsb.lol/v2/hex/' . urlencode($hexLower),
             ];
         }
         if ($callsign !== '' && !str_starts_with($callsign, 'FR_')) {
-            $cleanCs = trim((string) preg_replace('/\[.*?\]/', '', $callsign));
+            $cleanCs = trim((string)preg_replace('/\[.*?\]/', '', $callsign));
             if ($cleanCs !== '') {
                 $osintQueries[] = [
                     'name' => 'adsbdb_cs',
                     'base' => 'adsbdb_cs',
-                    'url'  => 'https://api.adsbdb.com/v0/callsign/' . urlencode($cleanCs),
+                    'url' => 'https://api.adsbdb.com/v0/callsign/' . urlencode($cleanCs),
                 ];
             }
         }
         $osintQueries[] = [
             'name' => 'meteo_terrain',
             'base' => 'meteo_terrain',
-            'url'  => sprintf(
+            'url' => sprintf(
                 'https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f&current=temperature_2m,wind_speed_10m,wind_direction_10m&hourly=wind_speed_850hPa,wind_direction_850hPa,wind_speed_300hPa,wind_direction_300hPa,temperature_300hPa&forecast_days=1',
                 $planeLat,
                 $planeLon
@@ -658,19 +623,19 @@ class RadarController extends AbstractController
 
         $osintResponses = $this->curlFetchMany($osintQueries);
 
-        $osintReg      = 'Няма данни';
-        $osintCountry  = 'Няма данни';
+        $osintReg = 'Няма данни';
+        $osintCountry = 'Няма данни';
         $osintFullType = $type;
-        $osintRoute    = $route;
+        $osintRoute = $route;
 
         if (($osintResponses['adsbdb_ac']['code'] ?? 0) === 200) {
             $acObj = json_decode($osintResponses['adsbdb_ac']['body'], true)['response']['aircraft'] ?? null;
             if (is_array($acObj)) {
-                $osintReg      = (string) ($acObj['registration'] ?? $osintReg);
-                $osintCountry  = (string) ($acObj['registered_owner_country_name'] ?? $osintCountry);
+                $osintReg = (string)($acObj['registration'] ?? $osintReg);
+                $osintCountry = (string)($acObj['registered_owner_country_name'] ?? $osintCountry);
                 $osintFullType = trim(($acObj['manufacturer'] ?? '') . ' ' . ($acObj['type'] ?? $type));
                 if (!empty($acObj['registered_owner'])) {
-                    $operator = (string) $acObj['registered_owner'];
+                    $operator = (string)$acObj['registered_owner'];
                 }
             }
         }
@@ -679,13 +644,13 @@ class RadarController extends AbstractController
             $hxObj = json_decode($osintResponses['hexdb_ac']['body'], true);
             if (is_array($hxObj)) {
                 if ($osintReg === 'Няма данни' && !empty($hxObj['Registration'])) {
-                    $osintReg = (string) $hxObj['Registration'];
+                    $osintReg = (string)$hxObj['Registration'];
                 }
                 if (($osintFullType === '' || $osintFullType === 'Неизвестен тип') && !empty($hxObj['Type'])) {
                     $osintFullType = trim(($hxObj['Manufacturer'] ?? '') . ' ' . $hxObj['Type']);
                 }
                 if (($operator === 'Неизвестен оператор' || $operator === 'Граждански полет') && !empty($hxObj['RegisteredOwners'])) {
-                    $operator = (string) $hxObj['RegisteredOwners'];
+                    $operator = (string)$hxObj['RegisteredOwners'];
                 }
             }
         }
@@ -693,11 +658,11 @@ class RadarController extends AbstractController
         if (($osintResponses['adsbdb_cs']['code'] ?? 0) === 200) {
             $frObj = json_decode($osintResponses['adsbdb_cs']['body'], true)['response']['flightroute'] ?? null;
             if (is_array($frObj)) {
-                $orig     = $frObj['origin']['municipality'] ?? ($frObj['origin']['name'] ?? '');
+                $orig = $frObj['origin']['municipality'] ?? ($frObj['origin']['name'] ?? '');
                 $origIcao = $frObj['origin']['icao_code'] ?? '';
-                $dest     = $frObj['destination']['municipality'] ?? ($frObj['destination']['name'] ?? '');
+                $dest = $frObj['destination']['municipality'] ?? ($frObj['destination']['name'] ?? '');
                 $destIcao = $frObj['destination']['icao_code'] ?? '';
-                $airline  = $frObj['airline']['name'] ?? '';
+                $airline = $frObj['airline']['name'] ?? '';
                 $osintRoute = "{$orig} ({$origIcao}) -> {$dest} ({$destIcao})" . ($airline ? " | Авиокомпания: {$airline}" : '');
             }
         }
@@ -708,25 +673,25 @@ class RadarController extends AbstractController
             if (is_array($acLive)) {
                 $tParts = [];
                 if (isset($acLive['baro_rate'])) {
-                    $vRateMps = round($this->mul((float) $acLive['baro_rate'], 0.00508), 1);
-                    $vSign    = $vRateMps > 0 ? '+' : '';
+                    $vRateMps = round($this->mul((float)$acLive['baro_rate'], 0.00508), 1);
+                    $vSign = $vRateMps > 0 ? '+' : '';
                     $tParts[] = "Верт. скорост: {$vSign}{$vRateMps} m/s";
                 }
                 if (isset($acLive['nav_altitude_mcp'])) {
-                    $mcpMeters = (int) round($this->mul((float) $acLive['nav_altitude_mcp'], 0.3048));
-                    $tParts[]  = "Зададена височина в автопилота (MCP): {$mcpMeters} м";
+                    $mcpMeters = (int)round($this->mul((float)$acLive['nav_altitude_mcp'], 0.3048));
+                    $tParts[] = "Зададена височина в автопилота (MCP): {$mcpMeters} м";
                 }
                 if (isset($acLive['mach'])) {
-                    $tParts[] = 'Бордови Mach: ' . round((float) $acLive['mach'], 2);
+                    $tParts[] = 'Бордови Mach: ' . round((float)$acLive['mach'], 2);
                 }
                 if (isset($acLive['rssi'])) {
                     $tParts[] = 'Ниво на сигнала (RSSI): ' . $acLive['rssi'] . ' dBFS';
                 }
-                if (isset($acLive['nic']) && (int) $acLive['nic'] < 5) {
+                if (isset($acLive['nic']) && (int)$acLive['nic'] < 5) {
                     $tParts[] = '⚠️ НИСКА GPS ТОЧНОСТ (NIC=' . $acLive['nic'] . ' - възможни РЕБ/GPS смущения!)';
                 }
                 if (!empty($acLive['r']) && $osintReg === 'Няма данни') {
-                    $osintReg = (string) $acLive['r'];
+                    $osintReg = (string)$acLive['r'];
                 }
                 if ($tParts !== []) {
                     $telemetryNote = implode(' | ', $tParts);
@@ -735,53 +700,53 @@ class RadarController extends AbstractController
         }
 
         $terrainElevationM = 180;
-        $aglMeters         = (int) max(0, $this->sub($altM, $terrainElevationM));
-        $windInfo          = 'Няма данни';
+        $aglMeters = (int)max(0, $this->sub($altM, $terrainElevationM));
+        $windInfo = 'Няма данни';
 
         if (($osintResponses['meteo_terrain']['code'] ?? 0) === 200) {
             $meteo = json_decode($osintResponses['meteo_terrain']['body'], true);
             if (is_array($meteo)) {
-                $terrainElevationM = (int) round((float) ($meteo['elevation'] ?? 180));
-                $aglMeters         = (int) max(0, $this->sub($altM, $terrainElevationM));
+                $terrainElevationM = (int)round((float)($meteo['elevation'] ?? 180));
+                $aglMeters = (int)max(0, $this->sub($altM, $terrainElevationM));
 
-                $hourIdx = (int) gmdate('G');
+                $hourIdx = (int)gmdate('G');
                 if ($altM > 5500) {
-                    $wSpd = (float) ($meteo['hourly']['wind_speed_300hPa'][$hourIdx] ?? 0);
-                    $wDir = (float) ($meteo['hourly']['wind_direction_300hPa'][$hourIdx] ?? 0);
+                    $wSpd = (float)($meteo['hourly']['wind_speed_300hPa'][$hourIdx] ?? 0);
+                    $wDir = (float)($meteo['hourly']['wind_direction_300hPa'][$hourIdx] ?? 0);
                 } elseif ($altM > 1000) {
-                    $wSpd = (float) ($meteo['hourly']['wind_speed_850hPa'][$hourIdx] ?? 0);
-                    $wDir = (float) ($meteo['hourly']['wind_direction_850hPa'][$hourIdx] ?? 0);
+                    $wSpd = (float)($meteo['hourly']['wind_speed_850hPa'][$hourIdx] ?? 0);
+                    $wDir = (float)($meteo['hourly']['wind_direction_850hPa'][$hourIdx] ?? 0);
                 } else {
-                    $wSpd = (float) ($meteo['current']['wind_speed_10m'] ?? 0);
-                    $wDir = (float) ($meteo['current']['wind_direction_10m'] ?? 0);
+                    $wSpd = (float)($meteo['current']['wind_speed_10m'] ?? 0);
+                    $wDir = (float)($meteo['current']['wind_direction_10m'] ?? 0);
                 }
 
                 $angleDiffRad = deg2rad($this->sub($wDir, $trackDeg));
-                $headwindKmh  = (int) round($this->mul($wSpd, cos($angleDiffRad)));
-                $tasKmh       = max(0, $speedKmh + $headwindKmh);
-                $soundSpdKmh  = $altM > 8000 ? 1065 : ($altM > 4000 ? 1140 : 1210);
-                $estMach      = round($tasKmh / $soundSpdKmh, 2);
+                $headwindKmh = (int)round($this->mul($wSpd, cos($angleDiffRad)));
+                $tasKmh = max(0, $speedKmh + $headwindKmh);
+                $soundSpdKmh = $altM > 8000 ? 1065 : ($altM > 4000 ? 1140 : 1210);
+                $estMach = round($tasKmh / $soundSpdKmh, 2);
 
                 $windType = $headwindKmh >= 0 ? "насрещен {$headwindKmh} км/ч" : 'попътен ' . abs($headwindKmh) . ' км/ч';
                 $windInfo = "Вятър на височината: " . round($wSpd) . " км/ч от " . round($wDir) . "° ({$windType}) | Истинска въздушна скорост (TAS): ~{$tasKmh} км/ч (Mach {$estMach})";
             }
         }
 
-        $radarHorizonKm = (int) round($this->mul(4.12, sqrt(250) + sqrt(max(10, $altM))));
-        $horizonStatus  = $distKm <= $radarHorizonKm
+        $radarHorizonKm = (int)round($this->mul(4.12, sqrt(250) + sqrt(max(10, $altM))));
+        $horizonStatus = $distKm <= $radarHorizonKm
             ? "В ПРЯКА РАДИОВИДИМОСТ (Радиохоризонт за тази височина: {$radarHorizonKm} км)"
             : "На ръба/отвъд стандартния радиохоризонт ({$radarHorizonKm} км) - приема се чрез рефракция/височинен коридор";
 
         $maneuverProfile = 'Прав курс (Стабилен)';
         if (count($trailPts) >= 4) {
             $totalTurnDeg = 0.0;
-            $prevBearing  = null;
+            $prevBearing = null;
             for ($i = 1, $n = count($trailPts); $i < $n; $i++) {
-                $prevIdx = (int) $this->sub($i, 1);
-                $lat1 = (float) ($trailPts[$prevIdx]['lat'] ?? 0);
-                $lon1 = (float) ($trailPts[$prevIdx]['lon'] ?? 0);
-                $lat2 = (float) ($trailPts[$i]['lat'] ?? 0);
-                $lon2 = (float) ($trailPts[$i]['lon'] ?? 0);
+                $prevIdx = (int)$this->sub($i, 1);
+                $lat1 = (float)($trailPts[$prevIdx]['lat'] ?? 0);
+                $lon1 = (float)($trailPts[$prevIdx]['lon'] ?? 0);
+                $lat2 = (float)($trailPts[$i]['lat'] ?? 0);
+                $lon2 = (float)($trailPts[$i]['lon'] ?? 0);
                 $dLon = deg2rad($this->sub($lon2, $lon1));
                 $y = $this->mul(sin($dLon), cos(deg2rad($lat2)));
                 $x = $this->sub(
@@ -799,7 +764,7 @@ class RadarController extends AbstractController
                 }
                 $prevBearing = $segBrg;
             }
-            $roundedTurn = (int) round($totalTurnDeg);
+            $roundedTurn = (int)round($totalTurnDeg);
             if ($roundedTurn >= 135) {
                 $maneuverProfile = "АКТИВНО МАНЕВРИРАНЕ / ОРБИТА (натрупан завой {$roundedTurn}° - зона за патрул, дозареждане или пилотаж)";
             } elseif ($roundedTurn >= 45) {
@@ -825,23 +790,23 @@ class RadarController extends AbstractController
         }
 
         $milStatusText = $isMil ? 'ВОЕНЕН / ДЪРЖАВЕН БОРД' : 'Граждански / Търговски';
-        $csDisplay     = $callsign !== '' ? $callsign : 'НЯМА ПОЗИВНА';
+        $csDisplay = $callsign !== '' ? $callsign : 'НЯМА ПОЗИВНА';
 
         $lat1R = deg2rad($planeLat);
         $lon1R = deg2rad($planeLon);
-        $brgR  = deg2rad($trackDeg);
+        $brgR = deg2rad($trackDeg);
 
         $compassDirs = ['Север (С)', 'Североизток (СИ)', 'Изток (И)', 'Югоизток (ЮИ)', 'Юг (Ю)', 'Югозапад (ЮЗ)', 'Запад (З)', 'Северозапад (СЗ)'];
-        $compassDir  = $compassDirs[(int) round(fmod($trackDeg, 360) / 45) % 8];
+        $compassDir = $compassDirs[(int)round(fmod($trackDeg, 360) / 45) % 8];
 
-        $angDist     = $this->mul(15, $speedKmh / 60) / 111.12;
-        $lat2R       = asin($this->mul(sin($lat1R), cos(deg2rad($angDist))) + $this->mul($this->mul(cos($lat1R), sin(deg2rad($angDist))), cos($brgR)));
-        $lon2R       = $lon1R + atan2(
+        $angDist = $this->mul(15, $speedKmh / 60) / 111.12;
+        $lat2R = asin($this->mul(sin($lat1R), cos(deg2rad($angDist))) + $this->mul($this->mul(cos($lat1R), sin(deg2rad($angDist))), cos($brgR)));
+        $lon2R = $lon1R + atan2(
                 $this->mul($this->mul(sin($brgR), sin(deg2rad($angDist))), cos($lat1R)),
                 $this->sub(cos(deg2rad($angDist)), $this->mul(sin($lat1R), sin($lat2R)))
             );
-        $projLat     = round(rad2deg($lat2R), 4);
-        $projLon     = round(rad2deg($lon2R), 4);
+        $projLat = round(rad2deg($lat2R), 4);
+        $projLon = round(rad2deg($lon2R), 4);
         $dist15MinKm = round($this->mul($speedKmh / 60, 15));
 
         $waypoints = [
@@ -861,9 +826,9 @@ class RadarController extends AbstractController
 
         $headingTargets = [];
         foreach ($waypoints as $wp) {
-            $dLon  = deg2rad($this->sub($wp['lon'], $planeLon));
-            $y     = $this->mul(sin($dLon), cos(deg2rad($wp['lat'])));
-            $x     = $this->sub(
+            $dLon = deg2rad($this->sub($wp['lon'], $planeLon));
+            $y = $this->mul(sin($dLon), cos(deg2rad($wp['lat'])));
+            $x = $this->sub(
                 $this->mul(cos($lat1R), sin(deg2rad($wp['lat']))),
                 $this->mul($this->mul(sin($lat1R), cos(deg2rad($wp['lat']))), cos($dLon))
             );
@@ -878,7 +843,7 @@ class RadarController extends AbstractController
             $wpDistKm = round($this->mul(6371.0, acos(min(1.0, max(-1.0, $cosAngle)))));
 
             if ($diff <= 22.0 && $wpDistKm >= 8 && $wpDistKm <= 450) {
-                $etaMin = $speedKmh > 40 ? (int) round($this->mul($wpDistKm / $speedKmh, 60)) : 0;
+                $etaMin = $speedKmh > 40 ? (int)round($this->mul($wpDistKm / $speedKmh, 60)) : 0;
                 $headingTargets[] = "{$wp['name']} (на {$wpDistKm} км, след ~{$etaMin} мин)";
             }
         }
@@ -924,8 +889,8 @@ class RadarController extends AbstractController
 
         $modelsCacheFile = sys_get_temp_dir() . '/radar_gemini_models_cache.json';
         $extraModels = [];
-        if (is_file($modelsCacheFile) && $this->sub(time(), (int) @filemtime($modelsCacheFile)) < 21600) {
-            $cachedModels = json_decode((string) @file_get_contents($modelsCacheFile), true);
+        if (is_file($modelsCacheFile) && $this->sub(time(), (int)@filemtime($modelsCacheFile)) < 21600) {
+            $cachedModels = json_decode((string)@file_get_contents($modelsCacheFile), true);
             if (is_array($cachedModels)) {
                 $extraModels = $cachedModels;
             }
@@ -935,8 +900,8 @@ class RadarController extends AbstractController
             if ($listRes['code'] === 200 && $listRes['body'] !== '') {
                 $listData = json_decode($listRes['body'], true);
                 foreach (($listData['models'] ?? []) as $m) {
-                    $mName   = str_replace('models/', '', (string) ($m['name'] ?? ''));
-                    $methods = (array) ($m['supportedGenerationMethods'] ?? []);
+                    $mName = str_replace('models/', '', (string)($m['name'] ?? ''));
+                    $methods = (array)($m['supportedGenerationMethods'] ?? []);
                     if (
                         $mName !== '' &&
                         str_contains($mName, 'gemini') &&
@@ -977,9 +942,9 @@ class RadarController extends AbstractController
                         ['parts' => [['text' => $prompt]]]
                     ],
                     'generationConfig' => [
-                        'temperature'     => 0.2,
+                        'temperature' => 0.2,
                         'maxOutputTokens' => 1024,
-                        'thinkingConfig'  => [
+                        'thinkingConfig' => [
                             'thinkingBudget' => 0,
                         ],
                     ],
@@ -994,17 +959,17 @@ class RadarController extends AbstractController
                 $ch = curl_init($url);
                 curl_setopt_array($ch, [
                     CURLOPT_RETURNTRANSFER => true,
-                    CURLOPT_POST           => true,
-                    CURLOPT_TIMEOUT        => 18,
+                    CURLOPT_POST => true,
+                    CURLOPT_TIMEOUT => 18,
                     CURLOPT_CONNECTTIMEOUT => 5,
                     CURLOPT_SSL_VERIFYPEER => true,
-                    CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
-                    CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
-                    CURLOPT_POSTFIELDS     => json_encode($bodyPayload, JSON_UNESCAPED_UNICODE),
+                    CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+                    CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+                    CURLOPT_POSTFIELDS => json_encode($bodyPayload, JSON_UNESCAPED_UNICODE),
                 ]);
 
-                $body    = curl_exec($ch);
-                $code    = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                $body = curl_exec($ch);
+                $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
                 $curlErr = curl_error($ch);
                 curl_close($ch);
 
@@ -1013,16 +978,16 @@ class RadarController extends AbstractController
                     $ch = curl_init($url);
                     curl_setopt_array($ch, [
                         CURLOPT_RETURNTRANSFER => true,
-                        CURLOPT_POST           => true,
-                        CURLOPT_TIMEOUT        => 18,
+                        CURLOPT_POST => true,
+                        CURLOPT_TIMEOUT => 18,
                         CURLOPT_CONNECTTIMEOUT => 5,
                         CURLOPT_SSL_VERIFYPEER => true,
-                        CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
-                        CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
-                        CURLOPT_POSTFIELDS     => json_encode($bodyPayload, JSON_UNESCAPED_UNICODE),
+                        CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+                        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+                        CURLOPT_POSTFIELDS => json_encode($bodyPayload, JSON_UNESCAPED_UNICODE),
                     ]);
-                    $body    = curl_exec($ch);
-                    $code    = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                    $body = curl_exec($ch);
+                    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
                     $curlErr = curl_error($ch);
                     curl_close($ch);
                 }
@@ -1031,8 +996,8 @@ class RadarController extends AbstractController
 
                 if ($code === 200 && is_string($body) && $body !== '') {
                     $decoded = json_decode($body, true);
-                    $parts   = $decoded['candidates'][0]['content']['parts'] ?? [];
-                    $text    = '';
+                    $parts = $decoded['candidates'][0]['content']['parts'] ?? [];
+                    $text = '';
                     foreach ($parts as $part) {
                         if (isset($part['text']) && empty($part['thought'])) {
                             $text .= $part['text'];
@@ -1050,7 +1015,7 @@ class RadarController extends AbstractController
                 if (is_string($body) && $body !== '') {
                     $errDecoded = json_decode($body, true);
                     if (!empty($errDecoded['error']['message'])) {
-                        $lastErrorDetail = (string) $errDecoded['error']['message'];
+                        $lastErrorDetail = (string)$errDecoded['error']['message'];
                     }
                 } elseif ($curlErr !== '') {
                     $lastErrorDetail = $curlErr;
@@ -1088,27 +1053,27 @@ class RadarController extends AbstractController
         }
 
         $last = end($indexData);
-        if (is_array($last) && isset($last['ts']) && $this->sub($timestamp, (int) $last['ts']) < 15) {
+        if (is_array($last) && isset($last['ts']) && $this->sub($timestamp, (int)$last['ts']) < 15) {
             return;
         }
 
         $nextSlot = is_array($last) && isset($last['slot'])
-            ? (((int) $last['slot'] + 1) % self::MAX_HISTORY_FRAMES)
+            ? (((int)$last['slot'] + 1) % self::MAX_HISTORY_FRAMES)
             : 0;
 
         $compactPlanes = [];
         foreach ($planes as $p) {
             $compactPlanes[] = [
-                'id'         => $p['id'] ?? '',
-                'callsign'   => $p['callsign'] ?? '',
-                'lat'        => round((float) ($p['lat'] ?? 0), 4),
-                'lon'        => round((float) ($p['lon'] ?? 0), 4),
-                'track'      => (int) round((float) ($p['track'] ?? 0)),
-                'altitude'   => (int) ($p['altitude'] ?? 0),
-                'speed'      => (int) ($p['speed'] ?? 0),
-                'squawk'     => $p['squawk'] ?? '----',
-                'type'       => $p['type'] ?? '',
-                'operator'   => $p['operator'] ?? '',
+                'id' => $p['id'] ?? '',
+                'callsign' => $p['callsign'] ?? '',
+                'lat' => round((float)($p['lat'] ?? 0), 4),
+                'lon' => round((float)($p['lon'] ?? 0), 4),
+                'track' => (int)round((float)($p['track'] ?? 0)),
+                'altitude' => (int)($p['altitude'] ?? 0),
+                'speed' => (int)($p['speed'] ?? 0),
+                'squawk' => $p['squawk'] ?? '----',
+                'type' => $p['type'] ?? '',
+                'operator' => $p['operator'] ?? '',
                 'isMilitary' => !empty($p['isMilitary']),
             ];
         }
@@ -1121,7 +1086,7 @@ class RadarController extends AbstractController
         }
 
         $indexData[] = [
-            'ts'   => $timestamp,
+            'ts' => $timestamp,
             'slot' => $nextSlot,
         ];
 
@@ -1172,7 +1137,8 @@ class RadarController extends AbstractController
             curl_setopt_array($ch, [
                 CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_FOLLOWLOCATION => true,
-                CURLOPT_TIMEOUT        => 4,
+                CURLOPT_IPRESOLVE      => CURL_IPRESOLVE_V4,
+                CURLOPT_TIMEOUT        => 5,
                 CURLOPT_CONNECTTIMEOUT => 3,
                 CURLOPT_SSL_VERIFYPEER => true,
                 CURLOPT_SSL_VERIFYHOST => 2,
@@ -1180,10 +1146,9 @@ class RadarController extends AbstractController
                 CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
                 CURLOPT_HTTPHEADER     => $customHeaders,
             ]);
-
             $handles[$name] = [
                 'handle' => $ch,
-                'start'  => microtime(true),
+                'start' => microtime(true),
             ];
             curl_multi_add_handle($multi, $ch);
         }
@@ -1201,14 +1166,14 @@ class RadarController extends AbstractController
         foreach ($handles as $name => $item) {
             $ch = $item['handle'];
             $body = curl_multi_getcontent($ch);
-            $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
             $error = curl_error($ch);
 
             $results[$name] = [
-                'code'    => $code,
-                'body'    => is_string($body) ? $body : '',
-                'error'   => $error,
-                'time_ms' => (int) round($this->mul($this->sub(microtime(true), $item['start']), 1000)),
+                'code' => $code,
+                'body' => is_string($body) ? $body : '',
+                'error' => $error,
+                'time_ms' => (int)round($this->mul($this->sub(microtime(true), $item['start']), 1000)),
             ];
 
             curl_multi_remove_handle($multi, $ch);
@@ -1239,37 +1204,36 @@ class RadarController extends AbstractController
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_TIMEOUT        => 4,
+            CURLOPT_TIMEOUT => 4,
             CURLOPT_CONNECTTIMEOUT => 3,
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_SSL_VERIFYHOST => 2,
-            CURLOPT_ENCODING       => '',
-            CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
-            CURLOPT_HTTPHEADER     => $headers,
+            CURLOPT_ENCODING => '',
+            CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+            CURLOPT_HTTPHEADER => $headers,
         ]);
 
         $start = microtime(true);
         $body = curl_exec($ch);
-        $elapsed = (int) round($this->mul($this->sub(microtime(true), $start), 1000));
-        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $elapsed = (int)round($this->mul($this->sub(microtime(true), $start), 1000));
+        $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $error = curl_error($ch);
         curl_close($ch);
 
         return [
-            'code'    => $code,
-            'body'    => is_string($body) ? $body : '',
-            'error'   => $error,
+            'code' => $code,
+            'body' => is_string($body) ? $body : '',
+            'error' => $error,
             'time_ms' => $elapsed,
         ];
     }
 
     private function buildFr24Url(float $lat, float $lon): string
     {
-        $north = min(90.0, round($lat + 5.5, 2));
-        $south = max(-90.0, round($this->sub($lat, 5.5), 2));
+        $north = min(90.0, round($lat + 4.5, 2));
+        $south = max(-90.0, round($this->sub($lat, 4.5), 2));
         $west  = max(-180.0, round($this->sub($lon, 6.5), 2));
-        // Разширяваме на изток с +16.0 градуса (до 40.6° И.Д. - покрива 100% от Черно море, Крим и Турция!)
-        $east  = min(180.0, round($lon + 16.0, 2));
+        $east  = min(180.0, round($lon + 6.5, 2));
 
         return "https://data-cloud.flightradar24.com/zones/fcgi/feed.js?bounds={$north},{$south},{$west},{$east}&faa=1&satellite=1&mlat=1&flarm=1&adsb=1&gnd=1&air=1&vehicles=0&estimated=1&maxage=120&gliders=1&stats=0";
     }
@@ -1283,7 +1247,6 @@ class RadarController extends AbstractController
         $lamin = max(-90.0, round($this->sub($lat, $latDelta), 2));
         $lamax = min(90.0, round($lat + $latDelta + 2.0, 2));
         $lomin = max(-180.0, round($this->sub($lon, $lonDelta), 2));
-        // Покриваме цялото Черно море на изток до 41.0° И.Д.
         $lomax = min(180.0, round($lon + 16.0, 2));
 
         return 'https://opensky-network.org/api/states/all?' . http_build_query([
@@ -1302,7 +1265,7 @@ class RadarController extends AbstractController
             return false;
         }
 
-        $timestamp = (int) @file_get_contents($file);
+        $timestamp = (int)@file_get_contents($file);
         if ($timestamp <= 0 || $this->sub(time(), $timestamp) > self::PROVIDER_COOLDOWN) {
             @unlink($file);
             return false;
@@ -1314,33 +1277,34 @@ class RadarController extends AbstractController
     private function putProviderInCooldown(string $provider): void
     {
         $file = sys_get_temp_dir() . '/radar_provider_' . md5($provider) . '.cooldown';
-        @file_put_contents($file, (string) time(), LOCK_EX);
+        @file_put_contents($file, (string)time(), LOCK_EX);
     }
 
     private function parseAdsbV2List(
-        array $aircraftList,
-        array &$planesMap,
-        float $centerLat,
-        float $centerLon,
-        bool $isMilitaryFeed,
+        array  $aircraftList,
+        array  &$planesMap,
+        float  $centerLat,
+        float  $centerLon,
+        bool   $isMilitaryFeed,
         string $source
-    ): void {
+    ): void
+    {
         foreach ($aircraftList as $ac) {
             if (!is_array($ac)) {
                 continue;
             }
 
-            $id = strtolower(trim((string) ($ac['hex'] ?? $ac['icao24'] ?? '')));
+            $id = strtolower(trim((string)($ac['hex'] ?? $ac['icao24'] ?? '')));
             if ($id === '' || str_starts_with($id, '~')) {
                 continue;
             }
 
-            $rawCallsign = trim((string) ($ac['flight'] ?? $ac['call'] ?? $ac['callsign'] ?? ''));
-            $squawk = trim((string) ($ac['squawk'] ?? '----'));
-            $aircraftType = trim((string) ($ac['t'] ?? $ac['type'] ?? ''));
-            $desc = trim((string) ($ac['desc'] ?? ''));
-            $operator = trim((string) ($ac['ownOp'] ?? $ac['op'] ?? $ac['operator'] ?? ''));
-            $reg = trim((string) ($ac['r'] ?? ''));
+            $rawCallsign = trim((string)($ac['flight'] ?? $ac['call'] ?? $ac['callsign'] ?? ''));
+            $squawk = trim((string)($ac['squawk'] ?? '----'));
+            $aircraftType = trim((string)($ac['t'] ?? $ac['type'] ?? ''));
+            $desc = trim((string)($ac['desc'] ?? ''));
+            $operator = trim((string)($ac['ownOp'] ?? $ac['op'] ?? $ac['operator'] ?? ''));
+            $reg = trim((string)($ac['r'] ?? ''));
 
             $isStrictMilFeed = in_array(
                 $source,
@@ -1348,7 +1312,7 @@ class RadarController extends AbstractController
                 true
             );
 
-            $dbFlags = (int) ($ac['dbFlags'] ?? 0);
+            $dbFlags = (int)($ac['dbFlags'] ?? 0);
             $isMil = $isStrictMilFeed
                 || (($dbFlags & 1) === 1)
                 || (($dbFlags & 2) === 2)
@@ -1356,7 +1320,6 @@ class RadarController extends AbstractController
 
             $hasLiveLatLon = isset($ac['lat'], $ac['lon']) || isset($ac['latitude'], $ac['longitude']);
 
-            // ВНИМАНИЕ: НЕ ползваме rr_lat/rr_lon, защото това са координатите на антената на брега и бъгват Mode-S целите!
             $lat = $ac['lat'] ?? $ac['latitude'] ?? ($ac['lastPosition']['lat'] ?? null);
             $lon = $ac['lon'] ?? $ac['longitude'] ?? ($ac['lastPosition']['lon'] ?? null);
 
@@ -1364,16 +1327,15 @@ class RadarController extends AbstractController
                 continue;
             }
 
-            $lat = (float) $lat;
-            $lon = (float) $lon;
+            $lat = (float)$lat;
+            $lon = (float)$lon;
 
             if ($hasLiveLatLon) {
-                $seenPos = (float) ($ac['seen_pos'] ?? ($ac['seen'] ?? 0.5));
+                $seenPos = (float)($ac['seen_pos'] ?? ($ac['seen'] ?? 0.5));
             } else {
-                $seenPos = (float) ($ac['lastPosition']['seen_pos'] ?? 999.0);
+                $seenPos = (float)($ac['lastPosition']['seen_pos'] ?? 999.0);
             }
 
-            // За военни в Mode-S над Черно море позволяваме до 600 сек (10 мин) екстраполация по курс и скорост
             $maxAllowedAge = $isMil ? 600.0 : self::MAX_POS_AGE_SEC;
             if ($seenPos > $maxAllowedAge) {
                 continue;
@@ -1385,20 +1347,17 @@ class RadarController extends AbstractController
             $altGeom = $ac['alt_geom'] ?? $ac['alt'] ?? ($ac['lastPosition']['alt_baro'] ?? 0);
             $isOnGroundFlag = ($altBaro === 'ground' || !empty($ac['ground']));
 
-            $numericAltFeet = is_numeric($altBaro) ? (float) $altBaro : (is_numeric($altGeom) ? (float) $altGeom : 0.0);
-            $altitudeMeters = max(0, (int) round($this->mul($numericAltFeet, 0.3048)));
+            $numericAltFeet = is_numeric($altBaro) ? (float)$altBaro : (is_numeric($altGeom) ? (float)$altGeom : 0.0);
+            $altitudeMeters = max(0, (int)round($this->mul($numericAltFeet, 0.3048)));
 
-            $speedKnots = (float) ($ac['gs'] ?? $ac['spd'] ?? $ac['tas'] ?? $ac['ias'] ?? 0);
-            $speedKmh = (int) round($this->mul($speedKnots, 1.852));
-            $track = (float) ($ac['track'] ?? $ac['true_heading'] ?? $ac['mag_heading'] ?? $ac['calc_track'] ?? 0);
+            $speedKnots = (float)($ac['gs'] ?? $ac['spd'] ?? $ac['tas'] ?? $ac['ias'] ?? 0);
+            $speedKmh = (int)round($this->mul($speedKnots, 1.852));
+            $track = (float)($ac['track'] ?? $ac['true_heading'] ?? $ac['mag_heading'] ?? $ac['calc_track'] ?? 0);
 
-            // Ако военният самолет е без скорост в Mode-S, но е във въздуха (>2000м), задаваме крейсерска скорост за екстраполация
             if ($isModeSApproximate && $isMil && $speedKmh === 0 && $altitudeMeters > 2000) {
                 $speedKmh = 650;
             }
 
-            // СЪЖИВЯВАНЕ НА MODE-S: Ако позицията е стара (seenPos > 5 сек), но имаме скорост и курс,
-            // изчисляваме математически къде точно е прелетял самолетът през тези секунди (Dead Reckoning)!
             if ($isModeSApproximate && $seenPos > 5.0 && $seenPos <= 600.0 && $speedKmh > 60) {
                 $distMeters = $this->mul($speedKmh / 3.6, min($seenPos, 300.0));
                 $trackRad = deg2rad($track);
@@ -1407,7 +1366,6 @@ class RadarController extends AbstractController
                 $lon += $this->mul($distMeters, sin($trackRad)) / $this->mul(111320.0, max(0.15, abs(cos($latRad))));
             }
 
-            // Разширена географска рамка: покрива от Сърбия (-7.5°) до края на Черно море/Грузия (+16.5° на изток!)
             $lonDiff = $this->sub($lon, $centerLon);
             if (abs($this->sub($lat, $centerLat)) > 6.5 || $lonDiff < -7.5 || $lonDiff > 16.5) {
                 continue;
@@ -1422,13 +1380,11 @@ class RadarController extends AbstractController
                 if (!empty($existing['isMilitary'])) {
                     $isMil = true;
                 }
-                $existingIsModeS = str_contains((string) ($existing['callsign'] ?? ''), '[MODE-S]');
+                $existingIsModeS = str_contains((string)($existing['callsign'] ?? ''), '[MODE-S]');
 
-                // 1. Никога не презаписваме жива координата с приблизителна [MODE-S]
                 if ($isModeSApproximate && !$existingIsModeS) {
                     continue;
                 }
-                // 2. Ако и двете са живи (или и двете са Mode-S), пазим по-прясната
                 if ($isModeSApproximate === $existingIsModeS && ($existing['age'] ?? 999.0) <= $seenPos) {
                     continue;
                 }
@@ -1446,14 +1402,14 @@ class RadarController extends AbstractController
                 $displayCallsign .= ' [ВОЕНЕН]';
             }
 
-            $roll = isset($ac['roll']) ? (float) $ac['roll'] : null;
-            $mach = isset($ac['mach']) ? (float) $ac['mach'] : null;
-            $baroRate = isset($ac['baro_rate']) ? (int) $ac['baro_rate'] : 0;
-            $nic = isset($ac['nic']) ? (int) $ac['nic'] : 99;
-            $nacP = isset($ac['nac_p']) ? (int) $ac['nac_p'] : 99;
-            $sil = isset($ac['sil']) ? (int) $ac['sil'] : 99;
+            $roll = isset($ac['roll']) ? (float)$ac['roll'] : null;
+            $mach = isset($ac['mach']) ? (float)$ac['mach'] : null;
+            $baroRate = isset($ac['baro_rate']) ? (int)$ac['baro_rate'] : 0;
+            $nic = isset($ac['nic']) ? (int)$ac['nic'] : 99;
+            $nacP = isset($ac['nac_p']) ? (int)$ac['nac_p'] : 99;
+            $sil = isset($ac['sil']) ? (int)$ac['sil'] : 99;
 
-            $altMismatch = is_numeric($altBaro) && is_numeric($altGeom) && abs($this->sub((float) $altBaro, (float) $altGeom)) > 1000.0;
+            $altMismatch = is_numeric($altBaro) && is_numeric($altGeom) && abs($this->sub((float)$altBaro, (float)$altGeom)) > 1000.0;
             $gpsJammed = ($nic >= 0 && $nic < 5) || ($nacP >= 0 && $nacP < 6) || ($sil >= 0 && $sil < 2) || $altMismatch;
 
             if ($gpsJammed && !str_contains($displayCallsign, '[РЕБ/GPS!]')) {
@@ -1461,23 +1417,23 @@ class RadarController extends AbstractController
             }
 
             $planesMap[$id] = [
-                'id'         => $id,
-                'callsign'   => $displayCallsign,
-                'lat'        => round($lat, 5),
-                'lon'        => round($lon, 5),
-                'track'      => $track,
-                'altitude'   => $altitudeMeters,
-                'speed'      => $speedKmh,
-                'squawk'     => $squawk !== '' ? $squawk : ($existing['squawk'] ?? '----'),
-                'type'       => $desc !== '' ? $desc : ($aircraftType !== '' ? $aircraftType : ($existing['type'] ?? 'Няма данни')),
-                'operator'   => $operator !== '' ? $operator : ($existing['operator'] ?? ($isMil ? 'Военновъздушни сили (ВВС)' : 'Граждански полет')),
-                'age'        => round($seenPos, 1),
+                'id' => $id,
+                'callsign' => $displayCallsign,
+                'lat' => round($lat, 5),
+                'lon' => round($lon, 5),
+                'track' => $track,
+                'altitude' => $altitudeMeters,
+                'speed' => $speedKmh,
+                'squawk' => $squawk !== '' ? $squawk : ($existing['squawk'] ?? '----'),
+                'type' => $desc !== '' ? $desc : ($aircraftType !== '' ? $aircraftType : ($existing['type'] ?? 'Няма данни')),
+                'operator' => $operator !== '' ? $operator : ($existing['operator'] ?? ($isMil ? 'Военновъздушни сили (ВВС)' : 'Граждански полет')),
+                'age' => round($seenPos, 1),
                 'isMilitary' => $isMil,
-                'roll'       => $roll,
-                'mach'       => $mach,
-                'baroRate'   => $baroRate,
-                'gpsJammed'  => $gpsJammed,
-                '_source'    => $source,
+                'roll' => $roll,
+                'mach' => $mach,
+                'baroRate' => $baroRate,
+                'gpsJammed' => $gpsJammed,
+                '_source' => $source,
             ];
         }
     }
@@ -1487,7 +1443,8 @@ class RadarController extends AbstractController
         array &$planesMap,
         float $centerLat,
         float $centerLon
-    ): void {
+    ): void
+    {
         $now = time();
 
         foreach ($frData as $key => $val) {
@@ -1501,27 +1458,27 @@ class RadarController extends AbstractController
                 continue;
             }
 
-            $lat = (float) $lat;
-            $lon = (float) $lon;
+            $lat = (float)$lat;
+            $lon = (float)$lon;
 
             $lonDiff = $this->sub($lon, $centerLon);
             if (abs($this->sub($lat, $centerLat)) > 6.5 || $lonDiff < -7.5 || $lonDiff > 16.5) {
                 continue;
             }
 
-            $hex = strtolower(trim((string) ($val[0] ?? '')));
-            $id = $hex !== '' ? $hex : 'fr_' . strtolower(trim((string) $key));
+            $hex = strtolower(trim((string)($val[0] ?? '')));
+            $id = $hex !== '' ? $hex : 'fr_' . strtolower(trim((string)$key));
 
-            $track        = (float) ($val[3] ?? 0);
-            $altFeet      = (float) ($val[4] ?? 0);
-            $speedKnots   = (float) ($val[5] ?? 0);
-            $squawk       = trim((string) ($val[6] ?? '----'));
-            $aircraftType = trim((string) ($val[8] ?? ''));
-            $reg          = trim((string) ($val[9] ?? ''));
-            $ts           = (int) ($val[10] ?? 0);
-            $onGround     = (int) ($val[14] ?? 0);
-            $rawCallsign  = trim((string) ($val[16] ?? $val[13] ?? ''));
-            $operator     = trim((string) ($val[18] ?? ''));
+            $track = (float)($val[3] ?? 0);
+            $altFeet = (float)($val[4] ?? 0);
+            $speedKnots = (float)($val[5] ?? 0);
+            $squawk = trim((string)($val[6] ?? '----'));
+            $aircraftType = trim((string)($val[8] ?? ''));
+            $reg = trim((string)($val[9] ?? ''));
+            $ts = (int)($val[10] ?? 0);
+            $onGround = (int)($val[14] ?? 0);
+            $rawCallsign = trim((string)($val[16] ?? $val[13] ?? ''));
+            $operator = trim((string)($val[18] ?? ''));
 
             if ($aircraftType === 'GRND' || str_starts_with(strtoupper($rawCallsign), 'GND')) {
                 continue;
@@ -1535,8 +1492,8 @@ class RadarController extends AbstractController
                 continue;
             }
 
-            $altitudeMeters = max(0, (int) round($this->mul($altFeet, 0.3048)));
-            $speedKmh       = (int) round($this->mul($speedKnots, 1.852));
+            $altitudeMeters = max(0, (int)round($this->mul($altFeet, 0.3048)));
+            $speedKmh = (int)round($this->mul($speedKnots, 1.852));
 
             if (!$isMil && ($onGround === 1 || $altitudeMeters <= 0) && $speedKmh < 30) {
                 continue;
@@ -1544,23 +1501,23 @@ class RadarController extends AbstractController
 
             $existing = $planesMap[$id] ?? null;
             if (is_array($existing)) {
-                $existingIsModeS = str_contains((string) ($existing['callsign'] ?? ''), '[MODE-S]');
-                $frHasBetterPos  = $existingIsModeS || (($existing['speed'] ?? 0) === 0 && $speedKmh > 0);
+                $existingIsModeS = str_contains((string)($existing['callsign'] ?? ''), '[MODE-S]');
+                $frHasBetterPos = $existingIsModeS || (($existing['speed'] ?? 0) === 0 && $speedKmh > 0);
 
                 if ($frHasBetterPos) {
-                    $existing['lat']      = $lat;
-                    $existing['lon']      = $lon;
-                    $existing['track']    = $track;
-                    $existing['speed']    = $speedKmh;
-                    $existing['age']      = round($age, 1);
+                    $existing['lat'] = $lat;
+                    $existing['lon'] = $lon;
+                    $existing['track'] = $track;
+                    $existing['speed'] = $speedKmh;
+                    $existing['age'] = round($age, 1);
                     if ($altitudeMeters > 0) {
                         $existing['altitude'] = $altitudeMeters;
                     }
-                    $cleanCs = trim(str_replace('[MODE-S]', '', (string) $existing['callsign']));
+                    $cleanCs = trim(str_replace('[MODE-S]', '', (string)$existing['callsign']));
                     if ($rawCallsign !== '' && str_starts_with($cleanCs, strtoupper($id))) {
                         $cleanCs = $rawCallsign . (!empty($existing['isMilitary']) || $isMil ? ' [ВОЕНЕН]' : '');
                     }
-                    $existing['callsign'] = trim((string) preg_replace('/\s+/', ' ', $cleanCs));
+                    $existing['callsign'] = trim((string)preg_replace('/\s+/', ' ', $cleanCs));
                 }
 
                 if ($isMil && empty($existing['isMilitary'])) {
@@ -1588,19 +1545,19 @@ class RadarController extends AbstractController
             }
 
             $planesMap[$id] = [
-                'id'         => $id,
-                'callsign'   => $displayCallsign,
-                'lat'        => $lat,
-                'lon'        => $lon,
-                'track'      => $track,
-                'altitude'   => $altitudeMeters,
-                'speed'      => $speedKmh,
-                'squawk'     => ($squawk !== '' && $squawk !== '0000') ? $squawk : '----',
-                'type'       => $aircraftType !== '' ? $aircraftType : 'Няма данни',
-                'operator'   => $operator !== '' ? $operator : ($isMil ? 'Военновъздушни сили (ВВС)' : 'Граждански полет'),
-                'age'        => round($age, 1),
+                'id' => $id,
+                'callsign' => $displayCallsign,
+                'lat' => $lat,
+                'lon' => $lon,
+                'track' => $track,
+                'altitude' => $altitudeMeters,
+                'speed' => $speedKmh,
+                'squawk' => ($squawk !== '' && $squawk !== '0000') ? $squawk : '----',
+                'type' => $aircraftType !== '' ? $aircraftType : 'Няма данни',
+                'operator' => $operator !== '' ? $operator : ($isMil ? 'Военновъздушни сили (ВВС)' : 'Граждански полет'),
+                'age' => round($age, 1),
                 'isMilitary' => $isMil,
-                '_source'    => 'FR24',
+                '_source' => 'FR24',
             ];
         }
     }
@@ -1610,7 +1567,8 @@ class RadarController extends AbstractController
         array &$planesMap,
         float $centerLat,
         float $centerLon
-    ): void {
+    ): void
+    {
         $now = time();
 
         foreach ($states as $st) {
@@ -1618,24 +1576,24 @@ class RadarController extends AbstractController
                 continue;
             }
 
-            $id = strtolower(trim((string) ($st[0] ?? '')));
-            $rawCallsign = trim((string) ($st[1] ?? ''));
-            $originCountry = trim((string) ($st[2] ?? 'Граждански полет'));
-            $posTime = (int) ($st[3] ?? $st[4] ?? 0);
+            $id = strtolower(trim((string)($st[0] ?? '')));
+            $rawCallsign = trim((string)($st[1] ?? ''));
+            $originCountry = trim((string)($st[2] ?? 'Граждански полет'));
+            $posTime = (int)($st[3] ?? $st[4] ?? 0);
             $lon = $st[5] ?? null;
             $lat = $st[6] ?? null;
             $altMeters = $st[7] ?? $st[13] ?? 0;
             $onGround = !empty($st[8]);
-            $velocityMs = (float) ($st[9] ?? 0);
-            $track = (float) ($st[10] ?? 0);
-            $squawk = trim((string) ($st[14] ?? '----'));
+            $velocityMs = (float)($st[9] ?? 0);
+            $track = (float)($st[10] ?? 0);
+            $squawk = trim((string)($st[14] ?? '----'));
 
             if ($id === '' || !is_numeric($lat) || !is_numeric($lon)) {
                 continue;
             }
 
-            $lat = (float) $lat;
-            $lon = (float) $lon;
+            $lat = (float)$lat;
+            $lon = (float)$lon;
 
             if (abs($this->sub($lat, $centerLat)) > 5.5 || abs($this->sub($lon, $centerLon)) > 7.5) {
                 continue;
@@ -1650,7 +1608,7 @@ class RadarController extends AbstractController
 
             $existing = $planesMap[$id] ?? null;
             if (is_array($existing)) {
-                $existingIsModeS = str_contains((string) ($existing['callsign'] ?? ''), '[MODE-S]');
+                $existingIsModeS = str_contains((string)($existing['callsign'] ?? ''), '[MODE-S]');
                 if (!$existingIsModeS) {
                     continue;
                 }
@@ -1659,8 +1617,8 @@ class RadarController extends AbstractController
                 }
             }
 
-            $speedKmh = (int) round($this->mul($velocityMs, 3.6));
-            $altitudeMeters = is_numeric($altMeters) ? max(0, (int) round((float) $altMeters)) : 0;
+            $speedKmh = (int)round($this->mul($velocityMs, 3.6));
+            $altitudeMeters = is_numeric($altMeters) ? max(0, (int)round((float)$altMeters)) : 0;
 
             if (!$isMil && ($onGround || $altitudeMeters <= 0) && $speedKmh < 30) {
                 continue;
@@ -1673,19 +1631,19 @@ class RadarController extends AbstractController
             }
 
             $planesMap[$id] = [
-                'id'         => $id,
-                'callsign'   => $displayCallsign,
-                'lat'        => $lat,
-                'lon'        => $lon,
-                'track'      => $track,
-                'altitude'   => $altitudeMeters,
-                'speed'      => $speedKmh,
-                'squawk'     => $squawk !== '' ? $squawk : ($existing['squawk'] ?? '----'),
-                'type'       => $existing['type'] ?? ($isMil ? 'Военен борд' : 'Въздушна цел'),
-                'operator'   => $originCountry,
-                'age'        => $posTime > 0 ? round(max(0.0, $this->sub($now, $posTime)), 1) : 1.0,
+                'id' => $id,
+                'callsign' => $displayCallsign,
+                'lat' => $lat,
+                'lon' => $lon,
+                'track' => $track,
+                'altitude' => $altitudeMeters,
+                'speed' => $speedKmh,
+                'squawk' => $squawk !== '' ? $squawk : ($existing['squawk'] ?? '----'),
+                'type' => $existing['type'] ?? ($isMil ? 'Военен борд' : 'Въздушна цел'),
+                'operator' => $originCountry,
+                'age' => $posTime > 0 ? round(max(0.0, $this->sub($now, $posTime)), 1) : 1.0,
                 'isMilitary' => $isMil,
-                '_source'    => 'opensky',
+                '_source' => 'opensky',
             ];
         }
     }
@@ -1698,7 +1656,8 @@ class RadarController extends AbstractController
         string $operator,
         string $description = '',
         string $reg = ''
-    ): bool {
+    ): bool
+    {
         $hex = strtolower(trim($hex));
         $cs = strtoupper(trim($callsign));
         $squawk = trim($squawk);
@@ -1785,5 +1744,376 @@ class RadarController extends AbstractController
         }
 
         return false;
+    }
+
+    #[Route('/api/ships', name: 'api_ships', methods: ['GET'])]
+    public function ships(): JsonResponse
+    {
+        $file = $this->getParameter('kernel.project_dir') . '/var/ais_ships.json';
+        if (!file_exists($file)) {
+            return new JsonResponse([]);
+        }
+        return new JsonResponse(json_decode(file_get_contents($file), true) ?? []);
+    }
+
+    #[Route('/api/osint-feed', name: 'api_osint_feed', methods: ['GET'])]
+    public function osintFeed(Request $request): JsonResponse
+    {
+        $force = $request->query->getBoolean('force', false);
+        $items = $this->getBlackSeaOsintAlerts($force);
+
+        $response = new JsonResponse([
+            'updated_at' => gmdate('H:i:s') . ' UTC',
+            'count'      => count($items),
+            'alerts'     => $items,
+        ]);
+        $response->setEncodingOptions(JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+
+        return $response;
+    }
+
+    private function getBlackSeaOsintAlerts(bool $force = false): array
+    {
+        $cacheFile = sys_get_temp_dir() . '/radar_osint_blacksea.json';
+        $now = time();
+
+        if (!$force && is_file($cacheFile) && $this->sub($now, (int) @filemtime($cacheFile)) < 120) {
+            $cached = @file_get_contents($cacheFile);
+            $decoded = is_string($cached) ? json_decode($cached, true) : null;
+            if (is_array($decoded)) {
+                return $decoded;
+            }
+        }
+
+        $channels = [
+            ['name' => 'kpszsu',             'label' => 'ВВС ПВО Мониторинг',      'url' => 'https://t.me/s/kpszsu'],
+            ['name' => 'war_monitor',        'label' => 'War Monitor (Радар)',     'url' => 'https://t.me/s/war_monitor'],
+            ['name' => 'vanek_nikolaev',     'label' => 'Южен Радар (Ваньок)',     'url' => 'https://t.me/s/vanek_nikolaev'],
+            ['name' => 'strategicaviationt', 'label' => 'Стратегическа Авиация',   'url' => 'https://t.me/s/strategicaviationt'],
+            ['name' => 'itamilradar',        'label' => 'ItaMilRadar (NATO ISR)',  'url' => 'https://t.me/s/itamilradar'],
+            ['name' => 'oko_ua',             'label' => 'Радар Черно Море',        'url' => 'https://t.me/s/oko_ua'],
+            ['name' => 'crimeanwind',        'label' => 'Кримски Вятър OSINT',     'url' => 'https://t.me/s/Crimeanwind'],
+            ['name' => 'monitorwarr',        'label' => 'Стратегически Радар',     'url' => 'https://t.me/s/monitorwarr'],
+            ['name' => 'milinfolive',        'label' => 'НАТО/Черно море OSINT',   'url' => 'https://t.me/s/milinfolive'],
+            ['name' => 'dva_majors',         'label' => 'Два Майора (Руски OSINT)','url' => 'https://t.me/s/dva_majors'],
+            ['name' => 'chp_sevastopol',     'label' => 'ЧП Севастопол (Крим)',    'url' => 'https://t.me/s/chp_sevastopol'],
+        ];
+
+        $responses = $this->curlFetchMany($channels);
+
+        $blackSeaLocations = [
+            'рені', 'рени', 'кілія', 'килия', 'бессараб', 'затока', 'аккерман',
+            'білгород-дністровськ', 'белгород-днестровск', 'татарбунар', 'болград',
+            'чорного моря', 'чорне море', 'черного моря', 'черном море', 'акватор',
+            'болгар', 'българ', 'варн', 'бургас', 'шабл', 'емона', 'емине', 'калиакр', 'созопол',
+            'румун', 'румын', 'констанц', 'когълничан', 'когалничан', 'тулча', 'сулин', 'мангалия', 'босфор',
+            'крим', 'крым', 'севастопол', 'белбек', 'бельбек', 'саки', 'новофедорів', 'новофедоров',
+            'євпатор', 'евпатор', 'тарханкут', 'джанкой', 'керч', 'феодос', 'гвардійськ', 'гвардейск',
+            'кача', 'мис чауда', 'чауда', 'новоросійськ', 'новороссийск', 'ейськ', 'приморсько-ахтарськ',
+            'зміїн', 'змиин', 'одес', 'ізмаїл', 'измаил', 'вилкове', 'чорноморськ', 'южне', 'коблеве',
+            'миколаїв', 'николаев', 'очаків', 'очаков', 'кінбурн', 'кинбурн', 'херсон',
+            'ту-95', 'ту-22', 'міг-31к', 'миг-31к', 'калібр', 'калибр', 'онікс', 'оникс', 'циркон',
+            'black sea', 'crimea', 'constanta', 'romania', 'bulgaria', 'varna', 'burgas',
+            'bosphorus', 'snake island', 'odesa', 'sevastopol', 'novorossiysk', 'sinop', 'kogalniceanu',
+        ];
+
+        $militaryTargetTerms = [
+            'artemis', 'challenger', 'typhoon', 'eurofighter', 'f-16', 'kc-135', 'a330',
+            'бэк', 'безэкипажн', 'морской дрон', 'всу', 'опасность', 'тревога', 'отражают',
+            'бпла', 'шахед', 'shahed', 'геран', 'мопед', 'балалайк', 'орлан', 'zala', 'ланцет', 'суперкам', 'supercam', 'форпост',
+            'су-24', 'су-25', 'су-27', 'су-30', 'су-34', 'су-35', 'су-57', 'міг-29', 'миг-29', 'міг-31', 'миг-31',
+            'ту-22', 'ту-95', 'ту-160', 'а-50', 'ил-76', 'іл-76', 'ан-26', 'бе-12', 'ка-27', 'ка-29', 'ка-52',
+            'ми-8', 'мі-8', 'ми-24', 'мі-24', 'ми-28', 'гелікоптер', 'вертоліт', 'вертолет', 'винищувач', 'истребител',
+            'бомбардувальник', 'авіац', 'авиац', 'літак', 'самолет', 'ракет', 'калібр', 'калибр', 'онікс', 'оникс',
+            'іскандер', 'искандер', 'х-22', 'х-31', 'х-35', 'х-59', 'х-69', 'х-101', 'кинжал', 'кинджал', 'циркон', 'баліст',
+            'пуски', 'пуск', 'виліт', 'вылет', 'зліт', 'взлет', 'курс', 'напрямк', 'ппо', 'пво', 'вибух', 'взрыв',
+            'аеродром', 'аэродром', 'радар', 'рлс', 'корабел', 'фрегат', 'катер',
+            'mission', 'patrol', 'surveillance', 'reconnaissance', 'isr', 'operating',
+            'airborne', 'tanker', 'refueling', 'fighter', 'drone', 'uav', 'global hawk',
+            'rq-4', 'forte', 'rc-135', 'rivet joint', 'p-8', 'poseidon', 'e-3', 'awacs',
+        ];
+
+        $excludedRegions = [
+            'харків', 'харьков', 'барвінкове', 'сумщин', 'суми', 'шостк', 'вороніж', 'чернігів',
+            'полтав', 'запорізьк', 'запоріжжя', 'синельник', 'дніпропетров', 'донецьк', 'луганськ',
+            'куп\'янськ', 'покровськ', 'краматорськ', 'слов\'янськ', 'житомир', 'рівне', 'волин',
+            'принтер', 'бумага а4', 'гауляйтер', 'подписывайтесь', 'підписуйтесь', 'донат', 'збір',
+            'продемонстр', 'военный осведомитель', 'учениях',
+            'ionian', 'mediterranean', 'adriatic', 'tyrrhenian', 'sigonella', 'baltic', 'kaliningrad',
+        ];
+
+        $translations = [
+            'Ту-95МС'                      => 'стратегически ракетоносец Ту-95МС',
+            'Ту-22М3'                      => 'далечен бомбардировач Ту-22М3',
+            'БЭК'                          => 'морски дрон камикадзе (БЕК)',
+            'БЭКи'                         => 'морски дронове камикадзе (БЕК)',
+            'безэкипажный катер'           => 'морски дрон (БЕК)',
+            'ракетная опасность'           => 'РАКЕТНА ОПАСНОСТ',
+            'работает ПВО'                 => 'активна работа на ПВО',
+            'отражают атаку'               => 'отразяват атака',
+            'со стороны моря'              => 'откъм акваторията на Черно море',
+            'operating over the Black Sea' => 'изпълнява разузнавателна мисия над Черно море',
+            'over the Black Sea'           => 'над акваторията на Черно море',
+            'Black Sea'                    => 'Черно море',
+            'mission'                      => 'мисия',
+            'surveillance'                 => 'разузнаване',
+            'Чорного моря'                 => 'Черно море',
+            'Чорне море'                   => 'Черно море',
+            'з акваторії'                  => 'от акваторията на',
+            'акваторії'                    => 'акваторията на',
+            'акваторія'                    => 'акваторията',
+            'в напрямку'                   => 'в посока',
+            'у напрямку'                   => 'в посока',
+            'напрямок'                     => 'посока',
+            'курсом на'                    => 'с курс към',
+            'курс на'                      => 'курс към',
+            'крилата ракета'               => 'крилата ракета',
+            'крилаті ракети'               => 'крилати ракети',
+            'ударних БпЛА'                 => 'ударни дронове (БПЛА)',
+            'реактивний БпЛА'              => 'реактивен дрон (БПЛА)',
+            'Реактивний БпЛА'              => 'Реактивен дрон (БПЛА)',
+            'розвідувальний БпЛА'          => 'разузнавателен дрон',
+            'мопедів'                      => 'ударни дронове (Шахед)',
+            'мопеди'                       => 'ударни дронове (Шахед)',
+            'мопед'                        => 'ударен дрон (Шахед)',
+            'балалайка'                    => 'ударен дрон (Шахед)',
+            'ворожий'                      => 'противников',
+            'ворожа'                       => 'противникова',
+            'ворожої'                      => 'противникова',
+            'тактичної авіації'            => 'тактическа авиация',
+            'тактичною авіацією'           => 'тактическа авиация',
+            'винищувач'                    => 'изтребител',
+            'бомбардувальник'              => 'бомбардировач',
+            'гелікоптер'                   => 'вертолет',
+            'вертоліт'                     => 'вертолет',
+            'Зміїний'                      => 'о-в Змийски',
+            'Зміїного'                     => 'о-в Змийски',
+            'Одещина'                      => 'Одеска област',
+            'Одещину'                      => 'Одеска област',
+            'Одесу'                        => 'Одеса',
+            'Миколаївщина'                 => 'Николаевска област',
+            'Миколаївщину'                 => 'Николаевска област',
+            'Херсонщина'                   => 'Херсонска област',
+            'Крим'                         => 'Крим',
+            'Криму'                        => 'Крим',
+            'Зліт'                         => 'Излитане на',
+            'Виліт'                        => 'Излитане на',
+            'Пуски'                        => 'Пускове на',
+            'КАБ'                          => 'Управляеми авиобомби (КАБ)',
+            'МіГ-31К'                      => 'МиГ-31К (носител на Кинжал)',
+        ];
+
+        $geoZones = [
+            'рені'        => ['lat' => 45.457, 'lon' => 28.289, 'zone' => 'Граничен сектор Рени / Дунав (Граница с Румъния)'],
+            'рени'        => ['lat' => 45.457, 'lon' => 28.289, 'zone' => 'Граничен сектор Рени / Дунав (Граница с Румъния)'],
+            'кілія'       => ['lat' => 45.440, 'lon' => 29.260, 'zone' => 'Килийско гърло на Дунав (Граница с НАТО)'],
+            'килия'       => ['lat' => 45.440, 'lon' => 29.260, 'zone' => 'Килийско гърло на Дунав (Граница с НАТО)'],
+            'затока'      => ['lat' => 46.065, 'lon' => 30.455, 'zone' => 'Крайбрежие Затока / Днестровски лиман'],
+            'білгород'    => ['lat' => 46.195, 'lon' => 30.340, 'zone' => 'Днестровски лиман (Белгород-Днестровски)'],
+            'аккерман'    => ['lat' => 46.195, 'lon' => 30.340, 'zone' => 'Днестровски лиман (Аккерман)'],
+            'татарбунар'  => ['lat' => 45.840, 'lon' => 29.610, 'zone' => 'Южна Бесарабия (Татарбунари)'],
+            'бессараб'    => ['lat' => 45.750, 'lon' => 29.300, 'zone' => 'Направление Южна Бесарабия / Делта на Дунав'],
+            'шабл'        => ['lat' => 43.560, 'lon' => 28.850, 'zone' => 'Сектор Шабла / Калиакра (БГ ПВО Зона)'],
+            'калиакр'     => ['lat' => 43.360, 'lon' => 28.650, 'zone' => 'Нос Калиакра (Северна БГ акватория)'],
+            'варн'        => ['lat' => 43.200, 'lon' => 28.350, 'zone' => 'Акватория Варненски залив'],
+            'varna'       => ['lat' => 43.200, 'lon' => 28.350, 'zone' => 'Акватория Варненски залив'],
+            'емона'       => ['lat' => 42.700, 'lon' => 28.150, 'zone' => 'Траверс нос Емине / Емона (Централна БГ зона)'],
+            'емине'       => ['lat' => 42.700, 'lon' => 28.150, 'zone' => 'Траверс нос Емине / Емона (Централна БГ зона)'],
+            'бургас'      => ['lat' => 42.480, 'lon' => 28.050, 'zone' => 'Акватория Бургаски залив'],
+            'burgas'      => ['lat' => 42.480, 'lon' => 28.050, 'zone' => 'Акватория Бургаски залив'],
+            'болгар'      => ['lat' => 43.050, 'lon' => 29.100, 'zone' => 'Изключителна икономическа зона на България'],
+            'bulgaria'    => ['lat' => 43.050, 'lon' => 29.100, 'zone' => 'Изключителна икономическа зона на България'],
+            'констанц'    => ['lat' => 44.250, 'lon' => 29.150, 'zone' => 'Сектор Констанца / М. Когълничану (НАТО База)'],
+            'constanta'   => ['lat' => 44.250, 'lon' => 29.150, 'zone' => 'Сектор Констанца / М. Когълничану (НАТО База)'],
+            'румун'       => ['lat' => 44.400, 'lon' => 29.600, 'zone' => 'Румънска акватория (Западно Черно море)'],
+            'romania'     => ['lat' => 44.400, 'lon' => 29.600, 'zone' => 'Румънска акватория (Западно Черно море)'],
+            'босфор'      => ['lat' => 41.450, 'lon' => 29.350, 'zone' => 'Подходи към пролива Босфор'],
+            'bosphorus'   => ['lat' => 41.450, 'lon' => 29.350, 'zone' => 'Подходи към пролива Босфор'],
+            'forte'       => ['lat' => 43.400, 'lon' => 31.200, 'zone' => 'Патрулен маршрут RQ-4 Global Hawk (НАТО)'],
+            'global hawk' => ['lat' => 43.400, 'lon' => 31.200, 'zone' => 'Патрулен маршрут RQ-4 Global Hawk (НАТО)'],
+            'rc-135'      => ['lat' => 43.650, 'lon' => 30.400, 'zone' => 'Зона за РТР RC-135 Rivet Joint (НАТО)'],
+            'rivet'       => ['lat' => 43.650, 'lon' => 30.400, 'zone' => 'Зона за РТР RC-135 Rivet Joint (НАТО)'],
+            'awacs'       => ['lat' => 43.800, 'lon' => 29.200, 'zone' => 'Зона за ДРЛОиУ E-3 AWACS (Западно Черно море)'],
+            'p-8'         => ['lat' => 43.300, 'lon' => 29.500, 'zone' => 'Противолодъчен патрул P-8A Poseidon (НАТО)'],
+            'poseidon'    => ['lat' => 43.300, 'lon' => 29.500, 'zone' => 'Противолодъчен патрул P-8A Poseidon (НАТО)'],
+            'artemis'     => ['lat' => 44.100, 'lon' => 29.400, 'zone' => 'Разузнавателен патрул Challenger 650 ARTEMIS'],
+            'змийски'     => ['lat' => 45.255, 'lon' => 30.204, 'zone' => 'Район о-в Змийски (СЗ Черно море)'],
+            'зміїн'       => ['lat' => 45.255, 'lon' => 30.204, 'zone' => 'Район о-в Змийски (СЗ Черно море)'],
+            'snake island'=> ['lat' => 45.255, 'lon' => 30.204, 'zone' => 'Район о-в Змийски (СЗ Черно море)'],
+            'ізмаїл'      => ['lat' => 45.350, 'lon' => 28.850, 'zone' => 'Делтата на Дунав / Измаил'],
+            'вилкове'     => ['lat' => 45.400, 'lon' => 29.580, 'zone' => 'Устие на Дунав / Вилково'],
+            'чорноморськ' => ['lat' => 46.300, 'lon' => 30.660, 'zone' => 'Подходи към Черноморск / Одеса'],
+            'одес'        => ['lat' => 46.150, 'lon' => 30.850, 'zone' => 'Одески залив (СЗ Черно море)'],
+            'odesa'       => ['lat' => 46.150, 'lon' => 30.850, 'zone' => 'Одески залив (СЗ Черно море)'],
+            'коблеве'     => ['lat' => 46.620, 'lon' => 31.200, 'zone' => 'Крайбрежие Коблево / Южне'],
+            'очаків'      => ['lat' => 46.610, 'lon' => 31.540, 'zone' => 'Днепровско-Бугски лиман (Очаков)'],
+            'очаков'      => ['lat' => 46.610, 'lon' => 31.540, 'zone' => 'Днепровско-Бугски лиман (Очаков)'],
+            'кінбурн'     => ['lat' => 46.520, 'lon' => 31.600, 'zone' => 'Кинбурнска коса (СЗ Черно море)'],
+            'миколаїв'    => ['lat' => 46.750, 'lon' => 31.900, 'zone' => 'Северно Причерноморие (Николаев)'],
+            'николаев'    => ['lat' => 46.750, 'lon' => 31.900, 'zone' => 'Северно Причерноморие (Николаев)'],
+            'херсон'      => ['lat' => 46.500, 'lon' => 32.500, 'zone' => 'Херсонско направление'],
+            'тарханкут'   => ['lat' => 45.350, 'lon' => 32.480, 'zone' => 'Нос Тарханкут (Западен Крим)'],
+            'євпатор'     => ['lat' => 45.180, 'lon' => 33.350, 'zone' => 'Акватория Евпатория (Крим)'],
+            'евпатор'     => ['lat' => 45.180, 'lon' => 33.350, 'zone' => 'Акватория Евпатория (Крим)'],
+            'саки'        => ['lat' => 45.090, 'lon' => 33.590, 'zone' => 'Авиобаза Саки / Новофедоровка (Крим)'],
+            'новофедорів' => ['lat' => 45.090, 'lon' => 33.590, 'zone' => 'Авиобаза Саки / Новофедоровка (Крим)'],
+            'кача'        => ['lat' => 44.770, 'lon' => 33.570, 'zone' => 'Авиобаза Кача (Северен Севастопол)'],
+            'белбек'      => ['lat' => 44.680, 'lon' => 33.570, 'zone' => 'Авиобаза Белбек (Севастопол)'],
+            'бельбек'      => ['lat' => 44.680, 'lon' => 33.570, 'zone' => 'Авиобаза Белбек (Севастопол)'],
+            'севастопол'  => ['lat' => 44.550, 'lon' => 33.350, 'zone' => 'Акватория Севастопол'],
+            'sevastopol'  => ['lat' => 44.550, 'lon' => 33.350, 'zone' => 'Акватория Севастопол'],
+            'джанкой'     => ['lat' => 45.700, 'lon' => 34.410, 'zone' => 'Авиобаза Джанкой (Северен Крим)'],
+            'гвардійськ'  => ['lat' => 45.110, 'lon' => 34.010, 'zone' => 'Авиобаза Гвардейское (Централен Крим)'],
+            'чауда'       => ['lat' => 45.000, 'lon' => 35.830, 'zone' => 'Нос Чауда (Пусков полигон за БПЛА - Източен Крим)'],
+            'феодос'      => ['lat' => 45.040, 'lon' => 35.380, 'zone' => 'Залив Феодосия (Източен Крим)'],
+            'керч'        => ['lat' => 45.320, 'lon' => 36.470, 'zone' => 'Керченски проток'],
+            'новоросій'   => ['lat' => 44.650, 'lon' => 37.750, 'zone' => 'ВМБ Новоросийск (Източно Черно море)'],
+            'новороссий'  => ['lat' => 44.650, 'lon' => 37.750, 'zone' => 'ВМБ Новоросийск (Източно Черно море)'],
+            'ту-22'       => ['lat' => 44.850, 'lon' => 34.800, 'zone' => 'Рубеж на Ту-22М3 над Черно море'],
+            'су-30'       => ['lat' => 44.950, 'lon' => 31.850, 'zone' => 'Морска авиация Су-30СМ (Западно Черно море)'],
+            'миг-31'      => ['lat' => 45.600, 'lon' => 37.500, 'zone' => 'Височинен рубеж МиГ-31К (Азовско/Черно море)'],
+            'крим'        => ['lat' => 44.750, 'lon' => 33.850, 'zone' => 'Въздушно пространство на п-в Крим'],
+            'crimea'      => ['lat' => 44.750, 'lon' => 33.850, 'zone' => 'Въздушно пространство на п-в Крим'],
+        ];
+
+        $alerts = [];
+        $seenHashes = [];
+
+        foreach ($channels as $ch) {
+            $name = $ch['name'];
+            $html = (string) ($responses[$name]['body'] ?? '');
+            if ($html === '') {
+                continue;
+            }
+
+            $blocks = explode('tgme_widget_message_wrap', $html);
+            $recentBlocks = array_slice($blocks, -15);
+
+            foreach ($recentBlocks as $block) {
+                if (!preg_match('/<div class="tgme_widget_message_text[^"]*"[^>]*>(.*?)<\/div>/s', $block, $textMatch)) {
+                    continue;
+                }
+
+                $rawText = strip_tags(str_replace(['<br/>', '<br>', '</p>'], "\n", $textMatch[1]));
+                $cleanText = html_entity_decode(trim($rawText), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+                $cleanText = preg_replace('~https?://\S+~u', '', $cleanText);
+                $cleanText = preg_replace('/\s+/', ' ', $cleanText);
+
+                if (mb_strlen($cleanText) < 12 || mb_strlen($cleanText) > 420) {
+                    continue;
+                }
+
+                $lower = mb_strtolower($cleanText, 'UTF-8');
+
+                $isExcluded = false;
+                foreach ($excludedRegions as $badWord) {
+                    if (str_contains($lower, $badWord)) {
+                        $isExcluded = true;
+                        break;
+                    }
+                }
+                if ($isExcluded) {
+                    continue;
+                }
+
+                $hasLocation = false;
+                foreach ($blackSeaLocations as $locKw) {
+                    if (str_contains($lower, $locKw)) {
+                        $hasLocation = true;
+                        break;
+                    }
+                }
+                if (!$hasLocation) {
+                    continue;
+                }
+
+                $hasMilTarget = false;
+                foreach ($militaryTargetTerms as $milKw) {
+                    if (str_contains($lower, $milKw)) {
+                        $hasMilTarget = true;
+                        break;
+                    }
+                }
+                if (!$hasMilTarget) {
+                    continue;
+                }
+
+                $timestamp = $now;
+                if (preg_match('/datetime="([^"]+)"/', $block, $timeMatch)) {
+                    $parsedTs = strtotime($timeMatch[1]);
+                    if ($parsedTs !== false) {
+                        $timestamp = $parsedTs;
+                    }
+                }
+
+                if ($this->sub($now, $timestamp) > 5400) {
+                    continue;
+                }
+
+                $translatedText = strtr($cleanText, $translations);
+                $dedupKey = md5(mb_substr($translatedText, 0, 50, 'UTF-8'));
+                if (isset($seenHashes[$dedupKey])) {
+                    continue;
+                }
+                $seenHashes[$dedupKey] = true;
+
+                $lowerTranslated = mb_strtolower($translatedText, 'UTF-8');
+                $coords = ['lat' => 44.35, 'lon' => 31.80, 'zone' => 'Централна акватория на Черно море'];
+                foreach ($geoZones as $geoKey => $geoVal) {
+                    if (str_contains($lowerTranslated, $geoKey) || str_contains($lower, $geoKey)) {
+                        $coords = $geoVal;
+                        break;
+                    }
+                }
+
+                $jitterLat = $this->mul(((crc32($dedupKey) % 100) - 50), 0.0045);
+                $jitterLon = $this->mul((((crc32($dedupKey . 'x') % 100) - 50)), 0.0065);
+
+                $ageMin = max(1, (int) round($this->sub($now, $timestamp) / 60));
+
+                $heading = null;
+                $headingMap = [
+                    'північно-західн'  => 315, 'северо-запад' => 315, 'северозапад' => 315,
+                    'південно-західн'  => 225, 'юго-запад'    => 225, 'югозапад'    => 225,
+                    'північно-східн'   => 45,  'северо-восток'=> 45,  'североизток' => 45,
+                    'південно-східн'   => 135, 'юго-восток'   => 135, 'югоизток'    => 135,
+                    'західн'           => 270, 'запад'        => 270, 'west'        => 270,
+                    'північн'          => 0,   'север'        => 0,   'north'       => 0,
+                    'південн'          => 180, 'юг'           => 180, 'south'       => 180,
+                    'східн'            => 90,  'восток'       => 90,  'изток'       => 90,
+                    'курс към одес'    => 310, 'посока одес'  => 310, 'на одес'     => 310,
+                    'курс към николаев'=> 340, 'на миколаїв'  => 340, 'ольшанськ'   => 335,
+                    'баштанк'          => 350, 'вознесенськ'  => 330, 'коблеве'     => 320,
+                    'курс към очак'    => 330, 'на очаків'    => 330, 'чорноморськ' => 305,
+                    'змийски'          => 260, 'ізмаїл'       => 265, 'вилкове'     => 265,
+                    'рені'             => 265, 'кілія'        => 265, 'затока'      => 295,
+                    'констанц'         => 245, 'варн'         => 235, 'бургас'      => 230,
+                ];
+                foreach ($headingMap as $dirKw => $deg) {
+                    if (str_contains($lowerTranslated, $dirKw) || str_contains($lower, $dirKw)) {
+                        $heading = $deg;
+                        break;
+                    }
+                }
+
+                $alerts[] = [
+                    'source'   => $ch['label'],
+                    'time_ago' => $ageMin < 60 ? "преди {$ageMin} мин" : 'преди ' . round($ageMin / 60, 1) . ' ч',
+                    'ts'       => $timestamp,
+                    'zone'     => $coords['zone'],
+                    'lat'      => round($coords['lat'] + $jitterLat, 4),
+                    'lon'      => round($coords['lon'] + $jitterLon, 4),
+                    'heading'  => $heading,
+                    'text'     => $translatedText,
+                ];
+            }
+        }
+
+        usort($alerts, static fn(array $a, array $b): int => ($b['ts'] ?? 0) <=> ($a['ts'] ?? 0));
+        $alerts = array_slice($alerts, 0, 12);
+
+        @file_put_contents($cacheFile, json_encode($alerts, JSON_UNESCAPED_UNICODE), LOCK_EX);
+
+        return $alerts;
     }
 }

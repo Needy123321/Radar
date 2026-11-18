@@ -24,8 +24,13 @@ COPY . /var/www/html
 # ЗАДЪЛЖИТЕЛНО: Казваме на Symfony, че сме в production още по време на билда!
 ENV APP_ENV=prod
 
-# Инсталираме пакетите на Symfony
+# Инсталираме пакетите на Symfony (вкл. textalk/websocket от composer.json)
 RUN composer install --no-dev --optimize-autoloader --no-scripts
 
-# Даваме права на сървъра да чете и изпълнява файловете
-RUN chown -R www-data:www-data /var/www/html
+# Създаваме var/ и даваме права на сървъра да чете и записва файловете
+RUN mkdir -p /var/www/html/var/cache /var/www/html/var/log \
+    && chown -R www-data:www-data /var/www/html \
+    && chmod -R 777 /var/www/html/var
+
+# Стартираме AIS WebSocket демона във фонов режим и след това Apache
+CMD ["sh", "-c", "php bin/console cache:clear --env=prod || true; chmod -R 777 /var/www/html/var; (while true; do php bin/console app:ais-stream >> /var/www/html/var/log/ais.log 2>&1; sleep 5; done) & apache2-foreground"]

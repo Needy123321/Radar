@@ -19,6 +19,7 @@
         "symfony/runtime": "7.4.*",
         "symfony/twig-bundle": "7.4.*",
         "symfony/yaml": "7.4.*",
+        "textalk/websocket": "^1.6",
         "twig/twig": "^3.30"
     },
     "require-dev": {
