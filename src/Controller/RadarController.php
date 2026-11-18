@@ -1750,12 +1750,381 @@ class RadarController extends AbstractController
     public function ships(): JsonResponse
     {
         $file = $this->getParameter('kernel.project_dir') . '/var/ais_ships.json';
-        if (!file_exists($file)) {
-            return new JsonResponse([]);
+        $ships = [];
+
+        if (is_file($file)) {
+            $ships = json_decode((string)@file_get_contents($file), true) ?? [];
         }
-        return new JsonResponse(json_decode(file_get_contents($file), true) ?? []);
+
+        // Ако WebSocket демонът в Render ещё не е напълнил файла или данните са по-стари от 20 сек,
+        // самият сървър на Render тегли корабите автономно по HTTP!
+        if (empty($ships) || !is_file($file) || (time() - (int)@filemtime($file)) > 20) {
+            $ships = $this->fetchLiveBlackSeaShipsHttp($file, is_array($ships) ? $ships : []);
+        }
+
+        return new JsonResponse(array_values($ships));
     }
 
+    private function fetchLiveBlackSeaShipsHttp(string $cacheFile, array $existingList = []): array
+    {
+        $now = time();
+        $shipsMap = [];
+
+        // Пазим корабите в паметта за 45 минути, за да работи детекторът за изчезнал сигнал в ход
+        foreach ($existingList as $s) {
+            if (!empty($s['mmsi']) && ($now - (int)($s['lastSeen'] ?? 0)) <= 2700) {
+                $shipsMap[(string)$s['mmsi']] = $s;
+            }
+        }
+
+        $ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
+
+        // 100% сървърни HTTP източници за Черно море (работят директно от Render)
+        $providers = [
+            [
+                'name' => 'mst_blacksea_west',
+                'base' => 'mst_blacksea_west',
+                'url'  => 'https://www.myshiptracking.com/requests/vesselsonmaptemp.php?type=json&minlat=40.9&maxlat=46.6&minlon=27.2&maxlon=34.0&zoom=7&_=' . $now,
+                'headers' => [
+                    'User-Agent: ' . $ua,
+                    'Accept: application/json, text/plain, */*',
+                    'Referer: https://www.myshiptracking.com/ look',
+                    'X-Requested-With: XMLHttpRequest',
+                ],
+            ],
+            [
+                'name' => 'mst_blacksea_east',
+                'base' => 'mst_blacksea_east',
+                'url'  => 'https://www.myshiptracking.com/requests/vesselsonmaptemp.php?type=json&minlat=41.0&maxlat=46.8&minlon=34.0&maxlon=41.9&zoom=7&_=' . $now,
+                'headers' => [
+                    'User-Agent: ' . $ua,
+                    'Accept: application/json, text/plain, */*',
+                    'Referer: https://www.myshiptracking.com/',
+                    'X-Requested-With: XMLHttpRequest',
+                ],
+            ],
+            [
+                'name' => 'mp_blacksea',
+                'base' => 'mp_blacksea',
+                'url'  => 'https://ais.marineplan.com/location/2/locations.json?area=40.9,27.2;46.8,41.8&ver=2',
+                'headers' => [
+                    'User-Agent: ' . $ua,
+                    'Accept: application/json',
+                    'Origin: https://www.marineplan.com',
+                    'Referer: https://www.marineplan.com/',
+                ],
+            ],
+        ];
+
+        $responses = $this->curlFetchMany($providers);
+        $loadedCount = 0;
+
+        foreach ($responses as $name => $res) {
+            $code = (int)($res['code'] ?? 0);
+            $body = trim((string)($res['body'] ?? ''));
+
+            if ($code !== 200 || $body === '') {
+                error_log(sprintf('[SHIP PROVIDER] %s HTTP=%d EMPTY', $name, $code));
+                continue;
+            }
+
+            // Парсване на текстовия/табулиран поток от MyShipTracking
+            if (str_starts_with($name, 'mst_') && $body[0] !== '{' && $body[0] !== '[') {
+                $lines = preg_split('/\r\n|\r|\n/', $body);
+                foreach ($lines as $line) {
+                    $cols = explode("\t", trim($line));
+                    if (count($cols) < 6) continue;
+
+                    // В MST форматът обикновено е: TYPE \t MMSI \t LAT \t LON \t SPEED \t COURSE \t NAME...
+                    // Проверяваме дали колона 0 или колона 1 е 9-цифреният MMSI
+                    if (strlen(trim($cols[1] ?? '')) === 9 && is_numeric($cols[1])) {
+                        $sType = (int)$cols[0];
+                        $mmsi  = trim($cols[1]);
+                        $lat   = (float)$cols[2];
+                        $lon   = (float)$cols[3];
+                        $sog   = (float)$cols[4];
+                        $cog   = (float)$cols[5];
+                        $sName = strtoupper(trim($cols[6] ?? '')) ?: "MMSI {$mmsi}";
+                    } else {
+                        $mmsi  = trim($cols[0]);
+                        $lat   = (float)($cols[1] ?? 0);
+                        $lon   = (float)($cols[2] ?? 0);
+                        $cog   = (float)($cols[3] ?? 0);
+                        $sog   = (float)($cols[4] ?? 0);
+                        $sName = strtoupper(trim($cols[5] ?? '')) ?: "MMSI {$mmsi}";
+                        $sType = (int)($cols[6] ?? 70);
+                    }
+
+                    if ($mmsi === '' || $lat < 40.5 || $lat > 47.2 || $lon < 26.5 || $lon > 42.2) {
+                        continue;
+                    }
+
+                    $prev = $shipsMap[$mmsi] ?? null;
+                    $maxSog = $prev ? (float)($prev['maxRecentSog'] ?? 0) : 0.0;
+                    if ($sog > 4.5) {
+                        $maxSog = max($maxSog, $sog);
+                    }
+
+                    $shipsMap[$mmsi] = [
+                        'mmsi'         => $mmsi,
+                        'name'         => $sName,
+                        'lat'          => $lat,
+                        'lon'          => $lon,
+                        'sog'          => $sog,
+                        'maxRecentSog' => $maxSog,
+                        'cog'          => $cog,
+                        'rot'          => 0.0,
+                        'heading'      => (int)$cog,
+                        'navStatus'    => $sog < 0.4 ? 1 : 0,
+                        'shipType'     => $sType > 0 ? $sType : 70,
+                        'callsign'     => $prev['callsign'] ?? '',
+                        'imo'          => $prev['imo'] ?? 0,
+                        'destination'  => $prev['destination'] ?? '',
+                        'draught'      => $prev['draught'] ?? 0.0,
+                        'length'       => $prev['length'] ?? 0,
+                        'width'        => $prev['width'] ?? 0,
+                        'safetyText'   => $prev['safetyText'] ?? '',
+                        'lastSeen'     => $now,
+                    ];
+                    $loadedCount++;
+                }
+                continue;
+            }
+
+            // Парсване на JSON поток (MarinePlan / JSON таблица)
+            $data = json_decode($body, true);
+            if (!is_array($data)) continue;
+
+            $reports = $data['reports'] ?? $data['vessels'] ?? $data['data'] ?? $data;
+            if (!is_array($reports)) continue;
+
+            foreach ($reports as $r) {
+                if (!is_array($r)) continue;
+
+                $lat = $r['point']['latitude'] ?? $r['lat'] ?? $r['LAT'] ?? $r['latitude'] ?? null;
+                $lon = $r['point']['longitude'] ?? $r['lon'] ?? $r['LON'] ?? $r['longitude'] ?? null;
+                if (!is_numeric($lat) || !is_numeric($lon)) continue;
+
+                $lat = (float)$lat;
+                $lon = (float)$lon;
+                if ($lat < 40.5 || $lat > 47.2 || $lon < 26.5 || $lon > 42.2) continue;
+
+                $mmsi = (string)($r['mmsi'] ?? $r['MMSI'] ?? $r['id'] ?? '');
+                if ($mmsi === '') continue;
+
+                $sName = strtoupper(trim((string)($r['boatName'] ?? $r['SHIPNAME'] ?? $r['name'] ?? ''))) ?: "MMSI {$mmsi}";
+                $sog   = isset($r['speedKmh']) ? round(((float)$r['speedKmh']) / 1.852, 1) : (float)($r['SPEED'] ?? $r['sog'] ?? 0);
+                $cog   = (float)($r['bearingDeg'] ?? $r['COURSE'] ?? $r['cog'] ?? 0);
+                $vType = (int)($r['vesselType'] ?? $r['TYPE'] ?? $r['type'] ?? 70);
+
+                $prev = $shipsMap[$mmsi] ?? null;
+                $maxSog = $prev ? (float)($prev['maxRecentSog'] ?? 0) : 0.0;
+                if ($sog > 4.5) {
+                    $maxSog = max($maxSog, $sog);
+                }
+
+                $shipsMap[$mmsi] = [
+                    'mmsi'         => $mmsi,
+                    'name'         => $sName,
+                    'lat'          => $lat,
+                    'lon'          => $lon,
+                    'sog'          => $sog,
+                    'maxRecentSog' => $maxSog,
+                    'cog'          => $cog,
+                    'rot'          => 0.0,
+                    'heading'      => (int)$cog,
+                    'navStatus'    => (int)($r['navStatus'] ?? ($sog < 0.4 ? 1 : 0)),
+                    'shipType'     => $vType,
+                    'callsign'     => trim((string)($r['callSign'] ?? $prev['callsign'] ?? '')),
+                    'imo'          => (int)($r['imo'] ?? $prev['imo'] ?? 0),
+                    'destination'  => trim((string)($r['destination'] ?? $r['DESTINATION'] ?? $prev['destination'] ?? '')),
+                    'draught'      => (float)($r['draughtMeters'] ?? $prev['draught'] ?? 0),
+                    'length'       => (int)($r['lengthMeters'] ?? $prev['length'] ?? 0),
+                    'width'        => (int)($r['widthMeters'] ?? $prev['width'] ?? 0),
+                    'safetyText'   => '',
+                    'lastSeen'     => $now,
+                ];
+                $loadedCount++;
+            }
+        }
+
+        error_log(sprintf('[SHIPS FINAL] LOADED=%d TOTAL_CACHED=%d', $loadedCount, count($shipsMap)));
+
+        if (!empty($shipsMap)) {
+            @file_put_contents($cacheFile, json_encode(array_values($shipsMap), JSON_UNESCAPED_UNICODE), LOCK_EX);
+        }
+
+        return array_values($shipsMap);
+    }
+    #[Route('/api/ships-push', name: 'api_ships_push', methods: ['POST'])]
+    public function shipsPush(Request $request): JsonResponse
+    {
+        $data = json_decode($request->getContent(), true);
+        if (is_array($data) && count($data) > 0) {
+            $file = $this->getParameter('kernel.project_dir') . '/var/ais_ships.json';
+            @file_put_contents($file, json_encode(array_values($data), JSON_UNESCAPED_UNICODE), LOCK_EX);
+            return new JsonResponse(['ok' => true, 'count' => count($data)]);
+        }
+        return new JsonResponse(['ok' => false], 400);
+    }
+
+    private function fetchLiveBlackSeaShipsHttp1(string $cacheFile, array $existingList = []): array
+    {
+        $now = time();
+        $shipsMap = [];
+        foreach ($existingList as $s) {
+            if (!empty($s['mmsi']) && ($now - (int)($s['lastSeen'] ?? 0)) <= 1800) {
+                $shipsMap[(string)$s['mmsi']] = $s;
+            }
+        }
+
+        // Директни HTTP фийдове (точно като fr24-blacksea за самолетите) — работят от Render без нужда от локален компютър!
+        $providers = [
+            [
+                'name' => 'sx_blacksea',
+                'base' => 'sx_blacksea',
+                'url'  => 'https://www.shipxplorer.com/data/list?aba=40.8,26.8,46.9,41.9&zoom=7',
+                'headers' => [
+                    'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36',
+                    'Accept: application/json, text/javascript, */*; q=0.01',
+                    'Referer: https://www.shipxplorer.com/',
+                    'X-Requested-With: XMLHttpRequest',
+                ],
+            ],
+            [
+                'name' => 'rb_marine_bs',
+                'base' => 'rb_marine_bs',
+                'url'  => 'https://www.radarbox.com/data/ships?aba=40.8,26.8,46.9,41.9&zoom=7',
+                'headers' => [
+                    'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36',
+                    'Accept: application/json',
+                    'Referer: https://www.radarbox.com/',
+                ],
+            ],
+            [
+                'name' => 'vf_bs_west',
+                'base' => 'vf_bs_west',
+                'url'  => 'https://www.myshiptracking.com/requests/vesselsonmaptemp.php?type=json&minlat=40.9&maxlat=46.8&minlon=27.2&maxlon=41.8&zoom=8',
+                'headers' => [
+                    'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36',
+                    'Accept: application/json, text/plain, */*',
+                    'Referer: https://www.myshiptracking.com/',
+                ],
+            ],
+        ];
+
+        $responses = $this->curlFetchMany($providers);
+
+        foreach ($responses as $name => $res) {
+            $code = (int)($res['code'] ?? 0);
+            $body = (string)($res['body'] ?? '');
+            error_log(sprintf('[AIS HTTP PROVIDER] %s HTTP=%d LEN=%d', $name, $code, strlen($body)));
+
+            if ($code !== 200 || $body === '') {
+                continue;
+            }
+
+            // 1. Ако отговорът е табличен/текстов от MyShipTracking
+            if ($name === 'vf_bs_west' && $body[0] !== '{' && $body[0] !== '[') {
+                $lines = explode("\n", trim($body));
+                foreach ($lines as $line) {
+                    $cols = explode("\t", $line);
+                    if (count($cols) < 6) continue;
+                    $mmsi = trim($cols[0]);
+                    $lat  = (float)($cols[1] ?? 0);
+                    $lon  = (float)($cols[2] ?? 0);
+                    $cog  = (float)($cols[3] ?? 0);
+                    $sog  = (float)($cols[4] ?? 0);
+                    $sName = strtoupper(trim($cols[5] ?? '')) ?: "MMSI {$mmsi}";
+                    $sType = (int)($cols[6] ?? 70);
+
+                    if ($mmsi === '' || $lat < 40.0 || $lat > 47.5 || $lon < 26.0 || $lon > 42.5) continue;
+
+                    $shipsMap[$mmsi] = [
+                        'mmsi'         => $mmsi,
+                        'name'         => $sName,
+                        'lat'          => $lat,
+                        'lon'          => $lon,
+                        'sog'          => $sog,
+                        'maxRecentSog' => $sog,
+                        'cog'          => $cog,
+                        'rot'          => 0.0,
+                        'heading'      => (int)$cog,
+                        'navStatus'    => $sog < 0.4 ? 1 : 0,
+                        'shipType'     => $sType,
+                        'callsign'     => '',
+                        'imo'          => 0,
+                        'destination'  => '',
+                        'draught'      => 0.0,
+                        'length'       => 0,
+                        'width'        => 0,
+                        'safetyText'   => '',
+                        'lastSeen'     => $now,
+                    ];
+                }
+                continue;
+            }
+
+            // 2. JSON формат от ShipXplorer / RadarBox Marine
+            $data = json_decode($body, true);
+            if (!is_array($data)) continue;
+
+            $list = $data['ships'] ?? $data['vessels'] ?? $data['list'] ?? $data['data'] ?? $data;
+            if (!is_array($list)) continue;
+
+            foreach ($list as $key => $r) {
+                if (!is_array($r)) continue;
+
+                // ShipXplorer връща или асоциативен масив, или компактен индексиран масив (точно като FR24)
+                $mmsi = (string)($r['mmsi'] ?? $r['MMSI'] ?? $r[0] ?? $key);
+                $lat  = $r['lat'] ?? $r['latitude'] ?? $r[1] ?? $r[2] ?? null;
+                $lon  = $r['lon'] ?? $r['lng'] ?? $r['longitude'] ?? $r[2] ?? $r[3] ?? null;
+
+                if (!is_numeric($lat) || !is_numeric($lon)) continue;
+                $lat = (float)$lat;
+                $lon = (float)$lon;
+                if ($lat < 40.0 || $lat > 47.5 || $lon < 26.0 || $lon > 42.5) continue;
+
+                $sName = strtoupper(trim((string)($r['name'] ?? $r['shipname'] ?? $r[4] ?? ''))) ?: "MMSI {$mmsi}";
+                $cog   = (float)($r['cog'] ?? $r['course'] ?? $r['hdg'] ?? $r[5] ?? 0);
+                $sog   = (float)($r['sog'] ?? $r['speed'] ?? $r[6] ?? 0);
+                $sType = (int)($r['type'] ?? $r['shiptype'] ?? 70);
+                $dest  = trim((string)($r['dest'] ?? $r['destination'] ?? ''));
+
+                if ($mmsi === '' || strlen($mmsi) < 6) {
+                    $mmsi = (string)abs(crc32($sName . $lat . $lon));
+                }
+
+                $shipsMap[$mmsi] = [
+                    'mmsi'         => $mmsi,
+                    'name'         => $sName,
+                    'lat'          => $lat,
+                    'lon'          => $lon,
+                    'sog'          => $sog,
+                    'maxRecentSog' => $sog,
+                    'cog'          => $cog,
+                    'rot'          => 0.0,
+                    'heading'      => (int)$cog,
+                    'navStatus'    => $sog < 0.4 ? 1 : 0,
+                    'shipType'     => $sType,
+                    'callsign'     => trim((string)($r['callsign'] ?? '')),
+                    'imo'          => (int)($r['imo'] ?? 0),
+                    'destination'  => $dest,
+                    'draught'      => (float)($r['draught'] ?? 0),
+                    'length'       => (int)($r['length'] ?? 0),
+                    'width'        => (int)($r['width'] ?? 0),
+                    'safetyText'   => '',
+                    'lastSeen'     => $now,
+                ];
+            }
+        }
+
+        if (!empty($shipsMap)) {
+            @file_put_contents($cacheFile, json_encode(array_values($shipsMap), JSON_UNESCAPED_UNICODE), LOCK_EX);
+        }
+
+        return array_values($shipsMap);
+    }
     #[Route('/api/osint-feed', name: 'api_osint_feed', methods: ['GET'])]
     public function osintFeed(Request $request): JsonResponse
     {
