@@ -236,6 +236,21 @@ class AisStreamCommand extends Command
                         $now = time();
 
                         if ($now - $lastSave >= 2) {
+                            // Сливаме с диска, за да не изтрием кораби от HTTP фийда или външен push
+                            if (is_file($cacheFile)) {
+                                $diskShips = json_decode((string)@file_get_contents($cacheFile), true);
+                                if (is_array($diskShips)) {
+                                    foreach ($diskShips as $ds) {
+                                        if (!is_array($ds) || empty($ds['mmsi'])) continue;
+                                        $dMmsi = (string)$ds['mmsi'];
+                                        $dSeen = (int)($ds['lastSeen'] ?? 0);
+                                        if (($now - $dSeen) <= 2700 && (!isset($shipsMap[$dMmsi]) || $dSeen > (int)($shipsMap[$dMmsi]['lastSeen'] ?? 0))) {
+                                            $shipsMap[$dMmsi] = $ds;
+                                        }
+                                    }
+                                }
+                            }
+
                             $shipsMap = array_filter(
                                 $shipsMap,
                                 static fn(array $s): bool => ($now - (int)($s['lastSeen'] ?? 0)) <= 2700
