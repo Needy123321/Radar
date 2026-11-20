@@ -663,20 +663,25 @@
         </div>
     </div>
 
-    <!-- Чекмедже със сводките -->
-    <div id="osintMobileDrawer" style="
-        display:none;
-        flex-direction:column;
-        gap:6px;
-        background:rgba(15, 23, 42, 0.98);
-        border:1.5px solid #ef4444;
-        border-radius:8px;
-        padding:8px;
-        margin-top:6px;
-        max-height:220px;
-        overflow-y:auto;
-        box-shadow:0 8px 25px rgba(0,0,0,0.85);
-    "></div>
+    <!-- Чекмедже със сводките (свободно скролиране надолу без да мести картата) -->
+    <div id="osintMobileDrawer"
+         onwheel="event.stopPropagation();"
+         ontouchmove="event.stopPropagation();"
+         style="
+            display:none;
+            flex-direction:column;
+            gap:6px;
+            background:rgba(15, 23, 42, 0.98);
+            border:1.5px solid #ef4444;
+            border-radius:8px;
+            padding:8px;
+            margin-top:6px;
+            max-height:58vh;
+            overflow-y:auto;
+            overscroll-behavior:contain;
+            -webkit-overflow-scrolling:touch;
+            box-shadow:0 8px 25px rgba(0,0,0,0.85);
+         "></div>
 
     <div class="pinned-header">
         <span id="trackCounterInfo">🎯 МАРКИРАНИ: 0/21 | Следв: #1</span>
@@ -1926,10 +1931,12 @@
         });
 
         if (closest) {
+            if (typeof window.closeAllShipPopups === 'function') window.closeAllShipPopups();
             selectedPlaneId = closest.id;
             updateInfoPanelHTML(closest);
         } else {
             closeInfoPanel();
+            if (typeof window.closeAllShipPopups === 'function') window.closeAllShipPopups();
         }
     }
 
@@ -1964,6 +1971,9 @@
 
     mapEl.addEventListener('touchend', function (e) {
         if (!touchMoved && e.changedTouches.length === 1) {
+            if (e.target && e.target.closest && (e.target.closest('.leaflet-popup') || e.target.closest('.ais-ship-marker') || e.target.closest('.osint-tactical-marker'))) {
+                return;
+            }
             lastTouchTime = Date.now();
             const rect = mapEl.getBoundingClientRect();
             const x = e.changedTouches[0].clientX - rect.left;
@@ -2464,7 +2474,7 @@
     setInterval(() => fetchPlanes(false), 5000);
     setInterval(syncHistoryMeta, 15000);
 
-    // === ПЪЛЕН ТАКТИЧЕСКИ OSINT МОДУЛ (ВЕКТОРИ + ЗВУК + СНИМКИ НА САМОЛЕТИ) ===
+    // === ПЪЛЕН ТАКТИЧЕСКИ OSINT МОДУЛ (ВЕКТОРИ + ЗВУК + СКРОЛВАНЕ) ===
     function resolveLeafletMap() {
         if (typeof map !== 'undefined' && map && typeof map.setView === 'function') return map;
         if (window.map && typeof window.map.setView === 'function') return window.map;
@@ -2525,6 +2535,8 @@
         drawerInit.style.pointerEvents = 'auto';
         drawerInit.style.position = 'relative';
         drawerInit.style.zIndex = '99999';
+        L.DomEvent.disableScrollPropagation(drawerInit);
+        L.DomEvent.disableClickPropagation(drawerInit);
     }
 
     window.setOsintDrawerState = function (open) {
@@ -2612,10 +2624,10 @@
                 width:100%; padding:8px; background:rgba(51,65,85,0.98);
                 border:1px solid #64748b; border-radius:5px; color:#f8fafc;
                 font-family:monospace; font-size:11px; font-weight:bold;
-                cursor:pointer; pointer-events:auto !important; position:relative; z-index:100000;
+                cursor:pointer; pointer-events:auto !important; position:sticky; top:0; z-index:100001;
             `;
             closeBtn.textContent = '▲ ПРИБЕРИ OSINT СПИСЪКА ▲';
-            closeBtn.onpointerdown = function (ev) {
+            closeBtn.onclick = function (ev) {
                 ev.preventDefault();
                 ev.stopPropagation();
                 window.setOsintDrawerState(false);
@@ -2715,7 +2727,7 @@
                     padding:8px 10px; font-family:monospace; font-size:12px;
                     color:#f8fafc; cursor:pointer; line-height:1.35;
                     user-select:none; pointer-events:auto !important;
-                    position:relative; z-index:100000;
+                    flex-shrink:0;
                 `;
                 cardBtn.innerHTML = `
                     <div style="display:flex; justify-content:space-between; align-items:center; color:#fde047; font-weight:bold; margin-bottom:4px; pointer-events:none;">
@@ -2725,7 +2737,7 @@
                     <div style="color:#e2e8f0; white-space:normal; pointer-events:none;">${alert.text}</div>
                 `;
 
-                cardBtn.onpointerdown = function (ev) {
+                cardBtn.onclick = function (ev) {
                     window.jumpToOsintTarget(lat, lon, idx, ev);
                 };
 
@@ -2739,24 +2751,50 @@
     fetchAndRenderOsintAlerts();
     setInterval(fetchAndRenderOsintAlerts, 60000);
 
-    // === МОРСКИ AIS РАДАР (АВТОМАТИЧЕН АНАЛИЗ НА КОДОВЕ ЗА БЕДСТВИЕ, ЗАГУБА НА СИГНАЛ И УДАР ОТ ДРОН) ===
+    // === МОРСКИ AIS РАДАР (САМО ЧЕРНО МОРЕ + ОКОНЧАТЕЛНО ЗАТВАРЯНЕ НА АЛАРМИ + ЗАТВАРЯНЕ ПРИ КЛИК ОТСТРАНИ) ===
     let aisEnabled = true;
     let shipsOnlyMode = false;
     let aisPollTimer = null;
     const aisLayerGroup = L.layerGroup().addTo(map);
     let latestShipsList = [];
     let latestOsintAlertsForShips = [];
+
+    // Запазваме вече видяните и затворени аларми в сесията, за да не изскачат отново
     const alertedStrikeMmsi = new Set();
+    const dismissedShipAlerts = new Set();
+    try {
+        const savedDismissed = JSON.parse(sessionStorage.getItem('radar_dismissed_ship_alerts') || '[]');
+        if (Array.isArray(savedDismissed)) {
+            savedDismissed.forEach(k => dismissedShipAlerts.add(String(k)));
+        }
+    } catch (e) {}
+
+    window.dismissShipAlertBanner = function (alertKey) {
+        if (alertKey) {
+            dismissedShipAlerts.add(String(alertKey));
+            try {
+                sessionStorage.setItem('radar_dismissed_ship_alerts', JSON.stringify(Array.from(dismissedShipAlerts)));
+            } catch (e) {}
+        }
+        const banner = document.getElementById('shipStrikeAlertBanner');
+        if (banner) {
+            banner.style.display = 'none';
+            banner.dataset.activeKey = '';
+        }
+    };
+
+    // Географски филтър: САМО акваторията на Черно море (изключва Мраморно море, Босфора и Истанбул)
+    function isInBlackSeaOnly(lat, lon) {
+        if (lat < 41.22 || lat > 47.0) return false;
+        if (lon < 27.35 || lon > 41.95) return false;
+        if (lat < 42.10 && lon < 27.95) return false;
+        return true;
+    }
 
     (function injectShipStrikeStyles() {
         const st = document.createElement('style');
         st.textContent = `
-            @keyframes shipStrikePulse {
-                0%   { transform: scale(1);   filter: drop-shadow(0 0 4px #ff0000); }
-                50%  { transform: scale(1.30); filter: drop-shadow(0 0 16px #ff0000) drop-shadow(0 0 26px #ffaa00); }
-                100% { transform: scale(1);   filter: drop-shadow(0 0 4px #ff0000); }
-            }
-           .ship-struck-anim {
+            .ship-struck-anim {
                 animation: none !important;
                 filter: drop-shadow(0 0 6px #ff0000);
             }
@@ -2856,7 +2894,6 @@
         return '🟢 В ход на двигател (Код 0)';
     }
 
-    // === АВТОМАТИЧЕН АНАЛИЗАТОР НА АВАРИЙНИ КОДОВЕ И УДАР ОТ ДРОН ===
     function analyzeShipTelemetryAndDistress(ship, nowSec) {
         const mmsi = String(ship.mmsi || '');
         const lat = parseFloat(ship.lat);
@@ -2868,7 +2905,6 @@
         const dest = String(ship.destination || '').toUpperCase();
         const silenceSec = Math.max(0, nowSec - parseInt(ship.lastSeen || nowSec, 10));
 
-        // 1. Официален AIS код за бедствие: Статус 14 (AIS-SART) или MMSI на спасителен радиобуй (970/972/974)
         if (navSt === 14 || mmsi.startsWith('970') || mmsi.startsWith('972') || mmsi.startsWith('974')) {
             return {
                 level: 'STRIKE',
@@ -2877,7 +2913,6 @@
             };
         }
 
-        // 2. Текстово съобщение за бедствие по AIS канал (Message 12/14) или кодиран SOS в Destination
         if (safetyText !== '' || /MAYDAY|SOS|DRONE|ATTACK|STRIKE|FIRE|EXPLOS|SINK|HELP|UAV/.test(dest)) {
             return {
                 level: 'STRIKE',
@@ -2888,7 +2923,6 @@
             };
         }
 
-        // 3. Официален AIS Код 2 (Not under command - Неуправляем кораб след авария)
         if (navSt === 2) {
             return {
                 level: 'STRIKE',
@@ -2897,7 +2931,6 @@
             };
         }
 
-        // 4. Внезапно спиране в открито море след нормален ход + корелация с OSINT дрон сводки
         for (const al of latestOsintAlertsForShips) {
             const aLat = parseFloat(al.lat);
             const aLon = parseFloat(al.lon);
@@ -2915,7 +2948,6 @@
             }
         }
 
-        // 5. Изчезнал от радара в ход (Предавал е със скорост > 5 kn и изведнъж транспондерът прекъсва за > 6 мин)
         if (silenceSec >= 360 && sog >= 5.0 && navSt === 0) {
             const mins = Math.round(silenceSec / 60);
             return {
@@ -2925,7 +2957,6 @@
             };
         }
 
-        // 6. Рязка загуба на ход в открито море (движил се е с > 6 kn и пада под 0.5 kn без да е на котва/пристанище)
         if (maxRecentSog >= 6.0 && sog < 0.5 && navSt === 0) {
             return {
                 level: 'LOST',
@@ -2940,11 +2971,21 @@
     function triggerStrikeBanner(ship, statusObj) {
         const banner = document.getElementById('shipStrikeAlertBanner');
         if (!banner) return;
+
         const mmsi = String(ship.mmsi);
-        if (!alertedStrikeMmsi.has(mmsi)) {
-            alertedStrikeMmsi.add(mmsi);
+        const alertKey = `${mmsi}_${statusObj.badge}`;
+
+        // Ако потребителят вече е натиснал ОК / ✕ за тази аларма — не я показваме отново!
+        if (dismissedShipAlerts.has(alertKey)) {
+            return;
+        }
+
+        if (!alertedStrikeMmsi.has(alertKey)) {
+            alertedStrikeMmsi.add(alertKey);
             playShipStrikeAlarm();
         }
+
+        banner.dataset.activeKey = alertKey;
         banner.style.display = 'flex';
         banner.innerHTML = `
             <span style="font-size:18px;">💥🚨</span>
@@ -2952,8 +2993,8 @@
                 <div style="color:#fde047; font-size:12.5px;">АВТОМАТИЧЕН СИГНАЛ: КОРАБ "${ship.name}" (MMSI: ${ship.mmsi}) — ${statusObj.badge}</div>
                 <div style="font-size:10.5px; color:#fee2e2;">${statusObj.reason}</div>
             </div>
-            <button type="button" onclick="map.flyTo([${ship.lat}, ${ship.lon}], 11, {animate:true, duration:0.8});" style="background:#fde047; color:#000; border:none; padding:4px 8px; border-radius:4px; font-weight:bold; cursor:pointer; font-size:10.5px;">🎯 ВИЖ КОРАБА</button>
-            <button type="button" onclick="document.getElementById('shipStrikeAlertBanner').style.display='none';" style="background:transparent; color:#fff; border:1px solid #fca5a5; padding:3px 7px; border-radius:4px; cursor:pointer;">✕</button>
+            <button type="button" onclick="map.flyTo([${ship.lat}, ${ship.lon}], 11, {animate:true, duration:0.8});" style="background:#fde047; color:#000; border:none; padding:5px 9px; border-radius:4px; font-weight:bold; cursor:pointer; font-size:10.5px; white-space:nowrap;">🎯 ВИЖ КОРАБА</button>
+            <button type="button" onclick="dismissShipAlertBanner('${alertKey.replace(/'/g, "\\'")}')" style="background:#16a34a; color:#fff; border:1px solid #bbf7d0; padding:5px 10px; border-radius:4px; font-weight:bold; cursor:pointer; font-size:11px; white-space:nowrap;">✓ ОК</button>
         `;
     }
 
@@ -3010,10 +3051,23 @@
         }
     }
 
-    // Пазим маркерите по MMSI, за да НЕ се затваря балонът при опресняване на всеки 3 сек!
     const shipMarkersByMmsi = new Map();
     const shipVectorsByMmsi = new Map();
     let openedShipMmsi = null;
+
+    // Затваряне на отворения корабен балон при клик отстрани на картата
+    window.closeAllShipPopups = function () {
+        if (openedShipMmsi) {
+            const m = shipMarkersByMmsi.get(openedShipMmsi);
+            if (m) m.closePopup();
+            openedShipMmsi = null;
+        }
+        shipMarkersByMmsi.forEach(marker => {
+            if (marker.isPopupOpen && marker.isPopupOpen()) {
+                marker.closePopup();
+            }
+        });
+    };
 
     function disconnectAisStream() {
         if (aisPollTimer) {
@@ -3024,6 +3078,8 @@
         shipMarkersByMmsi.clear();
         shipVectorsByMmsi.clear();
         openedShipMmsi = null;
+        const countEl = document.getElementById('shipsCount');
+        if (countEl) countEl.textContent = '0';
     }
 
     function renderShipsOnMap(ships) {
@@ -3042,6 +3098,9 @@
             const lat = parseFloat(ship.lat);
             const lon = parseFloat(ship.lon);
             if (!mmsi || isNaN(lat) || isNaN(lon)) return;
+
+            // Показваме кораби САМО в Черно море
+            if (!isInBlackSeaOnly(lat, lon)) return;
 
             const ageSec = ship.lastSeen ? Math.max(0, nowSec - parseInt(ship.lastSeen, 10)) : 0;
             const statusObj = analyzeShipTelemetryAndDistress(ship, nowSec);
@@ -3072,7 +3131,6 @@
                 : (statusObj.level === 'LOST' ? '#f59e0b' : typeInfo.color);
             const strokeColor = isAlert ? '#fde047' : '#08121e';
 
-            // 1. Обновяване на курсовата линия пред носа на кораба
             let oldVec = shipVectorsByMmsi.get(mmsi);
             if (sog >= 1.0 && !isAlert) {
                 const vecDistKm = Math.min(12, Math.max(2.5, sog * 0.45));
@@ -3096,7 +3154,6 @@
                 shipVectorsByMmsi.delete(mmsi);
             }
 
-            // 2. Икона на кораба
             const shipSvgHtml = `
                 <div class="${isAlert ? 'ship-struck-anim' : ''}" style="position:relative; width:24px; height:24px; display:flex; align-items:center; justify-content:center; opacity:${statusObj.level === 'LOST' ? '0.88' : '1'};">
                     <svg viewBox="0 0 24 24" width="22" height="22" style="transform: rotate(${cog}deg); filter: drop-shadow(0 0 3px #000);">
@@ -3168,7 +3225,6 @@
                 </div>
             `;
 
-            // 3. Ако маркерът вече съществува — само го местим и обновяваме текста, БЕЗ да затваряме балона!
             let existingMarker = shipMarkersByMmsi.get(mmsi);
             if (existingMarker) {
                 existingMarker.setLatLng([lat, lon]);
@@ -3190,7 +3246,7 @@
                     if (ev && ev.originalEvent) {
                         ev.originalEvent.stopPropagation();
                     }
-                    // Затваряме стария отворен кораб, ако сме цъкнали на нов
+                    closeInfoPanel();
                     if (openedShipMmsi && openedShipMmsi !== mmsi) {
                         const prevM = shipMarkersByMmsi.get(openedShipMmsi);
                         if (prevM) prevM.closePopup();
@@ -3207,7 +3263,9 @@
             }
         });
 
-        // 4. Изчистваме само кораби, които вече са отпаднали от активния списък
+        const countEl = document.getElementById('shipsCount');
+        if (countEl) countEl.textContent = activeMmsiInCycle.size;
+
         shipMarkersByMmsi.forEach((marker, mmsi) => {
             if (!activeMmsiInCycle.has(mmsi)) {
                 aisLayerGroup.removeLayer(marker);
@@ -3229,9 +3287,6 @@
             if (!Array.isArray(ships)) return;
 
             latestShipsList = ships;
-
-            const countEl = document.getElementById('shipsCount');
-            if (countEl) countEl.textContent = ships.length;
 
             try {
                 const osRes = await fetch('/api/osint-feed');
