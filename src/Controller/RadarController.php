@@ -435,7 +435,28 @@ class RadarController extends AbstractController
             }
 
             @file_put_contents($quotaCacheFile, json_encode($quotaPlanesBuffer, JSON_UNESCAPED_UNICODE), LOCK_EX);
+            // Филтър за „замръзнали“ фантоми (като увиснали записи от intelsky-mil)
+            $frozenTrackFile = $cacheDir . '/radar_frozen_check.json';
+            $frozenState = is_file($frozenTrackFile) ? (json_decode((string)@file_get_contents($frozenTrackFile), true) ?: []) : [];
+            $nextFrozenState = [];
 
+            foreach ($planesMap as $id => $p) {
+                $posSig = round((float)$p['lat'], 4) . '_' . round((float)$p['lon'], 4);
+                $prevEntry = $frozenState[$id] ?? null;
+
+                if (is_array($prevEntry) && ($prevEntry['sig'] ?? '') === $posSig) {
+                    $stuckSince = (int)($prevEntry['since'] ?? $now);
+                    $nextFrozenState[$id] = ['sig' => $posSig, 'since' => $stuckSince];
+
+                    // Ако самолетът не е мръднал нито метър повече от 90 секунди -> изхвърляме го!
+                    if ($this->sub($now, $stuckSince) > 90) {
+                        unset($planesMap[$id]);
+                    }
+                } else {
+                    $nextFrozenState[$id] = ['sig' => $posSig, 'since' => $now];
+                }
+            }
+            @file_put_contents($frozenTrackFile, json_encode($nextFrozenState), LOCK_EX);
             foreach ($planesMap as &$plane) {
                 unset($plane['_source'], $plane['_bufferedAt']);
             }
