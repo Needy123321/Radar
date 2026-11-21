@@ -441,15 +441,18 @@ class RadarController extends AbstractController
             $nextFrozenState = [];
 
             foreach ($planesMap as $id => $p) {
-                $posSig = round((float)$p['lat'], 4) . '_' . round((float)$p['lon'], 4);
+                $rLat = $p['_rawLat'] ?? round((float)$p['lat'], 4);
+                $rLon = $p['_rawLon'] ?? round((float)$p['lon'], 4);
+                $posSig = $rLat . '_' . $rLon;
                 $prevEntry = $frozenState[$id] ?? null;
 
                 if (is_array($prevEntry) && ($prevEntry['sig'] ?? '') === $posSig) {
                     $stuckSince = (int)($prevEntry['since'] ?? $now);
                     $nextFrozenState[$id] = ['sig' => $posSig, 'since' => $stuckSince];
 
-                    // Ако самолетът не е мръднал нито метър повече от 90 секунди -> изхвърляме го!
-                    if ($this->sub($now, $stuckSince) > 90) {
+                    // За intelsky-mil махаме замръзналия фантом след 2 мин (120 сек), за останалите военни — след 10 мин (600 сек)
+                    $maxStuckSec = (($p['_source'] ?? '') === 'intelsky-mil') ? 120 : 600;
+                    if ($this->sub($now, $stuckSince) > $maxStuckSec) {
                         unset($planesMap[$id]);
                     }
                 } else {
@@ -457,11 +460,11 @@ class RadarController extends AbstractController
                 }
             }
             @file_put_contents($frozenTrackFile, json_encode($nextFrozenState), LOCK_EX);
+
             foreach ($planesMap as &$plane) {
-                unset($plane['_source'], $plane['_bufferedAt']);
+                unset($plane['_source'], $plane['_bufferedAt'], $plane['_rawLat'], $plane['_rawLon']);
             }
             unset($plane);
-
             $finalPlanes = array_values($planesMap);
 
             if ($finalPlanes === []) {
@@ -1454,6 +1457,9 @@ class RadarController extends AbstractController
                 'mach' => $mach,
                 'baroRate' => $baroRate,
                 'gpsJammed' => $gpsJammed,
+                // В края на parseAdsbV2List() вътре в $planesMap[$id] = [ ... ]:
+                '_rawLat' => round((float)($ac['lat'] ?? $ac['latitude'] ?? ($ac['lastPosition']['lat'] ?? 0)), 4),
+                '_rawLon' => round((float)($ac['lon'] ?? $ac['longitude'] ?? ($ac['lastPosition']['lon'] ?? 0)), 4),
                 '_source' => $source,
             ];
         }
