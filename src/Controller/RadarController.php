@@ -436,31 +436,48 @@ class RadarController extends AbstractController
 
             @file_put_contents($quotaCacheFile, json_encode($quotaPlanesBuffer, JSON_UNESCAPED_UNICODE), LOCK_EX);
             // Филтър за „замръзнали“ фантоми (като увиснали записи от intelsky-mil)
+            // 5.5. Изчистване на „замръзнали“ фантоми (като увисналия RCH5052 от intelsky-mil)
+            // Пазим историята 15 мин, за да НЕ се нулира таймерът, ако провайдърът пропусне 1 цикъл!
             $frozenTrackFile = $cacheDir . '/radar_frozen_check.json';
-            $frozenState = is_file($frozenTrackFile) ? (json_decode((string)@file_get_contents($frozenTrackFile), true) ?: []) : [];
-            $nextFrozenState = [];
+            $frozenState = is_file($frozenTrackFile)
+                ? (json_decode((string)@file_get_contents($frozenTrackFile), true) ?: [])
+                : [];
+
+            // Изчистваме само записи отпреди повече от 15 мин (900 сек)
+            foreach ($frozenState as $fId => $fData) {
+                if ($this->sub($now, (int)($fData['lastSeen'] ?? $now)) > 900) {
+                    unset($frozenState[$fId]);
+                }
+            }
 
             foreach ($planesMap as $id => $p) {
                 $rLat = $p['_rawLat'] ?? round((float)$p['lat'], 4);
                 $rLon = $p['_rawLon'] ?? round((float)$p['lon'], 4);
-                $posSig = $rLat . '_' . $rLon;
+                $posSig = $rLat . '_' . $rLon . '_' . (int)($p['altitude'] ?? 0);
                 $prevEntry = $frozenState[$id] ?? null;
 
                 if (is_array($prevEntry) && ($prevEntry['sig'] ?? '') === $posSig) {
                     $stuckSince = (int)($prevEntry['since'] ?? $now);
-                    $nextFrozenState[$id] = ['sig' => $posSig, 'since' => $stuckSince];
+                    $frozenState[$id] = [
+                        'sig'      => $posSig,
+                        'since'    => $stuckSince,
+                        'lastSeen' => $now,
+                    ];
 
-                    // За intelsky-mil махаме замръзналия фантом след 2 мин (120 сек), за останалите военни — след 10 мин (600 сек)
-                    $maxStuckSec = (($p['_source'] ?? '') === 'intelsky-mil') ? 120 : 600;
+                    // Ако е от intelsky-mil и стои на същото място/височина над 90 сек -> махаме фантома!
+                    $maxStuckSec = (($p['_source'] ?? '') === 'intelsky-mil') ? 90 : 600;
                     if ($this->sub($now, $stuckSince) > $maxStuckSec) {
                         unset($planesMap[$id]);
                     }
                 } else {
-                    $nextFrozenState[$id] = ['sig' => $posSig, 'since' => $now];
+                    $frozenState[$id] = [
+                        'sig'      => $posSig,
+                        'since'    => $now,
+                        'lastSeen' => $now,
+                    ];
                 }
             }
-            @file_put_contents($frozenTrackFile, json_encode($nextFrozenState), LOCK_EX);
-
+            @file_put_contents($frozenTrackFile, json_encode($frozenState), LOCK_EX);
             foreach ($planesMap as &$plane) {
                 unset($plane['_source'], $plane['_bufferedAt'], $plane['_rawLat'], $plane['_rawLon']);
             }
