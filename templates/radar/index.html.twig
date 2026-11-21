@@ -2751,7 +2751,7 @@
     fetchAndRenderOsintAlerts();
     setInterval(fetchAndRenderOsintAlerts, 60000);
 
-    // === МОРСКИ AIS РАДАР (САМО ЧЕРНО МОРЕ + ОКОНЧАТЕЛНО ЗАТВАРЯНЕ НА АЛАРМИ + ЗАТВАРЯНЕ ПРИ КЛИК ОТСТРАНИ) ===
+    // === МОРСКИ AIS РАДАР (САМО ЧЕРНО МОРЕ + 30-МИНУТНО САМОПОЧИСТВАНЕ НА АЛАРМИ + ЗАТВАРЯНЕ ПРИ КЛИК ОТСТРАНИ) ===
     let aisEnabled = true;
     let shipsOnlyMode = false;
     let aisPollTimer = null;
@@ -2759,21 +2759,43 @@
     let latestShipsList = [];
     let latestOsintAlertsForShips = [];
 
-    // Запазваме вече видяните и затворени аларми в сесията, за да не изскачат отново
+    // Пазим приетите/изтеклите аларми в localStorage за 30 минути (1800 сек)
+    const SHIP_ALERT_TTL_MS = 30 * 60 * 1000;
     const alertedStrikeMmsi = new Set();
-    const dismissedShipAlerts = new Set();
-    try {
-        const savedDismissed = JSON.parse(sessionStorage.getItem('radar_dismissed_ship_alerts') || '[]');
-        if (Array.isArray(savedDismissed)) {
-            savedDismissed.forEach(k => dismissedShipAlerts.add(String(k)));
+    let shipBannerAutoHideTimer = null;
+
+    function getActiveDismissedShipAlerts() {
+        const now = Date.now();
+        try {
+            const raw = JSON.parse(localStorage.getItem('radar_dismissed_ship_alerts_v2') || '{}');
+            const cleaned = {};
+            let changed = false;
+            for (const [k, expTs] of Object.entries(raw)) {
+                if (Number(expTs) > now) {
+                    cleaned[k] = Number(expTs);
+                } else {
+                    changed = true;
+                }
+            }
+            if (changed) {
+                localStorage.setItem('radar_dismissed_ship_alerts_v2', JSON.stringify(cleaned));
+            }
+            return cleaned;
+        } catch (e) {
+            return {};
         }
-    } catch (e) {}
+    }
 
     window.dismissShipAlertBanner = function (alertKey) {
+        if (shipBannerAutoHideTimer) {
+            clearTimeout(shipBannerAutoHideTimer);
+            shipBannerAutoHideTimer = null;
+        }
         if (alertKey) {
-            dismissedShipAlerts.add(String(alertKey));
             try {
-                sessionStorage.setItem('radar_dismissed_ship_alerts', JSON.stringify(Array.from(dismissedShipAlerts)));
+                const mapObj = getActiveDismissedShipAlerts();
+                mapObj[String(alertKey)] = Date.now() + SHIP_ALERT_TTL_MS;
+                localStorage.setItem('radar_dismissed_ship_alerts_v2', JSON.stringify(mapObj));
             } catch (e) {}
         }
         const banner = document.getElementById('shipStrikeAlertBanner');
@@ -2913,7 +2935,7 @@
             };
         }
 
-        if (safetyText !== '' || /MAYDAY|SOS|DRONE|ATTACK|STRIKE|FIRE|EXPLOS|SINK|HELP|UAV/.test(dest)) {
+        if (safetyText !== '' || /\b(MAYDAY|SOS|DRONE|ATTACK|STRIKE|FIRE|EXPLOS|SINK|HELP|UAV)\b/.test(dest)) {
             return {
                 level: 'STRIKE',
                 badge: '💥 СИГНАЛ ЗА АТАКА / БЕДСТВИЕ!',
@@ -2975,8 +2997,9 @@
         const mmsi = String(ship.mmsi);
         const alertKey = `${mmsi}_${statusObj.badge}`;
 
-        // Ако потребителят вече е натиснал ОК / ✕ за тази аларма — не я показваме отново!
-        if (dismissedShipAlerts.has(alertKey)) {
+        // Ако алармата е видяна/изтекла в последните 30 минути -> не я показваме!
+        const dismissedMap = getActiveDismissedShipAlerts();
+        if (dismissedMap[alertKey]) {
             return;
         }
 
@@ -2990,12 +3013,18 @@
         banner.innerHTML = `
             <span style="font-size:18px;">💥🚨</span>
             <div style="flex:1;">
-                <div style="color:#fde047; font-size:12.5px;">АВТОМАТИЧЕН СИГНАЛ: КОРАБ "${ship.name}" (MMSI: ${ship.mmsi}) — ${statusObj.badge}</div>
+                <div style="color:#fde047; font-size:12px;">АВТОМАТИЧЕН СИГНАЛ: КОРАБ "${ship.name}" (MMSI: ${ship.mmsi}) — ${statusObj.badge}</div>
                 <div style="font-size:10.5px; color:#fee2e2;">${statusObj.reason}</div>
             </div>
             <button type="button" onclick="map.flyTo([${ship.lat}, ${ship.lon}], 11, {animate:true, duration:0.8});" style="background:#fde047; color:#000; border:none; padding:5px 9px; border-radius:4px; font-weight:bold; cursor:pointer; font-size:10.5px; white-space:nowrap;">🎯 ВИЖ КОРАБА</button>
             <button type="button" onclick="dismissShipAlertBanner('${alertKey.replace(/'/g, "\\'")}')" style="background:#16a34a; color:#fff; border:1px solid #bbf7d0; padding:5px 10px; border-radius:4px; font-weight:bold; cursor:pointer; font-size:11px; white-space:nowrap;">✓ ОК</button>
         `;
+
+        // Автоматично се прибира след 25 секунди и се чисти от паметта след 30 мин
+        if (shipBannerAutoHideTimer) clearTimeout(shipBannerAutoHideTimer);
+        shipBannerAutoHideTimer = setTimeout(() => {
+            window.dismissShipAlertBanner(alertKey);
+        }, 25000);
     }
 
     window.toggleAisShips = function() {
