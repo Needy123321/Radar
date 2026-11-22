@@ -56,12 +56,9 @@ class AisStreamCommand extends Command
 
                 $output->writeln(sprintf('<comment>[%s] Свързване към AISstream (%s)...</comment>', date('H:i:s'), $wsUrl));
 
+                // Без ръчни headers, за да не се чупи WebSocket Upgrade handshake-ът
                 $client = new Client($wsUrl, [
                     'timeout' => 25,
-                    'headers' => [
-                        'Origin' => 'https://aisstream.io',
-                        'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                    ],
                 ]);
 
                 $subscription = [
@@ -93,7 +90,6 @@ class AisStreamCommand extends Command
                     try {
                         $raw = $client->receive();
                     } catch (TimeoutException $te) {
-                        // Ако сокетът просто изчаква трафик, проверяваме таймера горе и продължаваме
                         continue;
                     }
 
@@ -246,7 +242,6 @@ class AisStreamCommand extends Command
                         $now = time();
 
                         if ($now - $lastSave >= 2) {
-                            // Сливаме с диска, за да не изтрием кораби от HTTP фийда или външен push
                             if (is_file($cacheFile)) {
                                 $diskShips = json_decode((string)@file_get_contents($cacheFile), true);
                                 if (is_array($diskShips)) {
@@ -283,7 +278,6 @@ class AisStreamCommand extends Command
                                     count($shipsMap)
                                 ));
 
-                                // Ако сме на локалната машина, пращаме корабите и към Render на всеки 5 сек
                                 if (!$isRenderEnv && ($now - $lastRenderPush >= 5)) {
                                     $ch = curl_init($renderUrl);
                                     curl_setopt_array($ch, [
@@ -303,10 +297,11 @@ class AisStreamCommand extends Command
                     }
                 }
             } catch (\Throwable $e) {
+                $errMessage = $e->getMessage();
                 $output->writeln(sprintf(
                     '<comment>[%s] [DOCKER AIS] Рестарт на потока: %s</comment>',
                     date('H:i:s'),
-                    $e->getMessage()
+                    $errMessage
                 ));
 
                 try {
@@ -316,7 +311,9 @@ class AisStreamCommand extends Command
                 } catch (\Throwable $ignore) {
                 }
 
-                sleep(5);
+                // При rate-limit (429) или грешка в handshake-а изчакваме 45 сек, за да не трупаме блокировка
+                $waitSec = (str_contains($errMessage, '429') || str_contains($errMessage, 'Upgrade')) ? 45 : 5;
+                sleep($waitSec);
             }
         }
     }
