@@ -1814,73 +1814,97 @@ class RadarController extends AbstractController
         $now = time();
         $shipsMap = [];
 
-        // Пазим корабите в паметта за 45 минути, за да работи детекторът за изчезнал сигнал в ход
+        // Пазим наличните кораби в паметта за 45 минути
         foreach ($existingList as $s) {
             if (!empty($s['mmsi']) && ($now - (int)($s['lastSeen'] ?? 0)) <= 2700) {
                 $shipsMap[(string)$s['mmsi']] = $s;
             }
         }
 
-        $ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
+        // Предпазваме сървъра от спам на всеки 3 секунди — проверяваме HTTP източниците веднъж на 30 сек
+        $httpAttemptFile = sys_get_temp_dir() . '/radar_ships_http_attempt.ts';
+        if (is_file($httpAttemptFile) && ($now - (int)@filemtime($httpAttemptFile)) < 30) {
+            return array_values($shipsMap);
+        }
+        @touch($httpAttemptFile);
 
-        // 100% сървърни HTTP източници за Черно море (работят директно от Render)
-        $providers = [
-            [
+        $ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+        $providers = [];
+
+        if (!$this->providerIsCoolingDown('mst_blacksea_west')) {
+            $providers[] = [
                 'name' => 'mst_blacksea_west',
                 'base' => 'mst_blacksea_west',
-                'url'  => 'https://www.myshiptracking.com/requests/vesselsonmaptemp.php?type=json&minlat=40.9&maxlat=46.6&minlon=27.2&maxlon=34.0&zoom=7&_=' . $now,
-                'headers' => [
-                    'User-Agent: ' . $ua,
-                    'Accept: application/json, text/plain, */*',
-                    'Referer: https://www.myshiptracking.com/ look',
-                    'X-Requested-With: XMLHttpRequest',
-                ],
-            ],
-            [
-                'name' => 'mst_blacksea_east',
-                'base' => 'mst_blacksea_east',
-                'url'  => 'https://www.myshiptracking.com/requests/vesselsonmaptemp.php?type=json&minlat=41.0&maxlat=46.8&minlon=34.0&maxlon=41.9&zoom=7&_=' . $now,
+                'url'  => 'https://www.myshiptracking.com/requests/vesselsonmaptemp.php?type=json&minlat=41.2&maxlat=46.6&minlon=27.3&maxlon=34.0&zoom=7&_=' . $now,
                 'headers' => [
                     'User-Agent: ' . $ua,
                     'Accept: application/json, text/plain, */*',
                     'Referer: https://www.myshiptracking.com/',
                     'X-Requested-With: XMLHttpRequest',
                 ],
-            ],
-            [
-                'name' => 'mp_blacksea',
-                'base' => 'mp_blacksea',
-                'url'  => 'https://ais.marineplan.com/location/2/locations.json?area=40.9,27.2;46.8,41.8&ver=2',
+            ];
+        }
+
+        if (!$this->providerIsCoolingDown('mst_blacksea_east')) {
+            $providers[] = [
+                'name' => 'mst_blacksea_east',
+                'base' => 'mst_blacksea_east',
+                'url'  => 'https://www.myshiptracking.com/requests/vesselsonmaptemp.php?type=json&minlat=41.2&maxlat=46.8&minlon=34.0&maxlon=41.9&zoom=7&_=' . $now,
                 'headers' => [
                     'User-Agent: ' . $ua,
-                    'Accept: application/json',
-                    'Origin: https://www.marineplan.com',
-                    'Referer: https://www.marineplan.com/',
+                    'Accept: application/json, text/plain, */*',
+                    'Referer: https://www.myshiptracking.com/',
+                    'X-Requested-With: XMLHttpRequest',
                 ],
-            ],
-        ];
+            ];
+        }
+
+        if (!$this->providerIsCoolingDown('vf_blacksea')) {
+            $providers[] = [
+                'name' => 'vf_blacksea',
+                'base' => 'vf_blacksea',
+                'url'  => 'https://www.vesselfinder.com/api/pub/mp2?bbox=27.35%2C41.22%2C41.95%2C46.80&zoom=7&mmsi=0&ref=1',
+                'headers' => [
+                    'User-Agent: ' . $ua,
+                    'Accept: application/json, text/plain, */*',
+                    'Referer: https://www.vesselfinder.com/',
+                ],
+            ];
+        }
+
+        if ($providers === []) {
+            return array_values($shipsMap);
+        }
 
         $responses = $this->curlFetchMany($providers);
         $loadedCount = 0;
 
-        foreach ($responses as $name => $res) {
+        foreach ($providers as $prov) {
+            $name = $prov['name'];
+            $base = $prov['base'];
+            $res  = $responses[$name] ?? ['code' => 0, 'body' => ''];
             $code = (int)($res['code'] ?? 0);
             $body = trim((string)($res['body'] ?? ''));
+
+            if (in_array($code, [401, 403, 429], true)) {
+                $this->putProviderInCooldown($base);
+                error_log(sprintf('[SHIP PROVIDER] %s HTTP=%d COOLDOWN', $name, $code));
+                continue;
+            }
 
             if ($code !== 200 || $body === '') {
                 error_log(sprintf('[SHIP PROVIDER] %s HTTP=%d EMPTY', $name, $code));
                 continue;
             }
 
-            // Парсване на текстовия/табулиран поток от MyShipTracking
+            // Парсване на табулиран текст от MyShipTracking
             if (str_starts_with($name, 'mst_') && $body[0] !== '{' && $body[0] !== '[') {
                 $lines = preg_split('/\r\n|\r|\n/', $body);
                 foreach ($lines as $line) {
                     $cols = explode("\t", trim($line));
                     if (count($cols) < 6) continue;
 
-                    // В MST форматът обикновено е: TYPE \t MMSI \t LAT \t LON \t SPEED \t COURSE \t NAME...
-                    // Проверяваме дали колона 0 или колона 1 е 9-цифреният MMSI
                     if (strlen(trim($cols[1] ?? '')) === 9 && is_numeric($cols[1])) {
                         $sType = (int)$cols[0];
                         $mmsi  = trim($cols[1]);
@@ -1899,7 +1923,7 @@ class RadarController extends AbstractController
                         $sType = (int)($cols[6] ?? 70);
                     }
 
-                    if ($mmsi === '' || $lat < 40.5 || $lat > 47.2 || $lon < 26.5 || $lon > 42.2) {
+                    if ($mmsi === '' || $lat < 41.22 || $lat > 47.0 || $lon < 27.35 || $lon > 41.95) {
                         continue;
                     }
 
@@ -1935,7 +1959,7 @@ class RadarController extends AbstractController
                 continue;
             }
 
-            // Парсване на JSON поток (MarinePlan / JSON таблица)
+            // Парсване на JSON поток
             $data = json_decode($body, true);
             if (!is_array($data)) continue;
 
@@ -1951,7 +1975,7 @@ class RadarController extends AbstractController
 
                 $lat = (float)$lat;
                 $lon = (float)$lon;
-                if ($lat < 40.5 || $lat > 47.2 || $lon < 26.5 || $lon > 42.2) continue;
+                if ($lat < 41.22 || $lat > 47.0 || $lon < 27.35 || $lon > 41.95) continue;
 
                 $mmsi = (string)($r['mmsi'] ?? $r['MMSI'] ?? $r['id'] ?? '');
                 if ($mmsi === '') continue;
@@ -1992,9 +2016,15 @@ class RadarController extends AbstractController
             }
         }
 
-        error_log(sprintf('[SHIPS FINAL] LOADED=%d TOTAL_CACHED=%d', $loadedCount, count($shipsMap)));
+        if ($loadedCount > 0) {
+            error_log(sprintf('[SHIPS FINAL] LOADED=%d TOTAL_CACHED=%d', $loadedCount, count($shipsMap)));
+        }
 
         if (!empty($shipsMap)) {
+            $dir = dirname($cacheFile);
+            if (!is_dir($dir)) {
+                @mkdir($dir, 0777, true);
+            }
             @file_put_contents($cacheFile, json_encode(array_values($shipsMap), JSON_UNESCAPED_UNICODE), LOCK_EX);
         }
 
