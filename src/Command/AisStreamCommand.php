@@ -48,10 +48,20 @@ class AisStreamCommand extends Command
         while (true) {
             $client = null;
             try {
-                $output->writeln(sprintf('<comment>[%s] Свързване към AISstream...</comment>', date('H:i:s')));
+                $wsUrl = $_ENV['AISSTREAM_WS_URL']
+                    ?? $_SERVER['AISSTREAM_WS_URL']
+                    ?? getenv('AISSTREAM_WS_URL')
+                    ?: 'wss://stream.aisstream.io/v0/stream';
+                $wsUrl = trim((string)$wsUrl, " \t\n\r\0\x0B\"'");
 
-                $client = new Client('wss://stream.aisstream.io/v0/stream', [
+                $output->writeln(sprintf('<comment>[%s] Свързване към AISstream (%s)...</comment>', date('H:i:s'), $wsUrl));
+
+                $client = new Client($wsUrl, [
                     'timeout' => 25,
+                    'headers' => [
+                        'Origin' => 'https://aisstream.io',
+                        'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    ],
                 ]);
 
                 $subscription = [
@@ -241,7 +251,9 @@ class AisStreamCommand extends Command
                                 $diskShips = json_decode((string)@file_get_contents($cacheFile), true);
                                 if (is_array($diskShips)) {
                                     foreach ($diskShips as $ds) {
-                                        if (!is_array($ds) || empty($ds['mmsi'])) continue;
+                                        if (!is_array($ds) || empty($ds['mmsi'])) {
+                                            continue;
+                                        }
                                         $dMmsi = (string)$ds['mmsi'];
                                         $dSeen = (int)($ds['lastSeen'] ?? 0);
                                         if (($now - $dSeen) <= 2700 && (!isset($shipsMap[$dMmsi]) || $dSeen > (int)($shipsMap[$dMmsi]['lastSeen'] ?? 0))) {
