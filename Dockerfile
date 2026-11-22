@@ -2,13 +2,14 @@ FROM php:8.2-apache
 
 # Инсталираме нужните библиотеки за Symfony
 RUN apt-get update && apt-get install -y git unzip libzip-dev \
-    && docker-php-ext-install zip
+    && docker-php-ext-install zip \
+    && rm -rf /var/lib/apt/lists/*
 
 # Включваме пренасочването за Symfony
 RUN a2enmod rewrite
 
 # Настройваме Apache да търси директно в папка public/
-ENV APACHE_DOCUMENT_ROOT /var/www/html/public
+ENV APACHE_DOCUMENT_ROOT=/var/www/html/public
 RUN sed -ri -e 's!/var/www/html!${APACHE_DOCUMENT_ROOT}!g' /etc/apache2/sites-available/*.conf
 RUN sed -ri -e 's!/var/www/!${APACHE_DOCUMENT_ROOT}!g' /etc/apache2/apache2.conf /etc/apache2/conf-available/*.conf
 
@@ -32,5 +33,5 @@ RUN mkdir -p /var/www/html/var/cache /var/www/html/var/log \
     && chown -R www-data:www-data /var/www/html \
     && chmod -R 777 /var/www/html/var
 
-# Стартираме AIS WebSocket демона във фонов режим и след това Apache
-CMD ["sh", "-c", "php bin/console cache:clear --env=prod || true; chmod -R 777 /var/www/html/var; (while true; do php bin/console app:ais-stream >> /var/www/html/var/log/ais.log 2>&1; sleep 5; done) & apache2-foreground"]
+# Стартираме AIS WebSocket демона във фонов режим с изход директно към Render Logs и след това Apache
+CMD ["sh", "-c", "php bin/console cache:clear --env=prod || true; chmod -R 777 /var/www/html/var; (while true; do php /var/www/html/bin/console app:ais-stream 2>&1 | tee -a /var/www/html/var/log/ais.log; sleep 5; done) & exec apache2-foreground"]
