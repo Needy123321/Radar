@@ -10,7 +10,7 @@ use Symfony\Component\Routing\Attribute\Route;
 
 class RadarController extends AbstractController
 {
-    private const CACHE_TTL = 6;
+    private const CACHE_TTL = 4;
     private const PROVIDER_COOLDOWN = 300;
     private const MAX_HISTORY_FRAMES = 120;
     private const SEARCH_RADIUS_NM = 250;
@@ -109,6 +109,18 @@ class RadarController extends AbstractController
 
             $adsbProviders = [
                 [
+                    'name' => 'cf-worker-mil',
+                    'base' => 'cf-worker-mil',
+                    'url'  => 'https://ais.asem4o.workers.dev/mil',
+                    'mil'  => true,
+                ],
+                [
+                    'name' => 'cf-worker-civil',
+                    'base' => 'cf-worker-civil',
+                    'url'  => sprintf('https://ais.asem4o.workers.dev/civil?lat=%.2f&lon=%.2f', $centerLat, $centerLon),
+                    'mil'  => false,
+                ],
+                [
                     'name' => 'intelsky-mil',
                     'base' => 'intelsky-mil',
                     'url'  => 'https://intelsky.org/api/',
@@ -130,39 +142,6 @@ class RadarController extends AbstractController
                 ],
             ];
 
-            $slot3 = ((int) floor($now / self::CACHE_TTL)) % 3;
-
-            if ($slot3 === 0) {
-                $adsbProviders[] = [
-                    'name' => 'adsb.fi',
-                    'base' => 'adsb.fi',
-                    'url'  => "https://opendata.adsb.fi/api/v2/lat/{$centerLat}/lon/{$centerLon}/dist/" . self::SEARCH_RADIUS_NM,
-                    'mil'  => false,
-                ];
-                if (!$force && ($now % 18) < self::CACHE_TTL) {
-                    $adsbProviders[] = [
-                        'name' => 'airplanes.live-mil',
-                        'base' => 'airplanes.live-mil',
-                        'url'  => 'https://api.airplanes.live/v2/mil',
-                        'mil'  => true,
-                    ];
-                }
-            } elseif ($slot3 === 1) {
-                $adsbProviders[] = [
-                    'name' => 'adsb.fi-blacksea',
-                    'base' => 'adsb.fi-blacksea',
-                    'url'  => "https://opendata.adsb.fi/api/v2/lat/{$bsLat}/lon/{$bsLon}/dist/250",
-                    'mil'  => false,
-                ];
-            } else {
-                $adsbProviders[] = [
-                    'name' => 'adsb.fi-mil',
-                    'base' => 'adsb.fi-mil',
-                    'url'  => 'https://opendata.adsb.fi/api/v2/mil',
-                    'mil'  => true,
-                ];
-            }
-
             // 2. FlyItalyADS-B
             $flyItalyKey = $_ENV['FLYITALYADSB_API_KEY']
                 ?? $_SERVER['FLYITALYADSB_API_KEY']
@@ -178,21 +157,16 @@ class RadarController extends AbstractController
                     'Accept: application/json',
                 ];
 
-                if ($force || ($now % 18) < self::CACHE_TTL) {
+                if ($force || ($now % 16) < self::CACHE_TTL) {
                     $adsbProviders[] = [
-                        'name' => 'flyitaly',
-                        'base' => 'flyitaly',
-                        'url' => sprintf(
-                            'https://api.flyitalyadsb.com/v2/lat/%F/lon/%F/dist/300',
-                            $centerLat,
-                            $centerLon
-                        ),
-                        'mil' => false,
-                        'headers' => $flyHeaders,
+                        'name' => 'adsb.fi-mil',
+                        'base' => 'adsb.fi-mil',
+                        'url'  => 'https://opendata.adsb.fi/api/v2/mil',
+                        'mil'  => true,
                     ];
                 }
 
-                if ($force || ($now % 48) < self::CACHE_TTL) {
+                if ($force || ($now % 40) < self::CACHE_TTL) {
                     $adsbProviders[] = [
                         'name' => 'flyitaly-mil',
                         'base' => 'flyitaly-mil',
@@ -217,7 +191,7 @@ class RadarController extends AbstractController
             $openSkyClientId = trim((string)$openSkyClientId);
             $openSkyClientSecret = trim((string)$openSkyClientSecret);
 
-            if ($openSkyClientId !== '' && $openSkyClientSecret !== '' && ($force || ($now % 30) < self::CACHE_TTL)) {
+            if ($openSkyClientId !== '' && $openSkyClientSecret !== '' && ($force || ($now % 28) < self::CACHE_TTL)) {
                 $tokenFile = $cacheDir . '/radar_opensky_token.json';
                 $openSkyToken = '';
 
@@ -393,6 +367,8 @@ class RadarController extends AbstractController
             }
 
             $bufferedSources = [
+                'cf-worker-mil',
+                'cf-worker-civil',
                 'adsb.fi',
                 'adsb.fi-blacksea',
                 'adsb.fi-mil',
@@ -435,15 +411,13 @@ class RadarController extends AbstractController
             }
 
             @file_put_contents($quotaCacheFile, json_encode($quotaPlanesBuffer, JSON_UNESCAPED_UNICODE), LOCK_EX);
-            // Филтър за „замръзнали“ фантоми (като увиснали записи от intelsky-mil)
-            // 5.5. Изчистване на „замръзнали“ фантоми (като увисналия RCH5052 от intelsky-mil)
-            // Пазим историята 15 мин, за да НЕ се нулира таймерът, ако провайдърът пропусне 1 цикъл!
+
+            // 5.5. Изчистване на „замръзнали“ фантоми
             $frozenTrackFile = $cacheDir . '/radar_frozen_check.json';
             $frozenState = is_file($frozenTrackFile)
                 ? (json_decode((string)@file_get_contents($frozenTrackFile), true) ?: [])
                 : [];
 
-            // Изчистваме само записи отпреди повече от 15 мин (900 сек)
             foreach ($frozenState as $fId => $fData) {
                 if ($this->sub($now, (int)($fData['lastSeen'] ?? $now)) > 900) {
                     unset($frozenState[$fId]);
@@ -464,7 +438,6 @@ class RadarController extends AbstractController
                         'lastSeen' => $now,
                     ];
 
-                    // Ако е от intelsky-mil и стои на същото място/височина над 90 сек -> махаме фантома!
                     $maxStuckSec = (($p['_source'] ?? '') === 'intelsky-mil') ? 90 : 600;
                     if ($this->sub($now, $stuckSince) > $maxStuckSec) {
                         unset($planesMap[$id]);
@@ -478,6 +451,7 @@ class RadarController extends AbstractController
                 }
             }
             @file_put_contents($frozenTrackFile, json_encode($frozenState), LOCK_EX);
+
             foreach ($planesMap as &$plane) {
                 unset($plane['_source'], $plane['_bufferedAt'], $plane['_rawLat'], $plane['_rawLon']);
             }
@@ -1349,7 +1323,7 @@ class RadarController extends AbstractController
 
             $isStrictMilFeed = in_array(
                 $source,
-                ['airplanes.live-mil', 'adsb.lol-mil', 'adsb.fi-mil', 'intelsky-mil', 'flyitaly-mil', 'avioadsb-mil'],
+                ['cf-worker-mil', 'airplanes.live-mil', 'adsb.lol-mil', 'adsb.lol-ladd', 'adsb.fi-mil', 'intelsky-mil', 'flyitaly-mil', 'avioadsb-mil'],
                 true
             );
 
@@ -1474,7 +1448,6 @@ class RadarController extends AbstractController
                 'mach' => $mach,
                 'baroRate' => $baroRate,
                 'gpsJammed' => $gpsJammed,
-                // В края на parseAdsbV2List() вътре в $planesMap[$id] = [ ... ]:
                 '_rawLat' => round((float)($ac['lat'] ?? $ac['latitude'] ?? ($ac['lastPosition']['lat'] ?? 0)), 4),
                 '_rawLon' => round((float)($ac['lon'] ?? $ac['longitude'] ?? ($ac['lastPosition']['lon'] ?? 0)), 4),
                 '_source' => $source,
@@ -1800,8 +1773,6 @@ class RadarController extends AbstractController
             $ships = json_decode((string)@file_get_contents($file), true) ?? [];
         }
 
-        // Ако WebSocket демонът в Render ещё не е напълнил файла или данните са по-стари от 20 сек,
-        // самият сървър на Render тегли корабите автономно по HTTP!
         if (empty($ships) || !is_file($file) || (time() - (int)@filemtime($file)) > 20) {
             $ships = $this->fetchLiveBlackSeaShipsHttp($file, is_array($ships) ? $ships : []);
         }
@@ -1814,14 +1785,12 @@ class RadarController extends AbstractController
         $now = time();
         $shipsMap = [];
 
-        // Пазим наличните кораби в паметта за 45 минути
         foreach ($existingList as $s) {
             if (!empty($s['mmsi']) && ($now - (int)($s['lastSeen'] ?? 0)) <= 2700) {
                 $shipsMap[(string)$s['mmsi']] = $s;
             }
         }
 
-        // Предпазваме сървъра от спам на всеки 3 секунди — проверяваме HTTP източниците веднъж на 30 сек
         $httpAttemptFile = sys_get_temp_dir() . '/radar_ships_http_attempt.ts';
         if (is_file($httpAttemptFile) && ($now - (int)@filemtime($httpAttemptFile)) < 30) {
             return array_values($shipsMap);
@@ -1898,7 +1867,6 @@ class RadarController extends AbstractController
                 continue;
             }
 
-            // Парсване на табулиран текст от MyShipTracking
             if (str_starts_with($name, 'mst_') && $body[0] !== '{' && $body[0] !== '[') {
                 $lines = preg_split('/\r\n|\r|\n/', $body);
                 foreach ($lines as $line) {
@@ -1959,7 +1927,6 @@ class RadarController extends AbstractController
                 continue;
             }
 
-            // Парсване на JSON поток
             $data = json_decode($body, true);
             if (!is_array($data)) continue;
 
@@ -2030,6 +1997,7 @@ class RadarController extends AbstractController
 
         return array_values($shipsMap);
     }
+
     #[Route('/api/ships-push', name: 'api_ships_push', methods: ['POST'])]
     public function shipsPush(Request $request): JsonResponse
     {
@@ -2042,7 +2010,6 @@ class RadarController extends AbstractController
         $now = time();
         $shipsMap = [];
 
-        // 1. Зареждаме вече наличните кораби в Render (пазим ги до 45 мин)
         if (is_file($file)) {
             $existing = json_decode((string)@file_get_contents($file), true);
             if (is_array($existing)) {
@@ -2054,7 +2021,6 @@ class RadarController extends AbstractController
             }
         }
 
-        // 2. Сливаме новите кораби от push-а (обновяваме само по-новите позиции)
         foreach ($incoming as $s) {
             if (!is_array($s) || empty($s['mmsi'])) {
                 continue;
@@ -2075,6 +2041,7 @@ class RadarController extends AbstractController
 
         return new JsonResponse(['ok' => true, 'count' => count($shipsMap)]);
     }
+
     #[Route('/api/osint-feed', name: 'api_osint_feed', methods: ['GET'])]
     public function osintFeed(Request $request): JsonResponse
     {
