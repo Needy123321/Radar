@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="bg">
 <head>
@@ -7,8 +8,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Радар БГ">
     <title>ТАКТИЧЕСКИ ВЪЗДУШЕН РАДАР - БЪЛГАРИЯ</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-    <style>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>    <style>
         :root {
             --neon: #00ff66;
             --neon-bg: rgba(6, 18, 10, 0.90);
@@ -663,7 +663,7 @@
         </div>
     </div>
 
-    <!-- Чекмедже със сводките (свободно скролиране надолу без да мести картата) -->
+    <!-- Чекмедже със сводките -->
     <div id="osintMobileDrawer"
          onwheel="event.stopPropagation();"
          ontouchmove="event.stopPropagation();"
@@ -736,8 +736,7 @@
 
 <div id="infoPanel"></div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>
     let myLat = 43.3664995;
     let myLon = 24.6621337;
     let myBaseName = 'Позиция';
@@ -803,6 +802,15 @@
     });
 
     const TACTICAL_RANGES_KM = [20, 40, 60, 80, 100, 150, 200, 250, 300];
+    const googleTerrainLayer = L.tileLayer('https://{s}.google.com/vt/lyrs=p&x={x}&y={y}&z={z}&hl=bg', {
+        maxZoom: 18,
+        subdomains: ['mt0', 'mt1', 'mt2', 'mt3']
+    });
+    const googleHybridLayer = L.tileLayer('https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&hl=bg', {
+        maxZoom: 18,
+        subdomains: ['mt0', 'mt1', 'mt2', 'mt3']
+    });
+    const openTopoLayer = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {maxZoom: 17});
     let currentRangeIdx = 3;
 
     function setRadarRangeKm(targetKm) {
@@ -820,17 +828,9 @@
         }
     }
 
-    const googleTerrainLayer = L.tileLayer('https://{s}.google.com/vt/lyrs=p&x={x}&y={y}&z={z}&hl=bg', {
-        maxZoom: 18,
-        subdomains: ['mt0', 'mt1', 'mt2', 'mt3']
-    });
-    const googleHybridLayer = L.tileLayer('https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&hl=bg', {
-        maxZoom: 18,
-        subdomains: ['mt0', 'mt1', 'mt2', 'mt3']
-    });
-    const openTopoLayer = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {maxZoom: 17});
     googleTerrainLayer.addTo(map);
     let currentMapMode = 0;
+
 
     const fallbackBgBorder = [
         [44.21, 22.67], [44.04, 22.94], [43.82, 23.25], [43.78, 23.82], [43.69, 24.47], [43.74, 24.89],
@@ -1466,17 +1466,30 @@
         return Math.round(azi) % 360;
     }
 
+    // Плавен Dead Reckoning + 600ms преливане при пристигане на нов пакет (без прескачане)
     function getInterpolatedLatLon(plane, nowMs) {
-        if (isReplayMode || !plane.lastUpdateMs || !plane.speed || plane.speed < 25) return {
-            lat: plane.lat,
-            lon: plane.lon
-        };
-        const dtSec = Math.min((nowMs - plane.lastUpdateMs) / 1000, 25.0);
+        if (isReplayMode || !plane.lastUpdateMs || !plane.speed || plane.speed < 25) {
+            return { lat: plane.lat, lon: plane.lon };
+        }
+        const elapsedMs = nowMs - plane.lastUpdateMs;
+        const dtSec = Math.min(elapsedMs / 1000, 20.0);
         const distKm = (plane.speed / 3600) * dtSec;
         const rad = (plane.track || 0) * Math.PI / 180;
         const dLat = (distKm * Math.cos(rad)) / 111.32;
         const dLon = (distKm * Math.sin(rad)) / (111.32 * Math.cos(plane.lat * Math.PI / 180));
-        return {lat: plane.lat + dLat, lon: plane.lon + dLon};
+
+        const targetLat = plane.lat + dLat;
+        const targetLon = plane.lon + dLon;
+
+        if (plane.prevRenderLat !== undefined && plane.prevRenderLon !== undefined && elapsedMs < 600) {
+            const blend = elapsedMs / 600;
+            return {
+                lat: plane.prevRenderLat + (targetLat - plane.prevRenderLat) * blend,
+                lon: plane.prevRenderLon + (targetLon - plane.prevRenderLon) * blend
+            };
+        }
+
+        return { lat: targetLat, lon: targetLon };
     }
 
     function drawPlaneTrail(planeId, currentScreenPt, isMil, isSelected, pinData) {
@@ -1832,6 +1845,9 @@
             if (isMil) milCount++;
 
             const interp = getInterpolatedLatLon(plane, nowMs);
+            plane.curLat = interp.lat;
+            plane.curLon = interp.lon;
+
             const screenPt = map.latLngToContainerPoint([interp.lat, interp.lon]);
 
             plane.distKm = calcDistanceKm(myLat, myLon, interp.lat, interp.lon);
@@ -2268,6 +2284,11 @@
 
     function ingestPlanesData(data) {
         const now = Date.now();
+        const prevMap = new Map();
+        planes.forEach(oldP => {
+            prevMap.set(oldP.id, oldP);
+        });
+
         planes = data
             .filter(item => item && Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lon)))
             .map(item => {
@@ -2290,9 +2311,25 @@
 
                 recordPlaneTrailPoint(normalized.id, latNum, lonNum, normalized.altitude, now);
 
+                const prevPlane = prevMap.get(normalized.id);
+                const prevRenderLat = prevPlane && prevPlane.curLat !== undefined ? prevPlane.curLat : latNum;
+                const prevRenderLon = prevPlane && prevPlane.curLon !== undefined ? prevPlane.curLon : lonNum;
+
                 const distKm = calcDistanceKm(myLat, myLon, latNum, lonNum);
                 const bearing = calcBearing(myLat, myLon, latNum, lonNum);
-                return {...normalized, lat: latNum, lon: lonNum, distKm, bearing, lastUpdateMs: now};
+
+                return {
+                    ...normalized,
+                    lat: latNum,
+                    lon: lonNum,
+                    curLat: prevRenderLat,
+                    curLon: prevRenderLon,
+                    prevRenderLat,
+                    prevRenderLon,
+                    distKm,
+                    bearing,
+                    lastUpdateMs: now
+                };
             });
 
         cleanupOldTrails(now);
@@ -2304,10 +2341,13 @@
     }
 
     async function fetchPlanes(force = false) {
+        if (document.hidden && !force) return;
         if (isReplayMode || (isFetchingPlanes && !force)) return;
         isFetchingPlanes = true;
         try {
-            const res = await fetch(`/api/planes?lat=${myLat.toFixed(6)}&lon=${myLon.toFixed(6)}${force ? '&force=1' : ''}`);
+            const res = await fetch(`/api/planes?lat=${myLat.toFixed(6)}&lon=${myLon.toFixed(6)}${force ? '&force=1' : ''}`, {
+                cache: 'no-store'
+            });
             if (res.ok) {
                 const data = await res.json();
                 if (Array.isArray(data)) ingestPlanesData(data);
@@ -2319,6 +2359,7 @@
     }
 
     async function syncHistoryMeta() {
+        if (document.hidden) return;
         try {
             const res = await fetch('/api/history');
             if (!res.ok) return;
@@ -2467,14 +2508,22 @@
         document.getElementById('clockDisplay').textContent = new Date().toLocaleTimeString('bg-BG');
     }, 1000);
 
+    // Моментално презареждане при връщане на фокуса към таба/екрана
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) {
+            fetchPlanes(true);
+            if (aisEnabled) fetchShipsFromServer();
+        }
+    });
+
     updatePinnedBarUI();
     requestAnimationFrame(renderLoop);
     fetchPlanes(true);
     syncHistoryMeta();
-    setInterval(() => fetchPlanes(false), 5000);
+    setInterval(() => fetchPlanes(false), 4000);
     setInterval(syncHistoryMeta, 15000);
 
-    // === ПЪЛЕН ТАКТИЧЕСКИ OSINT МОДУЛ (ВЕКТОРИ + ЗВУК + СКРОЛВАНЕ) ===
+    // === ПЪЛЕН ТАКТИЧЕСКИ OSINT МОДУЛ ===
     function resolveLeafletMap() {
         if (typeof map !== 'undefined' && map && typeof map.setView === 'function') return map;
         if (window.map && typeof window.map.setView === 'function') return window.map;
@@ -2582,6 +2631,7 @@
 
     async function fetchAndRenderOsintAlerts() {
         try {
+            if (document.hidden && window.osintMarkersList.length > 0) return;
             if (osintDrawerOpen && window.osintMarkersList.length > 0) return;
 
             const res = await fetch('/api/osint-feed');
@@ -2589,9 +2639,7 @@
             const data = await res.json();
             if (!data || !Array.isArray(data.alerts)) return;
 
-            const osintCountEl = document.getElementById('osintCount');
-            const osintBadgeBtn = document.getElementById('osintBadgeBtn');
-            const drawer = document.getElementById('osintMobileDrawer');
+            latestOsintAlertsForShips = data.alerts;
 
             if (osintMarkersLayer) osintMarkersLayer.clearLayers();
             window.osintMarkersList = [];
@@ -2603,6 +2651,10 @@
             if (newestTs > lastKnownOsintTs) {
                 lastKnownOsintTs = newestTs;
             }
+
+            const osintCountEl = document.getElementById('osintCount');
+            const osintBadgeBtn = document.getElementById('osintBadgeBtn');
+            const drawer = document.getElementById('osintMobileDrawer');
 
             if (osintCountEl) {
                 osintCountEl.textContent = data.alerts.length;
@@ -2748,10 +2800,7 @@
         }
     }
 
-    fetchAndRenderOsintAlerts();
-    setInterval(fetchAndRenderOsintAlerts, 60000);
-
-    // === МОРСКИ AIS РАДАР (САМО ЧЕРНО МОРЕ + 30-МИНУТНО САМОПОЧИСТВАНЕ НА АЛАРМИ + ЗАТВАРЯНЕ ПРИ КЛИК ОТСТРАНИ) ===
+    // === МОРСКИ AIS РАДАР (САМО ЧЕРНО МОРЕ + БЕЗ ТРЕПТЕНЕ НА МАРКЕРИТЕ) ===
     let aisEnabled = true;
     let shipsOnlyMode = false;
     let aisPollTimer = null;
@@ -2759,7 +2808,6 @@
     let latestShipsList = [];
     let latestOsintAlertsForShips = [];
 
-    // Пазим приетите/изтеклите аларми в localStorage за 30 минути (1800 сек)
     const SHIP_ALERT_TTL_MS = 30 * 60 * 1000;
     const alertedStrikeMmsi = new Set();
     let shipBannerAutoHideTimer = null;
@@ -2805,7 +2853,6 @@
         }
     };
 
-    // Географски филтър: САМО акваторията на Черно море (изключва Мраморно море, Босфора и Истанбул)
     function isInBlackSeaOnly(lat, lon) {
         if (lat < 41.22 || lat > 47.0) return false;
         if (lon < 27.35 || lon > 41.95) return false;
@@ -2997,7 +3044,6 @@
         const mmsi = String(ship.mmsi);
         const alertKey = `${mmsi}_${statusObj.badge}`;
 
-        // Ако алармата е видяна/изтекла в последните 30 минути -> не я показваме!
         const dismissedMap = getActiveDismissedShipAlerts();
         if (dismissedMap[alertKey]) {
             return;
@@ -3020,7 +3066,6 @@
             <button type="button" onclick="dismissShipAlertBanner('${alertKey.replace(/'/g, "\\'")}')" style="background:#16a34a; color:#fff; border:1px solid #bbf7d0; padding:5px 10px; border-radius:4px; font-weight:bold; cursor:pointer; font-size:11px; white-space:nowrap;">✓ ОК</button>
         `;
 
-        // Автоматично се прибира след 25 секунди и се чисти от паметта след 30 мин
         if (shipBannerAutoHideTimer) clearTimeout(shipBannerAutoHideTimer);
         shipBannerAutoHideTimer = setTimeout(() => {
             window.dismissShipAlertBanner(alertKey);
@@ -3076,7 +3121,7 @@
     function connectAisStream() {
         fetchShipsFromServer();
         if (!aisPollTimer) {
-            aisPollTimer = setInterval(fetchShipsFromServer, 3000);
+            aisPollTimer = setInterval(fetchShipsFromServer, 4000);
         }
     }
 
@@ -3084,7 +3129,6 @@
     const shipVectorsByMmsi = new Map();
     let openedShipMmsi = null;
 
-    // Затваряне на отворения корабен балон при клик отстрани на картата
     window.closeAllShipPopups = function () {
         if (openedShipMmsi) {
             const m = shipMarkersByMmsi.get(openedShipMmsi);
@@ -3128,7 +3172,6 @@
             const lon = parseFloat(ship.lon);
             if (!mmsi || isNaN(lat) || isNaN(lon)) return;
 
-            // Показваме кораби САМО в Черно море
             if (!isInBlackSeaOnly(lat, lon)) return;
 
             const ageSec = ship.lastSeen ? Math.max(0, nowSec - parseInt(ship.lastSeen, 10)) : 0;
@@ -3254,12 +3297,16 @@
                 </div>
             `;
 
+            const iconSig = `${hullColor}_${Math.round(cog)}_${statusObj.badge}`;
             let existingMarker = shipMarkersByMmsi.get(mmsi);
             if (existingMarker) {
                 existingMarker.setLatLng([lat, lon]);
-                existingMarker.setIcon(shipIcon);
+                if (existingMarker._lastIconSig !== iconSig) {
+                    existingMarker.setIcon(shipIcon);
+                    existingMarker._lastIconSig = iconSig;
+                }
                 existingMarker.setZIndexOffset(isAlert ? 4000 : (typeInfo.special ? 1500 : 500));
-                if (existingMarker.getPopup()) {
+                if (existingMarker.getPopup() && existingMarker.isPopupOpen()) {
                     existingMarker.setPopupContent(popupHtml);
                 }
             } else {
@@ -3267,6 +3314,7 @@
                     icon: shipIcon,
                     zIndexOffset: isAlert ? 4000 : (typeInfo.special ? 1500 : 500)
                 });
+                marker._lastIconSig = iconSig;
                 marker.bindPopup(popupHtml, {
                     autoClose: false,
                     closeOnClick: false
@@ -3309,6 +3357,7 @@
     }
 
     async function fetchShipsFromServer() {
+        if (document.hidden) return;
         try {
             const res = await fetch('/api/ships', { cache: 'no-store' });
             if (!res.ok) return;
@@ -3316,20 +3365,12 @@
             if (!Array.isArray(ships)) return;
 
             latestShipsList = ships;
-
-            try {
-                const osRes = await fetch('/api/osint-feed');
-                if (osRes.ok) {
-                    const osData = await osRes.json();
-                    if (osData && Array.isArray(osData.alerts)) {
-                        latestOsintAlertsForShips = osData.alerts;
-                    }
-                }
-            } catch (e) {}
-
             renderShipsOnMap(ships);
         } catch (e) {}
     }
+
+    fetchAndRenderOsintAlerts();
+    setInterval(fetchAndRenderOsintAlerts, 60000);
 
     updateShipsButtonState();
     connectAisStream();
