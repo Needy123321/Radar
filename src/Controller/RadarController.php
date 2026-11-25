@@ -413,6 +413,7 @@ class RadarController extends AbstractController
             @file_put_contents($quotaCacheFile, json_encode($quotaPlanesBuffer, JSON_UNESCAPED_UNICODE), LOCK_EX);
 
             // 5.5. Изчистване на „замръзнали“ фантоми
+                        // 5.5. Изчистване на „замръзнали“ фантоми (с проверка дали целта е реално активна)
             $frozenTrackFile = $cacheDir . '/radar_frozen_check.json';
             $frozenState = is_file($frozenTrackFile)
                 ? (json_decode((string)@file_get_contents($frozenTrackFile), true) ?: [])
@@ -427,10 +428,19 @@ class RadarController extends AbstractController
             foreach ($planesMap as $id => $p) {
                 $rLat = $p['_rawLat'] ?? round((float)$p['lat'], 4);
                 $rLon = $p['_rawLon'] ?? round((float)$p['lon'], 4);
-                $posSig = $rLat . '_' . $rLon . '_' . (int)($p['altitude'] ?? 0);
+                $trk  = (int)round((float)($p['track'] ?? 0));
+                $spd  = (int)($p['speed'] ?? 0);
+                $age  = (float)($p['age'] ?? 999.0);
+                $isMil = !empty($p['isMilitary']);
+
+                // Включваме и курса/скоростта — ако върти кръгове, подписът се мени
+                $posSig = $rLat . '_' . $rLon . '_' . (int)($p['altitude'] ?? 0) . '_' . $trk . '_' . $spd;
                 $prevEntry = $frozenState[$id] ?? null;
 
-                if (is_array($prevEntry) && ($prevEntry['sig'] ?? '') === $posSig) {
+                // Ако сигналът е пресен (< 45 сек), целта реално излъчва и е там — нулираме таймера за замръзване
+                $isActivelyTransmitting = ($age < 45.0) && (($p['_source'] ?? '') !== 'intelsky-mil');
+
+                if (!$isActivelyTransmitting && is_array($prevEntry) && ($prevEntry['sig'] ?? '') === $posSig) {
                     $stuckSince = (int)($prevEntry['since'] ?? $now);
                     $frozenState[$id] = [
                         'sig'      => $posSig,
@@ -438,7 +448,8 @@ class RadarController extends AbstractController
                         'lastSeen' => $now,
                     ];
 
-                    $maxStuckSec = (($p['_source'] ?? '') === 'intelsky-mil') ? 90 : 600;
+                    // За военни даваме по-голям толеранс (180 сек за intelsky, 900 сек за останалите)
+                    $maxStuckSec = (($p['_source'] ?? '') === 'intelsky-mil') ? 180 : ($isMil ? 900 : 600);
                     if ($this->sub($now, $stuckSince) > $maxStuckSec) {
                         unset($planesMap[$id]);
                     }
@@ -451,6 +462,7 @@ class RadarController extends AbstractController
                 }
             }
             @file_put_contents($frozenTrackFile, json_encode($frozenState), LOCK_EX);
+
 
             foreach ($planesMap as &$plane) {
                 unset($plane['_source'], $plane['_bufferedAt'], $plane['_rawLat'], $plane['_rawLon']);
