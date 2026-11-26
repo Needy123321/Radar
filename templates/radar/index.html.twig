@@ -2131,6 +2131,13 @@
         const color = isMilitary ? '#ff3333' : '#ffcc00';
         const badgeText = isMilitary ? 'ВОЕНЕН ОБЕКТ' : 'ГРАЖДАНСКИ ПОЛЕТ';
         const trackDeg = Math.round(p.track || 0);
+        // Стандартно закръгляне (288° -> 29, 97° -> 10, 0° -> 36):
+        let milCourseNum = Math.round(trackDeg / 10);
+        if (milCourseNum === 0) milCourseNum = 36;
+        const milCourse = String(milCourseNum).padStart(2, '0');
+
+        // Ако предпочиташ отсичане (288° -> 28, 97° -> 09), ползвай вместо горните 3 реда:
+        // const milCourse = String(Math.floor(trackDeg / 10) % 36).padStart(2, '0');
 
         const cachedPhoto = planePhotoCache[p.id];
         const showImg = cachedPhoto ? 'display:block;' : 'display:none;';
@@ -2205,13 +2212,13 @@
         <div id="aiBriefBox" class="ai-brief-box" style="${cachedAi ? 'display:block;' : 'display:none;'}">${cachedAi ? formatAiHtml(cachedAi) : ''}</div>
 
         <div class="info-grid">
-            <div class="info-item">
-                <span class="info-label">АЗИМУТ (${aziLabel}) / РАЗСТ.</span>
-                <span class="info-val" style="color:#00ff66;">AZ: ${p.bearing}° / ${(p.distKm || 0).toFixed(1)} км</span>
-            </div>
-            <div class="info-item">
+           <div class="info-item">
                 <span class="info-label">КУРС / ВИСОЧИНА / СКОРОСТ</span>
-                <span class="info-val">${trackDeg}° | ${p.altitude || 0} м ${vTrendHtml} | ${p.speed || 0} км/ч</span>
+                <span class="info-val">К:${milCourse} (${trackDeg}°) | ${p.altitude || 0} м ${vTrendHtml} | ${p.speed || 0} км/ч</span>
+            </div>
+           <div class="info-item">
+                <span class="info-label">КУРС / ВИСОЧИНА / СКОРОСТ</span>
+                <span class="info-val">К:${milCourse} (${trackDeg}°) | ${p.altitude || 0} м ${vTrendHtml} | ${p.speed || 0} км/ч</span>
             </div>
         </div>
 
