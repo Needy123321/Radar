@@ -25,6 +25,19 @@ class RadarController extends AbstractController
     {
         return (float)$a * (float)$b;
     }
+    private function projectPosition(float $lat, float $lon, float $trackDeg, int $speedKmh, float $seconds): array
+    {
+        if ($seconds <= 0.2 || $speedKmh < 40) {
+            return [$lat, $lon];
+        }
+        $distMeters = $this->mul($speedKmh / 3.6, $seconds);
+        $trackRad = deg2rad($trackDeg);
+        $latRad = deg2rad($lat);
+        $newLat = $lat + ($this->mul($distMeters, cos($trackRad)) / 111320.0);
+        $newLon = $lon + ($this->mul($distMeters, sin($trackRad)) / $this->mul(111320.0, max(0.15, abs(cos($latRad)))));
+
+        return [round($newLat, 5), round($newLon, 5)];
+    }
 
     #[Route('/', name: 'app_home')]
     public function home(): Response
@@ -223,8 +236,8 @@ class RadarController extends AbstractController
                             'Accept: application/json',
                         ],
                         CURLOPT_RETURNTRANSFER => true,
-                        CURLOPT_CONNECTTIMEOUT => 5,
-                        CURLOPT_TIMEOUT => 6,
+                        CURLOPT_CONNECTTIMEOUT => 3,
+                        CURLOPT_TIMEOUT => 3,
                     ]);
 
                     $tokenBody = curl_exec($tokenCh);
@@ -396,6 +409,16 @@ class RadarController extends AbstractController
                     continue;
                 }
                 if (!isset($planesMap[$id])) {
+                    $elapsed = $this->sub($now, (int)($qp['_bufferedAt'] ?? $now));
+                    if ($elapsed > 0 && $elapsed <= 60 && (int)($qp['speed'] ?? 0) > 40) {
+                        [$qp['lat'], $qp['lon']] = $this->projectPosition(
+                            (float)$qp['lat'],
+                            (float)$qp['lon'],
+                            (float)($qp['track'] ?? 0),
+                            (int)$qp['speed'],
+                            $elapsed
+                        );
+                    }
                     $planesMap[$id] = $qp;
                     $restoredCount++;
                 } elseif (
@@ -413,7 +436,6 @@ class RadarController extends AbstractController
             @file_put_contents($quotaCacheFile, json_encode($quotaPlanesBuffer, JSON_UNESCAPED_UNICODE), LOCK_EX);
 
             // 5.5. Изчистване на „замръзнали“ фантоми
-                        // 5.5. Изчистване на „замръзнали“ фантоми (с проверка дали целта е реално активна)
             $frozenTrackFile = $cacheDir . '/radar_frozen_check.json';
             $frozenState = is_file($frozenTrackFile)
                 ? (json_decode((string)@file_get_contents($frozenTrackFile), true) ?: [])
@@ -433,14 +455,16 @@ class RadarController extends AbstractController
                 $age  = (float)($p['age'] ?? 999.0);
                 $isMil = !empty($p['isMilitary']);
 
-                // Включваме и курса/скоростта — ако върти кръгове, подписът се мени
+                // Ако е военен и реално излъчва пресен сигнал (< 60 сек) — не го пипаме
+                if ($isMil && $age < 60.0) {
+                    $frozenState[$id] = ['sig' => '', 'since' => $now, 'lastSeen' => $now];
+                    continue;
+                }
+
                 $posSig = $rLat . '_' . $rLon . '_' . (int)($p['altitude'] ?? 0) . '_' . $trk . '_' . $spd;
                 $prevEntry = $frozenState[$id] ?? null;
 
-                // Ако сигналът е пресен (< 45 сек), целта реално излъчва и е там — нулираме таймера за замръзване
-                $isActivelyTransmitting = ($age < 45.0) && (($p['_source'] ?? '') !== 'intelsky-mil');
-
-                if (!$isActivelyTransmitting && is_array($prevEntry) && ($prevEntry['sig'] ?? '') === $posSig) {
+                if (is_array($prevEntry) && ($prevEntry['sig'] ?? '') === $posSig) {
                     $stuckSince = (int)($prevEntry['since'] ?? $now);
                     $frozenState[$id] = [
                         'sig'      => $posSig,
@@ -448,7 +472,6 @@ class RadarController extends AbstractController
                         'lastSeen' => $now,
                     ];
 
-                    // За военни даваме по-голям толеранс (180 сек за intelsky, 900 сек за останалите)
                     $maxStuckSec = (($p['_source'] ?? '') === 'intelsky-mil') ? 180 : ($isMil ? 900 : 600);
                     if ($this->sub($now, $stuckSince) > $maxStuckSec) {
                         unset($planesMap[$id]);
@@ -462,7 +485,6 @@ class RadarController extends AbstractController
                 }
             }
             @file_put_contents($frozenTrackFile, json_encode($frozenState), LOCK_EX);
-
 
             foreach ($planesMap as &$plane) {
                 unset($plane['_source'], $plane['_bufferedAt'], $plane['_rawLat'], $plane['_rawLon']);
@@ -1231,7 +1253,7 @@ class RadarController extends AbstractController
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_TIMEOUT => 4,
+            CURLOPT_TIMEOUT => 3,
             CURLOPT_CONNECTTIMEOUT => 3,
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_SSL_VERIFYHOST => 2,
@@ -1385,12 +1407,9 @@ class RadarController extends AbstractController
                 $speedKmh = 650;
             }
 
-            if ($isModeSApproximate && $seenPos > 5.0 && $seenPos <= 600.0 && $speedKmh > 60) {
-                $distMeters = $this->mul($speedKmh / 3.6, min($seenPos, 300.0));
-                $trackRad = deg2rad($track);
-                $latRad = deg2rad($lat);
-                $lat += $this->mul($distMeters, cos($trackRad)) / 111320.0;
-                $lon += $this->mul($distMeters, sin($trackRad)) / $this->mul(111320.0, max(0.15, abs(cos($latRad))));
+            $projSec = min($seenPos, 15.0);
+            if (!$isModeSApproximate && $projSec > 0.5 && $speedKmh > 40) {
+                [$lat, $lon] = $this->projectPosition($lat, $lon, $track, $speedKmh, $projSec);
             }
 
             $lonDiff = $this->sub($lon, $centerLon);
@@ -1523,7 +1542,9 @@ class RadarController extends AbstractController
 
             $altitudeMeters = max(0, (int)round($this->mul($altFeet, 0.3048)));
             $speedKmh = (int)round($this->mul($speedKnots, 1.852));
-
+            if ($age > 0.5 && $age <= 30.0 && $speedKmh > 40) {
+                [$lat, $lon] = $this->projectPosition($lat, $lon, $track, $speedKmh, $age);
+            }
             if (!$isMil && ($onGround === 1 || $altitudeMeters <= 0) && $speedKmh < 30) {
                 continue;
             }
