@@ -2211,12 +2211,12 @@
 
         <div id="aiBriefBox" class="ai-brief-box" style="${cachedAi ? 'display:block;' : 'display:none;'}">${cachedAi ? formatAiHtml(cachedAi) : ''}</div>
 
-        <div class="info-grid">
-           <div class="info-item">
-                <span class="info-label">КУРС / ВИСОЧИНА / СКОРОСТ</span>
-                <span class="info-val">К:${milCourse} (${trackDeg}°) | ${p.altitude || 0} м ${vTrendHtml} | ${p.speed || 0} км/ч</span>
+      <div class="info-grid">
+            <div class="info-item">
+                <span class="info-label">АЗИМУТ (${aziLabel}) / РАЗСТ.</span>
+                <span class="info-val" style="color:#00ff66;">AZ: ${p.bearing}° / ${(p.distKm || 0).toFixed(1)} км</span>
             </div>
-           <div class="info-item">
+            <div class="info-item">
                 <span class="info-label">КУРС / ВИСОЧИНА / СКОРОСТ</span>
                 <span class="info-val">К:${milCourse} (${trackDeg}°) | ${p.altitude || 0} м ${vTrendHtml} | ${p.speed || 0} км/ч</span>
             </div>
