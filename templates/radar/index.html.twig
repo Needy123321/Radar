@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="bg">
 <head>
@@ -8,7 +7,8 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Радар БГ">
     <title>ТАКТИЧЕСКИ ВЪЗДУШЕН РАДАР - БЪЛГАРИЯ</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>    <style>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <style>
         :root {
             --neon: #00ff66;
             --neon-bg: rgba(6, 18, 10, 0.90);
@@ -50,7 +50,7 @@
         }
 
         .bg-border-glow {
-            filter: drop-shadow(0 0 6px #ff0000) drop-shadow(0 0 12px rgba(255, 0, 0, 0.8));
+            filter: drop-shadow(0 0 4px rgba(255, 0, 0, 0.7));
         }
 
         #radarCanvas {
@@ -736,7 +736,8 @@
 
 <div id="infoPanel"></div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
     let myLat = 43.3664995;
     let myLon = 24.6621337;
     let myBaseName = 'Позиция';
@@ -830,7 +831,6 @@
 
     googleTerrainLayer.addTo(map);
     let currentMapMode = 0;
-
 
     const fallbackBgBorder = [
         [44.21, 22.67], [44.04, 22.94], [43.82, 23.25], [43.78, 23.82], [43.69, 24.47], [43.74, 24.89],
@@ -1466,23 +1466,31 @@
         return Math.round(azi) % 360;
     }
 
-    // Плавен Dead Reckoning + 600ms преливане при пристигане на нов пакет (без прескачане)
+    // Плавен Dead Reckoning + 1000ms преливане при нов пакет (без връщане назад)
     function getInterpolatedLatLon(plane, nowMs) {
-        if (isReplayMode || !plane.lastUpdateMs || !plane.speed || plane.speed < 25) {
+        const spd = Number(plane.speed || 0);
+        if (isReplayMode || !plane.lastUpdateMs || spd < 25) {
             return { lat: plane.lat, lon: plane.lon };
         }
-        const elapsedMs = nowMs - plane.lastUpdateMs;
-        const dtSec = Math.min(elapsedMs / 1000, 20.0);
-        const distKm = (plane.speed / 3600) * dtSec;
+
+        const elapsedMs = Math.max(0, nowMs - plane.lastUpdateMs);
+        // Плъзга се с реалната скорост (напр. 800 км/ч) до 60 сек, без да запича
+        const maxDriftSec = plane.isMilitary ? 25.0 : 60.0;
+        const dtSec = Math.min(elapsedMs / 1000, maxDriftSec);
+
+        const distKm = (spd / 3600) * dtSec;
         const rad = (plane.track || 0) * Math.PI / 180;
         const dLat = (distKm * Math.cos(rad)) / 111.32;
-        const dLon = (distKm * Math.sin(rad)) / (111.32 * Math.cos(plane.lat * Math.PI / 180));
+        const dLon = (distKm * Math.sin(rad)) / (111.32 * Math.max(0.15, Math.cos(plane.lat * Math.PI / 180)));
 
         const targetLat = plane.lat + dLat;
         const targetLon = plane.lon + dLon;
 
-        if (plane.prevRenderLat !== undefined && plane.prevRenderLon !== undefined && elapsedMs < 600) {
-            const blend = elapsedMs / 600;
+        // Плавно напасване за 3.5 секунди (без изстрелване)
+        const blendMs = 3500;
+        if (plane.prevRenderLat !== undefined && plane.prevRenderLon !== undefined && elapsedMs < blendMs) {
+            const t = elapsedMs / blendMs;
+            const blend = t * (2 - t); // ease-out
             return {
                 lat: plane.prevRenderLat + (targetLat - plane.prevRenderLat) * blend,
                 lon: plane.prevRenderLon + (targetLon - plane.prevRenderLon) * blend
@@ -1515,8 +1523,6 @@
         ctx.strokeStyle = strokeColor;
         ctx.lineWidth = isSelected ? 2.6 : 1.9;
         ctx.globalAlpha = isSelected ? 0.92 : 0.75;
-        ctx.shadowColor = strokeColor;
-        ctx.shadowBlur = isSelected ? 8 : 4;
         ctx.stroke();
 
         if (isSelected || pinData) {
@@ -1549,8 +1555,6 @@
         ctx.fillStyle = fillColor;
         ctx.strokeStyle = '#111111';
         ctx.lineWidth = 1.6;
-        ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
-        ctx.shadowBlur = 5;
 
         ctx.beginPath();
         if (isMil) {
@@ -1600,8 +1604,6 @@
             ctx.strokeStyle = '#00e5ff';
             ctx.lineWidth = 1.8;
             ctx.setLineDash([6, 4]);
-            ctx.shadowColor = '#00e5ff';
-            ctx.shadowBlur = 8;
             ctx.beginPath();
             ctx.arc(0, 0, r, 0, Math.PI * 2);
             ctx.stroke();
@@ -1630,11 +1632,13 @@
         }
     }
 
-    function drawRadarGrid(cx, cy) {
-        ctx.save();
-        ctx.translate(cx, cy);
+    let gridCacheCanvas = null;
+    let gridCacheKey = '';
 
+    function drawRadarGrid(cx, cy) {
         const radius = Math.min(canvas.width, canvas.height) * 0.42;
+        if (radius <= 10) return;
+
         const centerLatLng = map.containerPointToLatLng([cx, cy]);
         const edgeLatLng = map.containerPointToLatLng([cx + radius, cy]);
         const rawRadiusKm = map.distance(centerLatLng, edgeLatLng) / 1000;
@@ -1647,139 +1651,112 @@
             }
         }
 
-        let kmStep;
-        if (maxGridKm >= 150) kmStep = 50;
-        else if (maxGridKm === 100) kmStep = 25;
-        else if (maxGridKm === 60) kmStep = 20;
-        else kmStep = maxGridKm / 4;
+        const key = `${Math.round(radius)}_${maxGridKm}`;
+        const pad = 70;
+        const size = Math.ceil((radius + pad) * 2);
 
-        ctx.beginPath();
-        ctx.arc(0, 0, radius, 0, Math.PI * 2);
-        ctx.strokeStyle = 'rgba(150, 0, 0, 0.90)';
-        ctx.lineWidth = 2;
-        ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
-        ctx.shadowBlur = 3;
-        ctx.stroke();
-        ctx.shadowBlur = 0;
+        if (!gridCacheCanvas || gridCacheKey !== key) {
+            gridCacheKey = key;
+            gridCacheCanvas = document.createElement('canvas');
+            gridCacheCanvas.width = size;
+            gridCacheCanvas.height = size;
+            const g = gridCacheCanvas.getContext('2d');
+            g.translate(size / 2, size / 2);
 
-        for (let deg = 0; deg < 360; deg += 10) {
-            const angle = (deg - 90) * Math.PI / 180;
-            const isMajor = deg % 30 === 0;
-            const tickLength = isMajor ? 12 : 6;
+            let kmStep;
+            if (maxGridKm >= 150) kmStep = 50;
+            else if (maxGridKm === 100) kmStep = 25;
+            else if (maxGridKm === 60) kmStep = 20;
+            else kmStep = maxGridKm / 4;
 
-            const innerRadius = radius - tickLength;
-            const outerRadius = radius;
+            g.beginPath();
+            g.arc(0, 0, radius, 0, Math.PI * 2);
+            g.strokeStyle = 'rgba(150, 0, 0, 0.90)';
+            g.lineWidth = 2;
+            g.stroke();
 
-            const x1 = Math.cos(angle) * innerRadius;
-            const y1 = Math.sin(angle) * innerRadius;
-            const x2 = Math.cos(angle) * outerRadius;
-            const y2 = Math.sin(angle) * outerRadius;
+            for (let deg = 0; deg < 360; deg += 10) {
+                const angle = (deg - 90) * Math.PI / 180;
+                const isMajor = deg % 30 === 0;
+                const tickLength = isMajor ? 12 : 6;
 
-            ctx.beginPath();
-            ctx.moveTo(x1, y1);
-            ctx.lineTo(x2, y2);
-            ctx.strokeStyle = isMajor ? 'rgba(155, 0, 0, 0.90)' : 'rgba(130, 0, 0, 0.65)';
-            ctx.lineWidth = isMajor ? 2 : 1;
-            ctx.stroke();
+                g.beginPath();
+                g.moveTo(Math.cos(angle) * (radius - tickLength), Math.sin(angle) * (radius - tickLength));
+                g.lineTo(Math.cos(angle) * radius, Math.sin(angle) * radius);
+                g.strokeStyle = isMajor ? 'rgba(155, 0, 0, 0.90)' : 'rgba(130, 0, 0, 0.65)';
+                g.lineWidth = isMajor ? 2 : 1;
+                g.stroke();
 
-            if (isMajor) {
-                const textRadius = radius - 23;
-                const tx = Math.cos(angle) * textRadius;
-                const ty = Math.sin(angle) * textRadius;
-
-                ctx.font = 'bold 10px Segoe UI, sans-serif';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.shadowColor = '#000000';
-                ctx.shadowBlur = 3;
-
-                if (deg === 0) {
-                    ctx.fillStyle = '#00e5ff';
-                    ctx.fillText('0°С', tx, ty);
-                } else {
-                    ctx.fillStyle = '#b82020';
-                    ctx.fillText(`${deg}°`, tx, ty);
+                if (isMajor) {
+                    const textRadius = radius - 23;
+                    g.font = 'bold 10px Segoe UI, sans-serif';
+                    g.textAlign = 'center';
+                    g.textBaseline = 'middle';
+                    g.fillStyle = deg === 0 ? '#00e5ff' : '#b82020';
+                    g.fillText(deg === 0 ? '0°С' : `${deg}°`, Math.cos(angle) * textRadius, Math.sin(angle) * textRadius);
                 }
-                ctx.shadowBlur = 0;
-            }
-        }
-
-        for (let km = kmStep; km <= maxGridKm + 0.1; km += kmStep) {
-            const isOuter = Math.abs(km - maxGridKm) < 0.5;
-            const r = isOuter ? radius : (km / maxGridKm) * radius;
-            const kmVal = Math.round(km * 10) / 10;
-
-            if (!isOuter) {
-                ctx.beginPath();
-                ctx.arc(0, 0, r, 0, Math.PI * 2);
-                ctx.strokeStyle = 'rgba(130, 0, 0, 0.55)';
-                ctx.lineWidth = 1;
-                ctx.stroke();
-
-                ctx.beginPath();
-                ctx.moveTo(r, -5);
-                ctx.lineTo(r, 5);
-                ctx.moveTo(-r, -5);
-                ctx.lineTo(-r, 5);
-                ctx.moveTo(-5, -r);
-                ctx.lineTo(5, -r);
-                ctx.moveTo(-5, r);
-                ctx.lineTo(5, r);
-                ctx.strokeStyle = '#a80000';
-                ctx.lineWidth = 1.5;
-                ctx.stroke();
             }
 
-            const kmText = `${kmVal} km`;
+            for (let km = kmStep; km <= maxGridKm + 0.1; km += kmStep) {
+                const isOuter = Math.abs(km - maxGridKm) < 0.5;
+                const r = isOuter ? radius : (km / maxGridKm) * radius;
+                const kmVal = Math.round(km * 10) / 10;
 
-            ctx.font = 'bold 11px Segoe UI, sans-serif';
-            ctx.fillStyle = '#7DF9FF';
-            ctx.strokeStyle = 'rgba(0, 0, 0, 0.98)';
-            ctx.lineWidth = 3;
-            ctx.shadowColor = '#000000';
-            ctx.shadowBlur = 3;
+                if (!isOuter) {
+                    g.beginPath();
+                    g.arc(0, 0, r, 0, Math.PI * 2);
+                    g.strokeStyle = 'rgba(130, 0, 0, 0.55)';
+                    g.lineWidth = 1;
+                    g.stroke();
 
-            ctx.textAlign = 'left';
-            ctx.textBaseline = 'middle';
-            ctx.strokeText(kmText, r + 6, 14);
-            ctx.fillText(kmText, r + 6, 14);
+                    g.beginPath();
+                    g.moveTo(r, -5); g.lineTo(r, 5);
+                    g.moveTo(-r, -5); g.lineTo(-r, 5);
+                    g.moveTo(-5, -r); g.lineTo(5, -r);
+                    g.moveTo(-5, r); g.lineTo(5, r);
+                    g.strokeStyle = '#a80000';
+                    g.lineWidth = 1.5;
+                    g.stroke();
+                }
 
-            ctx.textAlign = 'right';
-            ctx.textBaseline = 'middle';
-            ctx.strokeText(kmText, -r - 6, 14);
-            ctx.fillText(kmText, -r - 6, 14);
+                const kmText = `${kmVal} km`;
+                g.font = 'bold 11px Segoe UI, sans-serif';
+                g.fillStyle = '#7DF9FF';
+                g.strokeStyle = 'rgba(0, 0, 0, 0.98)';
+                g.lineWidth = 3;
 
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'bottom';
-            const topY = isOuter ? (-r - 4) : (-r + 4);
-            ctx.strokeText(kmText, 0, topY);
-            ctx.fillText(kmText, 0, topY);
+                g.textAlign = 'left'; g.textBaseline = 'middle';
+                g.strokeText(kmText, r + 6, 14); g.fillText(kmText, r + 6, 14);
 
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'top';
-            const bottomY = isOuter ? (r + 6) : (r + 6);
-            ctx.strokeText(kmText, 0, bottomY);
-            ctx.fillText(kmText, 0, bottomY);
+                g.textAlign = 'right'; g.textBaseline = 'middle';
+                g.strokeText(kmText, -r - 6, 14); g.fillText(kmText, -r - 6, 14);
 
-            ctx.shadowBlur = 0;
+                g.textAlign = 'center'; g.textBaseline = 'bottom';
+                const topY = isOuter ? (-r - 4) : (-r + 4);
+                g.strokeText(kmText, 0, topY); g.fillText(kmText, 0, topY);
+
+                g.textAlign = 'center'; g.textBaseline = 'top';
+                g.strokeText(kmText, 0, r + 6); g.fillText(kmText, 0, r + 6);
+            }
+
+            g.strokeStyle = 'rgba(120, 0, 0, 0.45)';
+            g.lineWidth = 1;
+            g.beginPath();
+            g.moveTo(-radius, 0); g.lineTo(radius, 0);
+            g.moveTo(0, -radius); g.lineTo(0, radius);
+            g.stroke();
+
+            g.beginPath();
+            g.arc(0, 0, 3, 0, Math.PI * 2);
+            g.fillStyle = '#b82020';
+            g.fill();
         }
 
-        ctx.strokeStyle = 'rgba(120, 0, 0, 0.45)';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(-radius, 0);
-        ctx.lineTo(radius, 0);
-        ctx.moveTo(0, -radius);
-        ctx.lineTo(0, radius);
-        ctx.stroke();
-
-        ctx.beginPath();
-        ctx.arc(0, 0, 3, 0, Math.PI * 2);
-        ctx.fillStyle = '#b82020';
-        ctx.fill();
-
-        ctx.restore();
+        ctx.drawImage(gridCacheCanvas, Math.round(cx - size / 2), Math.round(cy - size / 2));
     }
+
+    let lastDomTotal = -1;
+    let lastDomMil = -1;
 
     function renderLoop() {
         const nowMs = Date.now();
@@ -1826,8 +1803,6 @@
         ctx.moveTo(0, 0);
         ctx.lineTo(sweepRadius, 0);
         ctx.strokeStyle = '#ff3322';
-        ctx.shadowColor = '#ff0000';
-        ctx.shadowBlur = 12;
         ctx.lineWidth = 3;
         ctx.stroke();
         ctx.restore();
@@ -1835,11 +1810,17 @@
         let totalCount = 0;
         let milCount = 0;
 
-        planes.forEach(plane => {
+        const pad = 50;
+        const cw = canvas.width;
+        const ch = canvas.height;
+        ctx.font = 'bold 10.5px Segoe UI, sans-serif';
+
+        for (let i = 0; i < planes.length; i++) {
+            const plane = planes[i];
             const isMil = isMilitaryPlane(plane);
             const pinData = getPinDataForPlane(plane.id);
 
-            if (milOnlyFilter && !isMil && !pinData) return;
+            if (milOnlyFilter && !isMil && !pinData) continue;
 
             totalCount++;
             if (isMil) milCount++;
@@ -1849,14 +1830,19 @@
             plane.curLon = interp.lon;
 
             const screenPt = map.latLngToContainerPoint([interp.lat, interp.lon]);
-
-            plane.distKm = calcDistanceKm(myLat, myLon, interp.lat, interp.lon);
-            plane.bearing = calcBearing(myLat, myLon, interp.lat, interp.lon);
-
             plane.screenX = screenPt.x;
             plane.screenY = screenPt.y;
 
             const isSelected = plane.id === selectedPlaneId;
+
+            if (isSelected || pinData) {
+                plane.distKm = calcDistanceKm(myLat, myLon, interp.lat, interp.lon);
+                plane.bearing = calcBearing(myLat, myLon, interp.lat, interp.lon);
+            }
+
+            if (!isSelected && !pinData && (screenPt.x < -pad || screenPt.x > cw + pad || screenPt.y < -pad || screenPt.y > ch + pad)) {
+                continue;
+            }
 
             drawPlaneTrail(plane.id, screenPt, isMil, isSelected, pinData);
 
@@ -1875,34 +1861,31 @@
             drawRealisticPlane(screenPt.x, screenPt.y, plane.track, isMil, isSelected, pinData, nowMs);
 
             const labelText = getBestPlaneLabel(plane, true);
-
-            ctx.save();
-            ctx.font = 'bold 10.5px Segoe UI, sans-serif';
-            const textWidth = ctx.measureText(labelText).width;
-            const boxW = textWidth + 8;
+            if (plane._lastLabel !== labelText) {
+                plane._lastLabel = labelText;
+                plane.boxW = ctx.measureText(labelText).width + 8;
+            }
+            const boxW = plane.boxW;
             const boxH = 16;
 
             ctx.fillStyle = pinData ? 'rgba(65, 0, 85, 0.94)' : 'rgba(0, 10, 4, 0.82)';
-            if (isMil) ctx.strokeStyle = '#ff2222';
-            else if (pinData) ctx.strokeStyle = '#ff00ff';
-            else ctx.strokeStyle = 'rgba(0, 255, 102, 0.75)';
-
+            ctx.strokeStyle = isMil ? '#ff2222' : (pinData ? '#ff00ff' : 'rgba(0, 255, 102, 0.75)');
             ctx.lineWidth = pinData ? 1.5 : 1;
             ctx.fillRect(screenPt.x + 13, screenPt.y - 9, boxW, boxH);
             ctx.strokeRect(screenPt.x + 13, screenPt.y - 9, boxW, boxH);
 
-            plane.boxW = boxW;
-
-            if (pinData) ctx.fillStyle = '#ffffff';
-            else if (isMil) ctx.fillStyle = '#ff5555';
-            else ctx.fillStyle = '#ffdd00';
-
+            ctx.fillStyle = pinData ? '#ffffff' : (isMil ? '#ff5555' : '#ffdd00');
             ctx.fillText(labelText, screenPt.x + 17, screenPt.y + 2.5);
-            ctx.restore();
-        });
+        }
 
-        document.getElementById('planesCount').textContent = totalCount;
-        document.getElementById('milCount').textContent = milCount;
+        if (totalCount !== lastDomTotal) {
+            document.getElementById('planesCount').textContent = totalCount;
+            lastDomTotal = totalCount;
+        }
+        if (milCount !== lastDomMil) {
+            document.getElementById('milCount').textContent = milCount;
+            lastDomMil = milCount;
+        }
 
         requestAnimationFrame(renderLoop);
     }
@@ -2309,9 +2292,63 @@
                     normalized.callsign = `${normalized.callsign || normalized.id || ''} [ВОЕНЕН]`.trim();
                 }
 
+                const prevPlane = prevMap.get(normalized.id);
+                // Ако нов пакет временно дойде без скорост (0), пазим последната известна скорост във въздуха
+                if ((!normalized.speed || normalized.speed < 25) && prevPlane && prevPlane.speed >= 25 && (normalized.altitude || 0) > 300) {
+                    normalized.speed = prevPlane.speed;
+                }
+                // 1. Ако дойдат същите кеширани координати — НЕ връщаме самолета назад
+                const sameRawPos = !isReplayMode && prevPlane &&
+                    Math.abs((prevPlane.rawLat ?? prevPlane.lat) - latNum) < 0.00005 &&
+                    Math.abs((prevPlane.rawLon ?? prevPlane.lon) - lonNum) < 0.00005;
+
+                if (sameRawPos) {
+                    return {
+                        ...prevPlane,
+                        ...normalized,
+                        lat: prevPlane.lat,
+                        lon: prevPlane.lon,
+                        rawLat: prevPlane.rawLat,
+                        rawLon: prevPlane.rawLon,
+                        curLat: prevPlane.curLat,
+                        curLon: prevPlane.curLon,
+                        prevRenderLat: prevPlane.prevRenderLat,
+                        prevRenderLon: prevPlane.prevRenderLon,
+                        lastUpdateMs: prevPlane.lastUpdateMs,
+                        distKm: prevPlane.distKm,
+                        bearing: prevPlane.bearing
+                    };
+                }
+
+                // 2. Ако новият пакет е по-стар (зад текущата позиция по курса до 4 км) — не го връщаме назад
+                if (!isReplayMode && prevPlane && prevPlane.curLat !== undefined && Number(normalized.speed || 0) >= 50) {
+                    const dLat = latNum - prevPlane.curLat;
+                    const dLon = lonNum - prevPlane.curLon;
+                    const rad = (Number(normalized.track ?? prevPlane.track ?? 0)) * Math.PI / 180;
+                    const forwardDot = dLat * Math.cos(rad) + dLon * Math.sin(rad) * Math.cos(latNum * Math.PI / 180);
+                    const jumpKm = calcDistanceKm(prevPlane.curLat, prevPlane.curLon, latNum, lonNum);
+
+                    if (forwardDot < 0 && jumpKm < 4.0) {
+                        return {
+                            ...prevPlane,
+                            ...normalized,
+                            lat: prevPlane.lat,
+                            lon: prevPlane.lon,
+                            rawLat: latNum,
+                            rawLon: lonNum,
+                            curLat: prevPlane.curLat,
+                            curLon: prevPlane.curLon,
+                            prevRenderLat: prevPlane.prevRenderLat,
+                            prevRenderLon: prevPlane.prevRenderLon,
+                            lastUpdateMs: prevPlane.lastUpdateMs,
+                            distKm: prevPlane.distKm,
+                            bearing: prevPlane.bearing
+                        };
+                    }
+                }
+
                 recordPlaneTrailPoint(normalized.id, latNum, lonNum, normalized.altitude, now);
 
-                const prevPlane = prevMap.get(normalized.id);
                 const prevRenderLat = prevPlane && prevPlane.curLat !== undefined ? prevPlane.curLat : latNum;
                 const prevRenderLon = prevPlane && prevPlane.curLon !== undefined ? prevPlane.curLon : lonNum;
 
@@ -2322,6 +2359,8 @@
                     ...normalized,
                     lat: latNum,
                     lon: lonNum,
+                    rawLat: latNum,
+                    rawLon: lonNum,
                     curLat: prevRenderLat,
                     curLon: prevRenderLon,
                     prevRenderLat,
@@ -2508,7 +2547,6 @@
         document.getElementById('clockDisplay').textContent = new Date().toLocaleTimeString('bg-BG');
     }, 1000);
 
-    // Моментално презареждане при връщане на фокуса към таба/екрана
     document.addEventListener('visibilitychange', () => {
         if (!document.hidden) {
             fetchPlanes(true);
@@ -3121,7 +3159,7 @@
     function connectAisStream() {
         fetchShipsFromServer();
         if (!aisPollTimer) {
-            aisPollTimer = setInterval(fetchShipsFromServer, 4000);
+            aisPollTimer = setInterval(fetchShipsFromServer, 15000);
         }
     }
 
